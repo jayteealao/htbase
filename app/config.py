@@ -18,6 +18,7 @@ class AppSettings(BaseSettings):
     ht_bin: str = Field(default="/usr/local/bin/ht", alias="HT_BIN")
     monolith_bin: str = Field(default="/usr/local/bin/monolith", alias="MONOLITH_BIN")
     use_chromium: bool = Field(default=True, alias="USE_CHROMIUM")
+    chromium_bin: str = Field(default="/usr/bin/chromium", alias="CHROMIUM_BIN")
     ht_listen: str = Field(default="0.0.0.0:7681", alias="HT_LISTEN")
     start_ht: bool = Field(default=True, alias="START_HT")
     # Log all ht stdin/stdout to a file under data dir by default

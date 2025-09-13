@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import subprocess
 
 from fastapi import FastAPI
 
@@ -19,6 +20,17 @@ async def lifespan_context(app: FastAPI):
     # Startup
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     init_db(settings.resolved_db_path)
+    # Log chromium and monolith versions (best-effort)
+    try:
+        out = subprocess.check_output([settings.chromium_bin, "--version"], text=True).strip()
+        print(f"Chromium: {out}")
+    except Exception:
+        print("Chromium: not available")
+    try:
+        out = subprocess.check_output([settings.monolith_bin, "--version"], text=True).strip()
+        print(f"Monolith: {out}")
+    except Exception:
+        print("Monolith: not available")
     if settings.start_ht:
         ht_runner.start()
     # Register archivers on app state

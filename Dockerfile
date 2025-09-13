@@ -10,7 +10,8 @@ ARG HT_VERSION
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
-     ca-certificates curl bash python3 python3-pip python3-venv chromium \
+     ca-certificates curl bash python3 python3-pip python3-venv \
+     chromium fonts-liberation fonts-dejavu-core fonts-noto-color-emoji \
   && rm -rf /var/lib/apt/lists/*
 
 # Install monolith (static binary)
@@ -42,6 +43,7 @@ RUN set -eux; \
   curl -fsSL "${url}" -o /usr/local/bin/ht; \
   chmod +x /usr/local/bin/ht; \
   /usr/local/bin/ht --help >/dev/null || true
+RUN which chromium && chromium --version || true
 
 WORKDIR /app
 

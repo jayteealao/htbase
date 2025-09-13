@@ -42,9 +42,13 @@ class MonolithArchiver(BaseArchiver):
         out_q = shlex.quote(str(out_path))
         if self.use_chromium:
             chromium_cmd = (
-                "chromium --headless --window-size=1920,1080 "
+                f"{self.settings.chromium_bin} --headless=new "
+                "--window-size=1920,1080 "
                 "--run-all-compositor-stages-before-draw --virtual-time-budget=9000 "
-                "--incognito --dump-dom --no-sandbox"
+                "--incognito --dump-dom "
+                "--no-sandbox --disable-gpu --disable-software-rasterizer "
+                "--disable-dev-shm-usage --disable-setuid-sandbox "
+                "--disable-features=NetworkService,NetworkServiceInProcess"
             )
             cmd = (
                 f"{chromium_cmd} {url_q} | "
