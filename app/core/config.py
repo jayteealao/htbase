@@ -21,10 +21,15 @@ class AppSettings(BaseSettings):
     chromium_bin: str = Field(default="/usr/bin/chromium", alias="CHROMIUM_BIN")
     # Extra flags to pass to monolith (space-separated, supports quotes)
     monolith_flags: str = Field(default="", alias="MONOLITH_FLAGS")
-    ht_listen: str = Field(default="0.0.0.0:7681", alias="HT_LISTEN")
+    ht_listen: str = Field(default="localhost:7681", alias="HT_LISTEN")
     start_ht: bool = Field(default=True, alias="START_HT")
     # Log all ht stdin/stdout to a file under data dir by default
     ht_log_file: Path = Field(default=Path("/data/ht.log"), alias="HT_LOG_FILE")
+
+    # Skip re-archiving when a successful save already exists for the same
+    # item_id or URL (checks the saves table). Disabled by default to preserve
+    # current behavior unless explicitly enabled.
+    skip_existing_saves: bool = Field(default=False, alias="SKIP_EXISTING_SAVES")
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -41,3 +46,4 @@ class AppSettings(BaseSettings):
 @lru_cache
 def get_settings() -> AppSettings:
     return AppSettings()
+

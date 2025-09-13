@@ -168,3 +168,4 @@ class HTRunner:
             finally:
                 self._log_fp = None
         self.proc = None
+

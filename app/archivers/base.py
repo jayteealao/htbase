@@ -3,7 +3,7 @@ from __future__ import annotations
 import abc
 from typing import Optional
 
-from config import AppSettings
+from core.config import AppSettings
 from models import ArchiveResult
 
 

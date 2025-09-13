@@ -2,13 +2,15 @@ from contextlib import asynccontextmanager
 import subprocess
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from api import router as api_router
+from web import router as web_router
 from archivers.monolith import MonolithArchiver
-from config import get_settings
-from db import init_db
-from ht_runner import HTRunner
-from tasks import TaskManager
+from core.config import get_settings
+from db.repository import init_db
+from core.ht_runner import HTRunner
+from services.tasks import TaskManager
 
 
 settings = get_settings()
@@ -37,6 +39,8 @@ async def lifespan_context(app: FastAPI):
     app.state.archivers = {
         "monolith": MonolithArchiver(ht_runner=ht_runner, settings=settings),
     }
+    # Expose ht runner on app state for APIs
+    app.state.ht_runner = ht_runner
     # Inject archivers into task manager now that they exist
     app.state.task_manager = TaskManager(settings, app.state.archivers)
     try:
@@ -50,7 +54,17 @@ async def lifespan_context(app: FastAPI):
                 pass
 
 
-app = FastAPI(title="archiver service", version="0.2.0", lifespan=lifespan_context)
+app = FastAPI(title="archiver service", version="0.3.0", lifespan=lifespan_context)
 
 # Mount API routes
 app.include_router(api_router)
+app.include_router(web_router)
+
+# Serve saved files directly for viewing in UI. During tests the DATA_DIR may
+# not exist at import time, so skip existence check here; the lifespan startup
+# ensures the directory is created before use.
+app.mount(
+    "/files",
+    StaticFiles(directory=str(settings.data_dir), check_dir=False),
+    name="files",
+)

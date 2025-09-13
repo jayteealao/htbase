@@ -6,10 +6,10 @@ from typing import Optional
 import shlex
 
 from archivers.base import BaseArchiver
-from config import AppSettings
-from ht_runner import HTRunner
+from core.config import AppSettings
+from core.ht_runner import HTRunner
 from models import ArchiveResult
-from utils import sanitize_filename
+from core.utils import sanitize_filename
 
 
 class MonolithArchiver(BaseArchiver):

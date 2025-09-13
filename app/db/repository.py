@@ -1,10 +1,10 @@
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
-from sqlalchemy import select
+from sqlalchemy import select, or_, desc, delete
 
-from db_models import Base, Save
-from db_session import get_engine, get_session
+from .models import Base, Save
+from .session import get_engine, get_session
 
 
 def init_db(db_path: Path) -> None:
@@ -17,7 +17,9 @@ def init_db(db_path: Path) -> None:
     # Use WAL for better concurrent write performance
     with engine.begin() as conn:
         conn.exec_driver_sql("PRAGMA journal_mode=WAL;")
-    Base.metadata.create_all(bind=engine)
+    # Schema management is exclusively done via Alembic. Do not create or
+    # mutate tables here. Ensure `alembic upgrade head` has been run.
+    return
 
 
 def insert_save_result(
@@ -112,3 +114,74 @@ def get_task_rows(db_path: Path, task_id: str) -> List[Dict[str, Any]]:
                 }
             )
         return out
+
+
+def find_existing_success_save(
+    db_path: Path, *, item_id: str, url: str
+) -> Optional[Save]:
+    """Return the most recent successful save row matching item_id or url.
+
+    Looks for any row where success == 1 and (item_id == item_id OR url == url),
+    ordering by created_at/rowid descending to get the latest.
+    """
+    init_db(db_path)
+    with get_session(db_path) as session:
+        stmt = (
+            select(Save)
+            .where(or_(Save.item_id == item_id, Save.url == url), Save.success == True)  # noqa: E712
+            .order_by(desc(Save.created_at), desc(Save.rowid))
+            .limit(1)
+        )
+        row = session.execute(stmt).scalars().first()
+        return row
+
+
+def is_already_saved_success(db_path: Path, *, item_id: str, url: str) -> bool:
+    """Convenience predicate to check for existing successful save."""
+    return find_existing_success_save(db_path, item_id=item_id, url=url) is not None
+
+
+def get_save_by_rowid(db_path: Path, rowid: int) -> Optional[Save]:
+    init_db(db_path)
+    with get_session(db_path) as session:
+        return session.get(Save, rowid)
+
+
+def get_saves_by_item_id(db_path: Path, item_id: str) -> List[Save]:
+    init_db(db_path)
+    with get_session(db_path) as session:
+        stmt = select(Save).where(Save.item_id == item_id)
+        return list(session.execute(stmt).scalars().all())
+
+
+def get_saves_by_url(db_path: Path, url: str) -> List[Save]:
+    init_db(db_path)
+    with get_session(db_path) as session:
+        stmt = select(Save).where(Save.url == url)
+        return list(session.execute(stmt).scalars().all())
+
+
+def delete_saves_by_rowids(db_path: Path, rowids: List[int]) -> int:
+    """Delete saves with the given rowids. Returns number of rows deleted."""
+    if not rowids:
+        return 0
+    init_db(db_path)
+    with get_session(db_path) as session:
+        stmt = delete(Save).where(Save.rowid.in_(rowids))
+        result = session.execute(stmt)
+        # SQLAlchemy 2.0 returns rows affected via rowcount
+        return int(result.rowcount or 0)
+
+
+def list_saves(db_path: Path, limit: int = 200, offset: int = 0) -> List[Save]:
+    """Return latest saves limited and offset for pagination."""
+    init_db(db_path)
+    with get_session(db_path) as session:
+        stmt = (
+            select(Save)
+            .order_by(desc(Save.created_at), desc(Save.rowid))
+            .limit(int(max(1, limit)))
+            .offset(int(max(0, offset)))
+        )
+        rows = session.execute(stmt).scalars().all()
+        return list(rows)

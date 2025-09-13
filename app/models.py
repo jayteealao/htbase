@@ -63,3 +63,11 @@ class TaskStatusResponse(BaseModel):
     task_id: str
     status: str
     items: List[TaskItemStatus]
+
+
+class DeleteResponse(BaseModel):
+    ok: bool = True
+    deleted_count: int
+    deleted_rowids: List[int]
+    removed_files: List[str] = []
+    errors: List[str] = []

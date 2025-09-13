@@ -6,9 +6,17 @@ import uuid
 from dataclasses import dataclass
 from typing import List, Optional, Dict, Any
 
-from config import AppSettings
-from db import insert_pending_save, finalize_save_result
+from typing import TYPE_CHECKING
+from db.repository import (
+    insert_pending_save,
+    finalize_save_result,
+    is_already_saved_success,
+    find_existing_success_save,
+)
 from models import ArchiveResult
+
+if TYPE_CHECKING:
+    from core.config import AppSettings
 
 
 @dataclass
@@ -27,7 +35,7 @@ class BatchTask:
 
 
 class TaskManager:
-    def __init__(self, settings: AppSettings, archivers: Dict[str, Any]):
+    def __init__(self, settings: "AppSettings", archivers: Dict[str, Any]):
         self.settings = settings
         self.archivers = archivers
         self.q: "queue.Queue[BatchTask]" = queue.Queue()
@@ -49,17 +57,24 @@ class TaskManager:
         task_id = uuid.uuid4().hex
         batch_items: List[BatchItem] = []
         for it in items:
+            iid = str(it["item_id"])
+            url = str(it["url"])
+            if self.settings.skip_existing_saves and is_already_saved_success(
+                self.settings.resolved_db_path, item_id=iid, url=url
+            ):
+                # Skip inserting pending row if already saved successfully
+                continue
             rowid = insert_pending_save(
                 db_path=self.settings.resolved_db_path,
-                item_id=str(it["item_id"]),
-                url=str(it["url"]),
+                item_id=iid,
+                url=url,
                 task_id=task_id,
                 name=it.get("name"),
             )
             batch_items.append(
                 BatchItem(
-                    item_id=str(it["item_id"]),
-                    url=str(it["url"]),
+                    item_id=iid,
+                    url=url,
                     name=it.get("name"),
                     rowid=rowid,
                 )
@@ -86,6 +101,20 @@ class TaskManager:
                     continue
                 for it in task.items:
                     try:
+                        # Double-check skip condition at execution time
+                        if self.settings.skip_existing_saves:
+                            existing = find_existing_success_save(
+                                self.settings.resolved_db_path, item_id=it.item_id, url=it.url
+                            )
+                            if existing is not None:
+                                finalize_save_result(
+                                    db_path=self.settings.resolved_db_path,
+                                    rowid=it.rowid,
+                                    success=True,
+                                    exit_code=0,
+                                    saved_path=existing.saved_path,
+                                )
+                                continue
                         result: ArchiveResult = archiver.archive(
                             url=it.url, item_id=it.item_id, out_name=it.name
                         )
@@ -106,4 +135,3 @@ class TaskManager:
                         )
             finally:
                 self.q.task_done()
-
