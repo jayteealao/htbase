@@ -5,7 +5,7 @@ from typing import Dict
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from config import AppSettings, get_settings
-from db import insert_save_result
+from db import init_db, insert_save_result
 from models import ArchiveResult, SaveRequest, SaveResponse
 from utils import sanitize_filename
 
@@ -35,6 +35,7 @@ def _archive_with(
 
     # Record to DB (best-effort)
     try:
+        init_db(settings.resolved_db_path)
         row_id = insert_save_result(
             db_path=settings.resolved_db_path,
             item_id=safe_id,

@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+import shlex
 
 from archivers.base import BaseArchiver
 from config import AppSettings
@@ -17,6 +18,7 @@ class MonolithArchiver(BaseArchiver):
     def __init__(self, ht_runner: HTRunner, settings: AppSettings):
         super().__init__(settings)
         self.ht_runner = ht_runner
+        self.use_chromium = settings.use_chromium
 
     def archive(self, *, url: str, item_id: str, out_name: Optional[str]) -> ArchiveResult:
         # Determine output filename
@@ -36,10 +38,24 @@ class MonolithArchiver(BaseArchiver):
         out_path = out_dir / out_name
 
         # Compose command to run via ht
-        cmd = (
-            f"{self.settings.monolith_bin} \"{url}\" -o \"{str(out_path)}\"; "
-            f"echo __DONE__:$?"
-        )
+        url_q = shlex.quote(url)
+        out_q = shlex.quote(str(out_path))
+        if self.use_chromium:
+            chromium_cmd = (
+                "chromium --headless --window-size=1920,1080 "
+                "--run-all-compositor-stages-before-draw --virtual-time-budget=9000 "
+                "--incognito --dump-dom"
+            )
+            cmd = (
+                f"{chromium_cmd} {url_q} | "
+                f"{self.settings.monolith_bin} - -I -b {url_q} -o {out_q}; "
+                f"echo __DONE__:$?"
+            )
+        else:
+            cmd = (
+                f"{self.settings.monolith_bin} {url_q} -o {out_q}; "
+                f"echo __DONE__:$?"
+            )
 
         with self.ht_runner.lock:
             self.ht_runner.send_input(cmd + "\r")
