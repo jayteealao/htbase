@@ -4,3 +4,9 @@ __pycache__/
 **__pycache__/
 *.pyo
 /data/
+*.log
+*.sqlite
+.env
+.coverage
+htmlcov/
+.coveragerc
