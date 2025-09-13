@@ -1,0 +1,15 @@
+services:
+  monolith-ht:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: monolith-ht:local
+    container_name: monolith-ht
+    ports:
+      - "8000:8000"   # REST API
+      - "7681:7681"   # ht live preview
+    environment:
+      - DATA_DIR=/data
+      - HT_LISTEN=0.0.0.0:7681
+    volumes:
+      - ./data:/data
