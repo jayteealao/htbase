@@ -1,8 +1,12 @@
+## Dynamic content with Chromium
 
+Monolith doesn't execute JavaScript, so pages that retrieve data after the initial load may require a headless browser to render fully. Set `USE_CHROMIUM=true` to launch Chromium and pipe its rendered DOM to Monolith before capture. The Docker image includes the `chromium` package; enabling this mode may increase resource usage.
 
+Example:
 
-
-
+```sh
+chromium --headless --window-size=1920,1080 --run-all-compositor-stages-before-draw --virtual-time-budget=9000 --incognito --dump-dom https://github.com | monolith - -I -b https://github.com -o github.html
+```
 
 <!DOCTYPE html>
 <html

@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 def test_save_endpoint_creates_record_and_file(test_client):
     client = test_client
     payload = {"id": "user123", "url": "https://example.com/article", "name": "example.html"}
@@ -9,7 +8,11 @@ def test_save_endpoint_creates_record_and_file(test_client):
     data = r.json()
     assert data["ok"] is True
     assert data["exit_code"] == 0
-    assert data["saved_path"].endswith("user123/monolith/example.html")
+    # Cross-platform path checks
+    p = Path(data["saved_path"]).resolve()
+    assert p.name == "example.html"
+    assert p.parent.name == "monolith"
+    assert p.parent.parent.name == "user123"
     assert data["db_rowid"] is not None
 
     # File exists on disk
@@ -24,4 +27,3 @@ def test_archive_dummy_route_works(test_client):
     r = client.post("/archive/monolith", json=payload)
     assert r.status_code == 200
     assert r.json()["ok"] is True
-
