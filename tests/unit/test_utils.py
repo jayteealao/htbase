@@ -1,4 +1,4 @@
-from utils import sanitize_filename
+from core.utils import sanitize_filename
 
 
 def test_sanitize_filename_basic():
@@ -14,4 +14,3 @@ def test_sanitize_filename_length_limit():
     long = "a" * 500 + ".html"
     out = sanitize_filename(long)
     assert len(out) == 200
-

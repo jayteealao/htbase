@@ -30,9 +30,9 @@ def test_client(temp_env) -> Generator:
     client = TestClient(server.app)
     # Install dummy archiver to avoid external binaries
     from archivers.base import BaseArchiver
-    from config import get_settings
+    from core.config import get_settings
     from models import ArchiveResult
-    from utils import sanitize_filename
+    from core.utils import sanitize_filename
 
     class DummyArchiver(BaseArchiver):
         name = "monolith"
