@@ -40,6 +40,16 @@ class MonolithArchiver(BaseArchiver):
         # Compose command to run via ht
         url_q = shlex.quote(url)
         out_q = shlex.quote(str(out_path))
+        # Parse and safely quote any extra monolith flags from config
+        extra_flags = self.settings.monolith_flags.strip()
+        if extra_flags:
+            try:
+                tokens = shlex.split(extra_flags)
+            except ValueError:
+                tokens = [extra_flags]
+            extra_q = " ".join(shlex.quote(t) for t in tokens)
+        else:
+            extra_q = ""
         if self.use_chromium:
             chromium_cmd = (
                 f"{self.settings.chromium_bin} --headless=new "
@@ -50,14 +60,20 @@ class MonolithArchiver(BaseArchiver):
                 "--disable-dev-shm-usage --disable-setuid-sandbox "
                 "--disable-features=NetworkService,NetworkServiceInProcess"
             )
+            mono_cmd = f"{self.settings.monolith_bin}"
+            if extra_q:
+                mono_cmd += f" {extra_q}"
             cmd = (
                 f"{chromium_cmd} {url_q} | "
-                f"{self.settings.monolith_bin} - -I -b {url_q} -o {out_q}; "
+                f"{mono_cmd} - -I -b {url_q} -o {out_q}; "
                 f"echo __DONE__:$?"
             )
         else:
+            mono_cmd = f"{self.settings.monolith_bin}"
+            if extra_q:
+                mono_cmd += f" {extra_q}"
             cmd = (
-                f"{self.settings.monolith_bin} {url_q} -o {out_q}; "
+                f"{mono_cmd} {url_q} -o {out_q}; "
                 f"echo __DONE__:$?"
             )
 

@@ -1,59 +1,23 @@
-import sqlite3
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
+from sqlalchemy import select
+
+from db_models import Base, Save
+from db_session import get_engine, get_session
+
 
 def init_db(db_path: Path) -> None:
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(db_path) as conn:
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS saves (
-                rowid INTEGER PRIMARY KEY AUTOINCREMENT,
-                item_id TEXT NOT NULL,
-                url TEXT NOT NULL,
-                success INTEGER NOT NULL,
-                exit_code INTEGER,
-                saved_path TEXT,
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
-            );
-            """
-        )
-        # Create both potential indices for forward/backward compatibility
-        try:
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_saves_item_id_created_at ON saves(item_id, created_at);"
-            )
-        except sqlite3.OperationalError:
-            pass
-        # Add new columns for async batch workflow if missing
-        try:
-            if not _has_column(conn, "saves", "status"):
-                conn.execute("ALTER TABLE saves ADD COLUMN status TEXT DEFAULT 'pending';")
-        except sqlite3.OperationalError:
-            pass
-        try:
-            if not _has_column(conn, "saves", "task_id"):
-                conn.execute("ALTER TABLE saves ADD COLUMN task_id TEXT;")
-        except sqlite3.OperationalError:
-            pass
-        try:
-            if not _has_column(conn, "saves", "name"):
-                conn.execute("ALTER TABLE saves ADD COLUMN name TEXT;")
-        except sqlite3.OperationalError:
-            pass
-        try:
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_saves_user_id_created_at ON saves(user_id, created_at);"
-            )
-        except sqlite3.OperationalError:
-            pass
+    """Ensure the database exists and the schema is created.
 
-
-def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
-    cur = conn.execute(f"PRAGMA table_info({table});")
-    return any(row[1] == column for row in cur.fetchall())
+    Alembic should manage migrations, but creating tables here makes
+    first-run/local dev smoother if migrations haven't been applied yet.
+    """
+    engine = get_engine(db_path)
+    # Use WAL for better concurrent write performance
+    with engine.begin() as conn:
+        conn.exec_driver_sql("PRAGMA journal_mode=WAL;")
+    Base.metadata.create_all(bind=engine)
 
 
 def insert_save_result(
@@ -64,22 +28,20 @@ def insert_save_result(
     exit_code: Optional[int],
     saved_path: Optional[str],
 ) -> int:
-    # Ensure schema exists (idempotent)
     init_db(db_path)
-    with sqlite3.connect(db_path) as conn:
-        # Decide which column to use depending on existing schema
-        col = "item_id" if _has_column(conn, "saves", "item_id") else "user_id"
-        if _has_column(conn, "saves", "status"):
-            cur = conn.execute(
-                f"INSERT INTO saves({col}, url, success, exit_code, saved_path, status) VALUES (?, ?, ?, ?, ?, ?)",
-                (item_id, url, 1 if success else 0, exit_code, saved_path, "success" if success else "failed"),
-            )
-        else:
-            cur = conn.execute(
-                f"INSERT INTO saves({col}, url, success, exit_code, saved_path) VALUES (?, ?, ?, ?, ?)",
-                (item_id, url, 1 if success else 0, exit_code, saved_path),
-            )
-        return int(cur.lastrowid)
+    with get_session(db_path) as session:
+        row = Save(
+            item_id=item_id,
+            user_id=item_id,  # keep legacy column populated too
+            url=url,
+            success=bool(success),
+            exit_code=exit_code,
+            saved_path=saved_path,
+            status=("success" if success else "failed"),
+        )
+        session.add(row)
+        session.flush()  # populate PK
+        return int(row.rowid)
 
 
 def insert_pending_save(
@@ -91,23 +53,19 @@ def insert_pending_save(
 ) -> int:
     """Insert a pending save row for async processing and return rowid."""
     init_db(db_path)
-    with sqlite3.connect(db_path) as conn:
-        col = "item_id" if _has_column(conn, "saves", "item_id") else "user_id"
-        cols = [col, "url", "success"]
-        vals = [item_id, url, 0]  # success=0 initially (pending)
-        if _has_column(conn, "saves", "status"):
-            cols.append("status")
-            vals.append("pending")
-        if _has_column(conn, "saves", "task_id"):
-            cols.append("task_id")
-            vals.append(task_id)
-        if name is not None and _has_column(conn, "saves", "name"):
-            cols.append("name")
-            vals.append(name)
-        placeholders = ", ".join(["?"] * len(vals))
-        sql = f"INSERT INTO saves({', '.join(cols)}) VALUES ({placeholders})"
-        cur = conn.execute(sql, tuple(vals))
-        return int(cur.lastrowid)
+    with get_session(db_path) as session:
+        row = Save(
+            item_id=item_id,
+            user_id=item_id,  # keep legacy column populated too
+            url=url,
+            success=False,
+            status="pending",
+            task_id=task_id,
+            name=name,
+        )
+        session.add(row)
+        session.flush()
+        return int(row.rowid)
 
 
 def finalize_save_result(
@@ -119,26 +77,38 @@ def finalize_save_result(
 ) -> None:
     """Update an existing row with final result and status."""
     init_db(db_path)
-    status = "success" if success else "failed"
-    with sqlite3.connect(db_path) as conn:
-        if _has_column(conn, "saves", "status"):
-            conn.execute(
-                "UPDATE saves SET success=?, exit_code=?, saved_path=?, status=? WHERE rowid=?",
-                (1 if success else 0, exit_code, saved_path, status, rowid),
-            )
-        else:
-            conn.execute(
-                "UPDATE saves SET success=?, exit_code=?, saved_path=? WHERE rowid=?",
-                (1 if success else 0, exit_code, saved_path, rowid),
-            )
+    with get_session(db_path) as session:
+        row: Save | None = session.get(Save, rowid)
+        if row is None:
+            return
+        row.success = bool(success)
+        row.exit_code = exit_code
+        row.saved_path = saved_path
+        row.status = "success" if success else "failed"
 
 
 def get_task_rows(db_path: Path, task_id: str) -> List[Dict[str, Any]]:
     init_db(db_path)
-    with sqlite3.connect(db_path) as conn:
-        conn.row_factory = sqlite3.Row
-        cur = conn.execute(
-            "SELECT rowid, * FROM saves WHERE task_id = ? ORDER BY rowid ASC",
-            (task_id,),
-        )
-        return [dict(row) for row in cur.fetchall()]
+    with get_session(db_path) as session:
+        stmt = select(Save).where(Save.task_id == task_id).order_by(Save.rowid.asc())
+        rows = session.execute(stmt).scalars().all()
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            created_val = getattr(r, "created_at", None)
+            created_at = created_val.isoformat() if hasattr(created_val, "isoformat") else created_val
+            out.append(
+                {
+                    "rowid": r.rowid,
+                    "item_id": r.item_id,
+                    "user_id": r.user_id,
+                    "url": r.url,
+                    "success": 1 if r.success else 0,
+                    "exit_code": r.exit_code,
+                    "saved_path": r.saved_path,
+                    "created_at": created_at,
+                    "status": r.status,
+                    "task_id": r.task_id,
+                    "name": r.name,
+                }
+            )
+        return out

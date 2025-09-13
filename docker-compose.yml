@@ -11,6 +11,7 @@ services:
     environment:
       - DATA_DIR=/data
       - HT_LISTEN=0.0.0.0:7681
+      - MONOLITH_FLAGS=${MONOLITH_FLAGS:-}
     volumes:
       - ./data:/data
     develop:
