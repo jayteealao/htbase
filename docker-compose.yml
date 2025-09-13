@@ -13,3 +13,17 @@ services:
       - HT_LISTEN=0.0.0.0:7681
     volumes:
       - ./data:/data
+    develop:
+      watch:
+        # Rebuild image and restart when source changes
+        - action: rebuild
+          path: .
+          ignore:
+            - data/**
+            - .git/**
+            - .venv/**
+            - __pycache__/**
+            - .pytest_cache/**
+            - tests/**
+            - ht.md
+            - monolith.md
