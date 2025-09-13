@@ -19,6 +19,8 @@ class AppSettings(BaseSettings):
     monolith_bin: str = Field(default="/usr/local/bin/monolith", alias="MONOLITH_BIN")
     ht_listen: str = Field(default="0.0.0.0:7681", alias="HT_LISTEN")
     start_ht: bool = Field(default=True, alias="START_HT")
+    # Log all ht stdin/stdout to a file under data dir by default
+    ht_log_file: Path = Field(default=Path("/data/ht.log"), alias="HT_LOG_FILE")
 
     model_config = SettingsConfigDict(
         env_file=".env",

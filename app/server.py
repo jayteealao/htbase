@@ -10,7 +10,7 @@ from ht_runner import HTRunner
 
 
 settings = get_settings()
-ht_runner = HTRunner(settings.ht_bin, settings.ht_listen)
+ht_runner = HTRunner(settings.ht_bin, settings.ht_listen, log_path=settings.ht_log_file)
 
 
 @asynccontextmanager

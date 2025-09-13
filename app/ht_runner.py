@@ -4,11 +4,13 @@ import re
 import subprocess
 import threading
 import time
-from typing import Optional
+from datetime import datetime
+from pathlib import Path
+from typing import Optional, TextIO, Union
 
 
 class HTRunner:
-    def __init__(self, ht_bin: str, listen_addr: str):
+    def __init__(self, ht_bin: str, listen_addr: str, log_path: Optional[Union[str, Path]] = None):
         self.ht_bin = ht_bin
         self.listen_addr = listen_addr
         self.proc: Optional[subprocess.Popen] = None
@@ -16,6 +18,22 @@ class HTRunner:
         self.events = queue.Queue()  # raw JSON lines from ht stdout
         self.lock = threading.Lock()  # serialize shell commands
         self.running = threading.Event()
+        # Logging
+        self.log_path: Optional[Path] = Path(log_path) if log_path else None
+        self._log_fp: Optional[TextIO] = None
+        self._log_lock = threading.Lock()
+
+    def _log(self, kind: str, text: str):
+        if not self._log_fp:
+            return
+        ts = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        line = f"[{ts}] {kind}: {text}\n"
+        with self._log_lock:
+            try:
+                self._log_fp.write(line)
+                self._log_fp.flush()
+            except Exception:
+                pass
 
     def start(self):
         if self.proc is not None:
@@ -29,6 +47,19 @@ class HTRunner:
             "init,output,resize,snapshot",
             "sh",
         ]
+        # Prepare logger
+        if self.log_path is not None:
+            try:
+                self.log_path.parent.mkdir(parents=True, exist_ok=True)
+                # Open in append mode
+                self._log_fp = open(self.log_path, "a", encoding="utf-8")
+                self._log(
+                    "START",
+                    "ht proc starting with cmd="
+                    + json.dumps(cmd, ensure_ascii=False),
+                )
+            except Exception:
+                self._log_fp = None
         self.proc = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
@@ -46,7 +77,10 @@ class HTRunner:
         for line in self.proc.stdout:
             # push raw line to queue for any waiter
             try:
-                self.events.put_nowait(line.rstrip("\n"))
+                raw = line.rstrip("\n")
+                # Log raw stdout JSON line
+                self._log("STDOUT", raw)
+                self.events.put_nowait(raw)
             except queue.Full:
                 pass
 
@@ -54,6 +88,9 @@ class HTRunner:
         if self.proc is None or self.proc.stdin is None:
             raise RuntimeError("ht process not started")
         msg = json.dumps({"type": "input", "payload": payload}) + "\n"
+        # Log exact JSON input line and a human-friendly payload
+        self._log("STDIN.json", msg.rstrip("\n"))
+        self._log("STDIN.payload", payload.replace("\r", "\\r"))
         self.proc.stdin.write(msg)
         self.proc.stdin.flush()
 
@@ -115,4 +152,19 @@ class HTRunner:
             except Exception:
                 pass
         self.stdout_thread = None
+        # Log stop
+        try:
+            rc = proc.returncode
+        except Exception:
+            rc = None
+        self._log("STOP", f"ht proc stopped rc={rc}")
+        # Close log file if open
+        if self._log_fp:
+            try:
+                self._log_fp.flush()
+                self._log_fp.close()
+            except Exception:
+                pass
+            finally:
+                self._log_fp = None
         self.proc = None
