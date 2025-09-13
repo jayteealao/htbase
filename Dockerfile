@@ -56,6 +56,9 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r /app/requirements.txt
 
 COPY app /app
+# Copy Alembic migrations and config
+COPY alembic.ini /app/alembic.ini
+COPY alembic /app/alembic
 
 # location for saved pages
 RUN mkdir -p /data
@@ -66,4 +69,5 @@ EXPOSE 8000 7681
 ENV PYTHONUNBUFFERED=1
 
 # Use the venv's interpreter/binaries via PATH
+# Run DB migrations via Alembic, then start the API
 CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000"]
