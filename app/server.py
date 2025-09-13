@@ -7,6 +7,7 @@ from archivers.monolith import MonolithArchiver
 from config import get_settings
 from db import init_db
 from ht_runner import HTRunner
+from tasks import TaskManager
 
 
 settings = get_settings()
@@ -24,6 +25,8 @@ async def lifespan_context(app: FastAPI):
     app.state.archivers = {
         "monolith": MonolithArchiver(ht_runner=ht_runner, settings=settings),
     }
+    # Inject archivers into task manager now that they exist
+    app.state.task_manager = TaskManager(settings, app.state.archivers)
     try:
         yield
     finally:
