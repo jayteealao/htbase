@@ -48,6 +48,8 @@ def insert_save_result(
     exit_code: Optional[int],
     saved_path: Optional[str],
 ) -> int:
+    # Ensure schema exists (idempotent)
+    init_db(db_path)
     with sqlite3.connect(db_path) as conn:
         # Decide which column to use depending on existing schema
         col = "item_id" if _has_column(conn, "saves", "item_id") else "user_id"

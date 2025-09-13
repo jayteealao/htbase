@@ -44,7 +44,7 @@ class MonolithArchiver(BaseArchiver):
             chromium_cmd = (
                 "chromium --headless --window-size=1920,1080 "
                 "--run-all-compositor-stages-before-draw --virtual-time-budget=9000 "
-                "--incognito --dump-dom"
+                "--incognito --dump-dom --no-sandbox"
             )
             cmd = (
                 f"{chromium_cmd} {url_q} | "
