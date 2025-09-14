@@ -7,6 +7,10 @@ from fastapi.staticfiles import StaticFiles
 from api import router as api_router
 from web import router as web_router
 from archivers.monolith import MonolithArchiver
+from archivers.singlefile_cli import SingleFileCLIArchiver
+from archivers.screenshot import ScreenshotArchiver
+from archivers.pdf import PDFArchiver
+from archivers.readability import ReadabilityArchiver
 from core.config import get_settings
 from db.repository import init_db
 from core.ht_runner import HTRunner
@@ -33,11 +37,28 @@ async def lifespan_context(app: FastAPI):
         print(f"Monolith: {out}")
     except Exception:
         print("Monolith: not available")
+    try:
+        out = subprocess.check_output([settings.singlefile_bin, "--version"], text=True).strip()
+        print(f"SingleFile CLI: {out}")
+    except Exception:
+        print("SingleFile CLI: not available")
+    try:
+        out = subprocess.check_output([settings.ht_bin, "--version"], text=True).strip()
+        print(f"ht: {out}")
+    except Exception:
+        print("ht: not available")
     if settings.start_ht:
         ht_runner.start()
     # Register archivers on app state
     app.state.archivers = {
+        # Registration order matters when using the "all" pipeline
+        # Run readability first so its DOM dump can be reused by monolith.
+        "readability": ReadabilityArchiver(ht_runner=ht_runner, settings=settings),
         "monolith": MonolithArchiver(ht_runner=ht_runner, settings=settings),
+        "singlefile-cli": SingleFileCLIArchiver(ht_runner=ht_runner, settings=settings),
+        # Run Chromium-derived captures last
+        "screenshot": ScreenshotArchiver(ht_runner=ht_runner, settings=settings),
+        "pdf": PDFArchiver(ht_runner=ht_runner, settings=settings),
     }
     # Expose ht runner on app state for APIs
     app.state.ht_runner = ht_runner

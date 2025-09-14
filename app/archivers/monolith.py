@@ -37,7 +37,7 @@ class MonolithArchiver(BaseArchiver):
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / out_name
 
-        # Compose command to run via ht
+        # Compose monolith command to run via ht
         url_q = shlex.quote(url)
         out_q = shlex.quote(str(out_path))
         # Parse and safely quote any extra monolith flags from config
@@ -50,7 +50,12 @@ class MonolithArchiver(BaseArchiver):
             extra_q = " ".join(shlex.quote(t) for t in tokens)
         else:
             extra_q = ""
+        mono_cmd = f"{self.settings.monolith_bin}"
+        if extra_q:
+            mono_cmd += f" {extra_q}"
+
         if self.use_chromium:
+            # Fresh Chromium dump piped directly into monolith (no raw reuse)
             chromium_cmd = (
                 f"{self.settings.chromium_bin} --headless=new "
                 "--window-size=1920,1080 "
@@ -60,18 +65,12 @@ class MonolithArchiver(BaseArchiver):
                 "--disable-dev-shm-usage --disable-setuid-sandbox "
                 "--disable-features=NetworkService,NetworkServiceInProcess"
             )
-            mono_cmd = f"{self.settings.monolith_bin}"
-            if extra_q:
-                mono_cmd += f" {extra_q}"
             cmd = (
-                f"{chromium_cmd} {url_q} | "
-                f"{mono_cmd} - -I -b {url_q} -o {out_q}; "
+                f"{chromium_cmd} {url_q} | {mono_cmd} - -I -b {url_q} -o {out_q}; "
                 f"echo __DONE__:$?"
             )
         else:
-            mono_cmd = f"{self.settings.monolith_bin}"
-            if extra_q:
-                mono_cmd += f" {extra_q}"
+            # Call monolith directly on the URL
             cmd = (
                 f"{mono_cmd} {url_q} -o {out_q}; "
                 f"echo __DONE__:$?"

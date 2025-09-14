@@ -25,6 +25,7 @@ class BatchItem:
     url: str
     name: Optional[str]
     rowid: int
+    archiver_name: str
 
 
 @dataclass
@@ -56,29 +57,42 @@ class TaskManager:
         """
         task_id = uuid.uuid4().hex
         batch_items: List[BatchItem] = []
+        # Determine which archivers to run per item
+        if archiver_name == "all":
+            archiver_order = list(self.archivers.keys())
+        else:
+            archiver_order = [archiver_name]
+
         for it in items:
             iid = str(it["item_id"])
             url = str(it["url"])
-            if self.settings.skip_existing_saves and is_already_saved_success(
-                self.settings.resolved_db_path, item_id=iid, url=url
-            ):
-                # Skip inserting pending row if already saved successfully
-                continue
-            rowid = insert_pending_save(
-                db_path=self.settings.resolved_db_path,
-                item_id=iid,
-                url=url,
-                task_id=task_id,
-                name=it.get("name"),
-            )
-            batch_items.append(
-                BatchItem(
+            # Insert one pending row per archiver in the pipeline
+            for arch_name in archiver_order:
+                if self.settings.skip_existing_saves and is_already_saved_success(
+                    self.settings.resolved_db_path, item_id=iid, url=url
+                ):
+                    # Skip inserting pending row if already saved successfully
+                    continue
+                    
+                rowid = insert_pending_save(
+                    db_path=self.settings.resolved_db_path,
                     item_id=iid,
                     url=url,
+                    task_id=task_id,
                     name=it.get("name"),
-                    rowid=rowid,
                 )
-            )
+                batch_items.append(
+                    BatchItem(
+                        item_id=iid,
+                        url=url,
+                        name=it.get("name"),
+                        rowid=rowid,
+                        archiver_name=arch_name,
+                    )
+                )
+
+        # Ensure processing order: for each input item, run each archiver in registration order
+        # Items were appended in that order above, so just enqueue as-is
         self.q.put(BatchTask(task_id=task_id, archiver_name=archiver_name, items=batch_items))
         self.start()
         return task_id
@@ -87,10 +101,9 @@ class TaskManager:
         while True:
             task: BatchTask = self.q.get()
             try:
-                archiver = self.archivers.get(task.archiver_name)
-                if archiver is None:
-                    # mark all items failed
-                    for it in task.items:
+                for it in task.items:
+                    archiver = self.archivers.get(it.archiver_name)
+                    if archiver is None:
                         finalize_save_result(
                             db_path=self.settings.resolved_db_path,
                             rowid=it.rowid,
@@ -98,8 +111,7 @@ class TaskManager:
                             exit_code=127,
                             saved_path=None,
                         )
-                    continue
-                for it in task.items:
+                        continue
                     try:
                         # Double-check skip condition at execution time
                         if self.settings.skip_existing_saves:
@@ -125,6 +137,18 @@ class TaskManager:
                             exit_code=result.exit_code,
                             saved_path=result.saved_path,
                         )
+                        # Persist any metadata returned by the archiver
+                        try:
+                            from db.repository import insert_save_metadata
+
+                            if getattr(result, "metadata", None) and it.archiver_name == "readability":
+                                insert_save_metadata(
+                                    db_path=self.settings.resolved_db_path,
+                                    save_rowid=it.rowid,
+                                    data=result.metadata,  # type: ignore[arg-type]
+                                )
+                        except Exception:
+                            pass
                     except Exception:
                         finalize_save_result(
                             db_path=self.settings.resolved_db_path,

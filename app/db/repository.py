@@ -3,7 +3,8 @@ from typing import Optional, List, Dict, Any
 
 from sqlalchemy import select, or_, desc, delete
 
-from .models import Base, Save
+import json
+from .models import Base, Save, SaveMetadata
 from .session import get_engine, get_session
 
 
@@ -87,6 +88,42 @@ def finalize_save_result(
         row.exit_code = exit_code
         row.saved_path = saved_path
         row.status = "success" if success else "failed"
+
+
+def insert_save_metadata(
+    db_path: Path,
+    *,
+    save_rowid: int,
+    data: Dict[str, Any],
+) -> int:
+    """Insert readability-derived metadata associated with a save row; returns metadata id.
+
+    Expected keys in data: source_url, title, byline, site_name, description,
+    published, language, canonical_url, top_image, favicon, keywords (list),
+    text, word_count, reading_time_minutes.
+    """
+    init_db(db_path)
+    with get_session(db_path) as session:
+        row = SaveMetadata(
+            save_rowid=save_rowid,
+            source_url=data.get("source_url"),
+            title=data.get("title"),
+            byline=data.get("byline"),
+            site_name=data.get("site_name"),
+            description=data.get("description"),
+            published=data.get("published"),
+            language=data.get("language"),
+            canonical_url=data.get("canonical_url"),
+            top_image=data.get("top_image"),
+            favicon=data.get("favicon"),
+            keywords=json.dumps(data.get("keywords") or [], ensure_ascii=False),
+            text=data.get("text"),
+            word_count=int(data.get("word_count")) if data.get("word_count") is not None else None,
+            reading_time_minutes=float(data.get("reading_time_minutes")) if data.get("reading_time_minutes") is not None else None,
+        )
+        session.add(row)
+        session.flush()
+        return int(row.id)
 
 
 def get_task_rows(db_path: Path, task_id: str) -> List[Dict[str, Any]]:

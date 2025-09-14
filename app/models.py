@@ -19,13 +19,13 @@ class ArchiveResult(BaseModel):
     success: bool
     exit_code: Optional[int] = None
     saved_path: Optional[str] = None
+    metadata: Optional[dict] = None
 
 
 class SaveResponse(BaseModel):
     ok: bool
     exit_code: Optional[int] = None
     saved_path: Optional[str] = None
-    ht_preview_url: str
     id: str
     db_rowid: Optional[int] = None
 
