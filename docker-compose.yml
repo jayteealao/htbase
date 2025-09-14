@@ -3,8 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: monolith-ht:local
-    container_name: monolith-ht
+    image: ht-base:local
+    container_name: ht-base
     ports:
       - "8000:8000"   # REST API
       - "7681:7681"   # ht live preview

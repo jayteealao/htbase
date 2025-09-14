@@ -21,6 +21,10 @@ class AppSettings(BaseSettings):
     chromium_bin: str = Field(default="/usr/bin/chromium", alias="CHROMIUM_BIN")
     # Extra flags to pass to monolith (space-separated, supports quotes)
     monolith_flags: str = Field(default="", alias="MONOLITH_FLAGS")
+    # SingleFile CLI configuration
+    singlefile_bin: str = Field(default="/usr/local/bin/single-file", alias="SINGLEFILE_BIN")
+    # Extra flags to pass to SingleFile CLI (e.g., --browser-executable-path=/usr/bin/chromium)
+    singlefile_flags: str = Field(default="", alias="SINGLEFILE_FLAGS")
     ht_listen: str = Field(default="localhost:7681", alias="HT_LISTEN")
     start_ht: bool = Field(default=True, alias="START_HT")
     # Log all ht stdin/stdout to a file under data dir by default
@@ -46,4 +50,3 @@ class AppSettings(BaseSettings):
 @lru_cache
 def get_settings() -> AppSettings:
     return AppSettings()
-

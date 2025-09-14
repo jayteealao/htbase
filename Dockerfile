@@ -12,6 +12,12 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends \
      ca-certificates curl bash python3 python3-pip python3-venv \
      chromium fonts-liberation fonts-dejavu-core fonts-noto-color-emoji \
+     nodejs npm \
+      # --- Chromium runtime deps (headless) ---
+     libnss3 libxss1 libasound2 libatk-bridge2.0-0 libgtk-3-0 \
+     libx11-xcb1 libxcomposite1 libxrandr2 libxi6 libxdamage1 \
+     libxfixes3 libdrm2 libgbm1 libxshmfence1 libxext6 \
+     libpango-1.0-0 libcairo2 libxcb1 libglib2.0-0 \
   && rm -rf /var/lib/apt/lists/*
 
 # Install monolith (static binary)
@@ -45,9 +51,16 @@ RUN set -eux; \
   /usr/local/bin/ht --help >/dev/null || true
 RUN which chromium && chromium --version || true
 
+# Install SingleFile CLI via npm (provides `single-file` on PATH)
+RUN set -eux; \
+  npm install -g single-file-cli; \
+  single-file --help >/dev/null || true; \
+  which single-file && single-file --version || true
+
 WORKDIR /app
 
 COPY app/requirements.txt /app/requirements.txt
+
 # Create and use an isolated virtual environment to avoid PEP 668 restrictions
 ENV VIRTUAL_ENV=/opt/venv
 RUN python3 -m venv "$VIRTUAL_ENV"
@@ -67,6 +80,11 @@ VOLUME ["/data"]
 EXPOSE 8000 7681
 
 ENV PYTHONUNBUFFERED=1
+# Safer defaults for SingleFile (avoid sandbox + tiny /dev/shm issues)
+ENV NODE_OPTIONS="--dns-result-order=ipv4first"
+# Properly quote browser args as a single JSON array argument for SingleFile
+ENV SINGLEFILE_FLAGS="--browser-executable-path=/usr/bin/chromium --browser-args='[\"--headless=new\",\"--no-sandbox\",\"--disable-dev-shm-usage\",\"--hide-scrollbars\",\"--mute-audio\",\"--disable-gpu\",\"--disable-software-rasterizer\",\"--run-all-compositor-stages-before-draw\"]' --browser-ignore-insecure-certs"
+
 
 # Use the venv's interpreter/binaries via PATH
 # Run DB migrations via Alembic, then start the API
