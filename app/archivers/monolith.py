@@ -27,9 +27,7 @@ class MonolithArchiver(BaseArchiver):
             if not out_name.endswith(".html"):
                 out_name += ".html"
         else:
-            ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
-            host = url.replace("http://", "").replace("https://", "").split("/")[0]
-            out_name = sanitize_filename(f"{host}-{ts}.html")
+            out_name = "output.html"
 
         # Build output path: <DATA_DIR>/<item_id>/monolith/<file>
         safe_item = sanitize_filename(item_id)

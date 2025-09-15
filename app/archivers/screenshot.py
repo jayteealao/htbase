@@ -31,9 +31,7 @@ class ScreenshotArchiver(BaseArchiver):
             if not out_name.endswith(".png"):
                 out_name += ".png"
         else:
-            ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
-            host = url.replace("http://", "").replace("https://", "").split("/")[0]
-            out_name = sanitize_filename(f"{host}-{ts}.png")
+            out_name = "output.png"
 
         safe_item = sanitize_filename(item_id)
         out_dir = Path(self.settings.data_dir) / safe_item / self.name
@@ -69,4 +67,3 @@ class ScreenshotArchiver(BaseArchiver):
             exit_code=code,
             saved_path=str(out_path) if success else None,
         )
-

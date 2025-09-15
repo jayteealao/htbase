@@ -80,9 +80,7 @@ class ReadabilityArchiver(BaseArchiver):
             if not out_name.endswith(".html"):
                 out_name += ".html"
         else:
-            ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
-            host = url.replace("http://", "").replace("https://", "").split("/")[0]
-            out_name = sanitize_filename(f"{host}-{ts}.html")
+            out_name = "output.html"
 
         safe_item = sanitize_filename(item_id)
         out_dir = Path(self.settings.data_dir) / safe_item / self.name
