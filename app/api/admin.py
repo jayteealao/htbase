@@ -37,7 +37,7 @@ def list_saves_endpoint(
         saved_path = r.saved_path
         file_exists = False
         rel_path = None
-        archiver = None
+        archiver = getattr(r, "archiver", None)
         if saved_path:
             p = Path(saved_path)
             file_exists = p.exists()
@@ -47,11 +47,12 @@ def list_saves_endpoint(
                     rel_path = str(rp.relative_to(data_root))
             except Exception:
                 rel_path = None
-            # Infer archiver from path segment if present
-            parts = p.parts
-            if len(parts) >= 2:
-                # Expect .../<item_id>/<archiver>/<file>
-                archiver = parts[-2]
+            # Infer archiver from path if not recorded in DB
+            if not archiver:
+                parts = p.parts
+                if len(parts) >= 2:
+                    # Expect .../<item_id>/<archiver>/<file>
+                    archiver = parts[-2]
         out.append(
             {
                 "rowid": int(r.rowid),

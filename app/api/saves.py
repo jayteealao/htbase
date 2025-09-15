@@ -27,19 +27,8 @@ def _archive_with(
         raise HTTPException(status_code=400, detail="id is required")
     safe_id = sanitize_filename(item_id)
 
-    # Optionally skip if already successfully saved
-    if settings.skip_existing_saves:
-        existing = find_existing_success_save(
-            settings.resolved_db_path, item_id=safe_id, url=str(payload.url)
-        )
-        if existing is not None:
-            return SaveResponse(
-                ok=True,
-                exit_code=0,
-                saved_path=existing.saved_path,
-                id=safe_id,
-                db_rowid=int(existing.rowid) if getattr(existing, "rowid", None) is not None else None,
-            )
+    # For direct single-archiver endpoint, optionally skip if already saved for that archiver
+    # For archiver=="all", we handle per-archiver skipping inside the loop below
 
     # Resolve archivers to run
     if archiver_name == "all":
@@ -56,6 +45,34 @@ def _archive_with(
     last_row_id: int | None = None
     # Run each archiver sequentially and record a row per run
     for name, archiver_obj in archiver_items:
+        # Optional per-archiver skip
+        if settings.skip_existing_saves:
+            try:
+                existing = find_existing_success_save(
+                    settings.resolved_db_path,
+                    item_id=safe_id,
+                    url=str(payload.url),
+                    archiver=name,
+                )
+            except Exception:
+                existing = None
+            if existing is not None:
+                last_result = ArchiveResult(success=True, exit_code=0, saved_path=existing.saved_path)
+                try:
+                    init_db(settings.resolved_db_path)
+                    last_row_id = insert_save_result(
+                        db_path=settings.resolved_db_path,
+                        item_id=safe_id,
+                        url=str(payload.url),
+                        success=True,
+                        exit_code=0,
+                        saved_path=existing.saved_path,
+                        archiver_name=name,
+                    )
+                except Exception:
+                    last_row_id = None
+                continue
+
         result: ArchiveResult = archiver_obj.archive(
             url=str(payload.url), item_id=safe_id, out_name=payload.name
         )
@@ -70,6 +87,7 @@ def _archive_with(
                 success=result.success,
                 exit_code=result.exit_code,
                 saved_path=result.saved_path,
+                archiver_name=name,
             )
         except Exception:
             last_row_id = None
@@ -111,13 +129,7 @@ def save_default(
 
     items = [{"item_id": safe_id, "url": str(payload.url), "name": payload.name}]
 
-    # Optionally drop if already saved successfully
-    if settings.skip_existing_saves:
-        existing = find_existing_success_save(
-            settings.resolved_db_path, item_id=safe_id, url=str(payload.url)
-        )
-        if existing is not None:
-            items = []
+    # Let TaskManager handle per-archiver skip logic instead of dropping upfront
 
     tm = getattr(request.app.state, "task_manager", None)
     if tm is None:
@@ -196,16 +208,7 @@ def archive_with_batch(
             raise HTTPException(status_code=400, detail="id is required for each item")
         items.append({"item_id": safe_id, "url": str(it.url), "name": it.name})
 
-    # Optionally drop items already saved successfully
-    if settings.skip_existing_saves:
-        filtered: list[dict] = []
-        for it in items:
-            existing = find_existing_success_save(
-                settings.resolved_db_path, item_id=str(it["item_id"]), url=str(it["url"])
-            )
-            if existing is None:
-                filtered.append(it)
-        items = filtered
+    # Let TaskManager handle per-archiver skip logic
 
     tm = getattr(request.app.state, "task_manager", None)
     if tm is None:

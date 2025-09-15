@@ -69,7 +69,7 @@ class TaskManager:
             # Insert one pending row per archiver in the pipeline
             for arch_name in archiver_order:
                 if self.settings.skip_existing_saves and is_already_saved_success(
-                    self.settings.resolved_db_path, item_id=iid, url=url
+                    self.settings.resolved_db_path, item_id=iid, url=url, archiver=arch_name
                 ):
                     # Skip inserting pending row if already saved successfully
                     continue
@@ -80,6 +80,7 @@ class TaskManager:
                     url=url,
                     task_id=task_id,
                     name=it.get("name"),
+                    archiver_name=arch_name,
                 )
                 batch_items.append(
                     BatchItem(
@@ -116,7 +117,7 @@ class TaskManager:
                         # Double-check skip condition at execution time
                         if self.settings.skip_existing_saves:
                             existing = find_existing_success_save(
-                                self.settings.resolved_db_path, item_id=it.item_id, url=it.url
+                                self.settings.resolved_db_path, item_id=it.item_id, url=it.url, archiver=it.archiver_name
                             )
                             if existing is not None:
                                 finalize_save_result(

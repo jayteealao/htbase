@@ -29,11 +29,15 @@ class Save(Base):
     status = Column(String, nullable=True, server_default=sa_text("'pending'"))
     task_id = Column(String, nullable=True)
     name = Column(String, nullable=True)
+    # Name of the archiver that produced this row (e.g., monolith, screenshot)
+    archiver = Column(String, nullable=True)
 
 
 # Indices matching the raw-SQL schema intent
 Index("idx_saves_item_id_created_at", Save.item_id, Save.created_at)
 Index("idx_saves_user_id_created_at", Save.user_id, Save.created_at)
+# Useful for per-archiver lookups and skipping existing saves
+Index("idx_saves_item_archiver_created_at", Save.item_id, Save.archiver, Save.created_at)
 
 
 class SaveMetadata(Base):

@@ -30,6 +30,7 @@ def insert_save_result(
     success: bool,
     exit_code: Optional[int],
     saved_path: Optional[str],
+    archiver_name: Optional[str] = None,
 ) -> int:
     init_db(db_path)
     with get_session(db_path) as session:
@@ -41,6 +42,7 @@ def insert_save_result(
             exit_code=exit_code,
             saved_path=saved_path,
             status=("success" if success else "failed"),
+            archiver=archiver_name,
         )
         session.add(row)
         session.flush()  # populate PK
@@ -53,6 +55,7 @@ def insert_pending_save(
     url: str,
     task_id: str,
     name: Optional[str] = None,
+    archiver_name: Optional[str] = None,
 ) -> int:
     """Insert a pending save row for async processing and return rowid."""
     init_db(db_path)
@@ -65,6 +68,7 @@ def insert_pending_save(
             status="pending",
             task_id=task_id,
             name=name,
+            archiver=archiver_name,
         )
         session.add(row)
         session.flush()
@@ -154,18 +158,22 @@ def get_task_rows(db_path: Path, task_id: str) -> List[Dict[str, Any]]:
 
 
 def find_existing_success_save(
-    db_path: Path, *, item_id: str, url: str
+    db_path: Path, *, item_id: str, url: str, archiver: str
 ) -> Optional[Save]:
-    """Return the most recent successful save row matching item_id or url.
+    """Return the most recent successful save row for a specific archiver.
 
-    Looks for any row where success == 1 and (item_id == item_id OR url == url),
-    ordering by created_at/rowid descending to get the latest.
+    Filters by archiver, and matches by item_id or url. Orders by created_at/rowid
+    descending to get the latest.
     """
     init_db(db_path)
     with get_session(db_path) as session:
         stmt = (
             select(Save)
-            .where(or_(Save.item_id == item_id, Save.url == url), Save.success == True)  # noqa: E712
+            .where(
+                or_(Save.item_id == item_id, Save.url == url),
+                Save.success == True,  # noqa: E712
+                Save.archiver == archiver,
+            )
             .order_by(desc(Save.created_at), desc(Save.rowid))
             .limit(1)
         )
@@ -173,9 +181,9 @@ def find_existing_success_save(
         return row
 
 
-def is_already_saved_success(db_path: Path, *, item_id: str, url: str) -> bool:
-    """Convenience predicate to check for existing successful save."""
-    return find_existing_success_save(db_path, item_id=item_id, url=url) is not None
+def is_already_saved_success(db_path: Path, *, item_id: str, url: str, archiver: str) -> bool:
+    """Convenience predicate to check for existing successful save for archiver."""
+    return find_existing_success_save(db_path, item_id=item_id, url=url, archiver=archiver) is not None
 
 
 def get_save_by_rowid(db_path: Path, rowid: int) -> Optional[Save]:
