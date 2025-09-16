@@ -16,8 +16,14 @@ def init_db(db_path: Path | None = None) -> None:
     return
 
 
-def _get_or_create_archived_url(session, *, url: str, item_id: Optional[str], name: Optional[str]) -> ArchivedUrl:
-    row = session.execute(select(ArchivedUrl).where(ArchivedUrl.url == url)).scalars().first()
+def _get_or_create_archived_url(
+    session, *, url: str, item_id: Optional[str], name: Optional[str]
+) -> ArchivedUrl:
+    row = (
+        session.execute(select(ArchivedUrl).where(ArchivedUrl.url == url))
+        .scalars()
+        .first()
+    )
     if row is None:
         row = ArchivedUrl(url=url, item_id=item_id, name=name)
         session.add(row)
@@ -36,11 +42,14 @@ def _get_or_create_archived_url(session, *, url: str, item_id: Optional[str], na
     return row
 
 
-def _get_or_create_artifact(session, *, archived_url_id: int, archiver: str, task_id: Optional[str] = None) -> ArchiveArtifact:
+def _get_or_create_artifact(
+    session, *, archived_url_id: int, archiver: str, task_id: Optional[str] = None
+) -> ArchiveArtifact:
     art = (
         session.execute(
             select(ArchiveArtifact).where(
-                ArchiveArtifact.archived_url_id == archived_url_id, ArchiveArtifact.archiver == archiver
+                ArchiveArtifact.archived_url_id == archived_url_id,
+                ArchiveArtifact.archiver == archiver,
             )
         )
         .scalars()
@@ -97,7 +106,12 @@ def insert_pending_save(
     init_db(db_path)
     with get_session(db_path) as session:
         au = _get_or_create_archived_url(session, url=url, item_id=item_id, name=name)
-        art = _get_or_create_artifact(session, archived_url_id=au.id, archiver=archiver_name or "unknown", task_id=task_id)
+        art = _get_or_create_artifact(
+            session,
+            archived_url_id=au.id,
+            archiver=archiver_name or "unknown",
+            task_id=task_id,
+        )
         return int(art.id)
 
 
@@ -120,6 +134,45 @@ def finalize_save_result(
         art.status = "success" if success else "failed"
 
 
+def record_http_failure(
+    db_path: Path | None,
+    *,
+    rowid: int | None = None,
+    item_id: Optional[str] = None,
+    url: Optional[str] = None,
+    archiver_name: Optional[str] = None,
+    exit_code: int = 404,
+) -> int | None:
+    """Mark an artifact as failed due to an HTTP error (e.g., 404).
+
+    Either `rowid` may be provided to update an existing artifact, or
+    `item_id`+`url`+`archiver_name` will be used to insert/update the
+    artifact row. Returns the artifact id if available, else None.
+    """
+    init_db(db_path)
+    with get_session(db_path) as session:
+        if rowid is not None:
+            art: ArchiveArtifact | None = session.get(ArchiveArtifact, int(rowid))
+            if art is None:
+                return None
+        else:
+            if not url:
+                return None
+            au = _get_or_create_archived_url(
+                session, url=url, item_id=item_id, name=None
+            )
+            art = _get_or_create_artifact(
+                session, archived_url_id=au.id, archiver=archiver_name or "unknown"
+            )
+
+        art.success = False
+        art.exit_code = int(exit_code)
+        art.saved_path = None
+        art.status = "failed"
+        session.flush()
+        return int(art.id)
+
+
 def insert_save_metadata(
     db_path: Path | None,
     *,
@@ -138,7 +191,13 @@ def insert_save_metadata(
             raise ValueError("artifact not found")
         au_id = art.archived_url_id
 
-        row = session.execute(select(UrlMetadata).where(UrlMetadata.archived_url_id == au_id)).scalars().first()
+        row = (
+            session.execute(
+                select(UrlMetadata).where(UrlMetadata.archived_url_id == au_id)
+            )
+            .scalars()
+            .first()
+        )
         payload = dict(
             archived_url_id=au_id,
             source_url=data.get("source_url"),
@@ -153,8 +212,12 @@ def insert_save_metadata(
             favicon=data.get("favicon"),
             keywords=json.dumps(data.get("keywords") or [], ensure_ascii=False),
             text=data.get("text"),
-            word_count=int(data.get("word_count")) if data.get("word_count") is not None else None,
-            reading_time_minutes=float(data.get("reading_time_minutes")) if data.get("reading_time_minutes") is not None else None,
+            word_count=int(data.get("word_count"))
+            if data.get("word_count") is not None
+            else None,
+            reading_time_minutes=float(data.get("reading_time_minutes"))
+            if data.get("reading_time_minutes") is not None
+            else None,
         )
         if row is None:
             row = UrlMetadata(**payload)  # type: ignore[arg-type]
@@ -180,7 +243,11 @@ def get_task_rows(db_path: Path | None, task_id: str) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
         for art, au in rows:
             created_val = getattr(art, "created_at", None)
-            created_at = created_val.isoformat() if hasattr(created_val, "isoformat") else created_val
+            created_at = (
+                created_val.isoformat()
+                if hasattr(created_val, "isoformat")
+                else created_val
+            )
             out.append(
                 {
                     "rowid": art.id,
@@ -205,7 +272,15 @@ def find_existing_success_save(
     """Return the successful artifact row for a specific archiver and URL."""
     init_db(db_path)
     with get_session(db_path) as session:
-        au = session.execute(select(ArchivedUrl).where(or_(ArchivedUrl.url == url, ArchivedUrl.item_id == item_id))).scalars().first()
+        au = (
+            session.execute(
+                select(ArchivedUrl).where(
+                    or_(ArchivedUrl.url == url, ArchivedUrl.item_id == item_id)
+                )
+            )
+            .scalars()
+            .first()
+        )
         if not au:
             return None
         art = (
@@ -224,8 +299,13 @@ def find_existing_success_save(
         return art
 
 
-def is_already_saved_success(db_path: Path | None, *, item_id: str, url: str, archiver: str) -> bool:
-    return find_existing_success_save(db_path, item_id=item_id, url=url, archiver=archiver) is not None
+def is_already_saved_success(
+    db_path: Path | None, *, item_id: str, url: str, archiver: str
+) -> bool:
+    return (
+        find_existing_success_save(db_path, item_id=item_id, url=url, archiver=archiver)
+        is not None
+    )
 
 
 def get_save_by_rowid(db_path: Path | None, rowid: int) -> Optional[ArchiveArtifact]:
@@ -267,7 +347,9 @@ def delete_saves_by_rowids(db_path: Path | None, rowids: List[int]) -> int:
         return int(result.rowcount or 0)
 
 
-def list_saves(db_path: Path | None, limit: int = 200, offset: int = 0) -> List[tuple[ArchiveArtifact, ArchivedUrl]]:
+def list_saves(
+    db_path: Path | None, limit: int = 200, offset: int = 0
+) -> List[tuple[ArchiveArtifact, ArchivedUrl]]:
     """Return latest artifact rows with their URL anchor for pagination."""
     init_db(db_path)
     with get_session(db_path) as session:

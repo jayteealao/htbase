@@ -5,9 +5,21 @@ from typing import Dict, List
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from core.config import AppSettings, get_settings
-from db.repository import init_db, insert_save_result, find_existing_success_save
-from models import ArchiveResult, SaveRequest, SaveResponse, BatchCreateRequest, TaskAccepted
+from db.repository import (
+    init_db,
+    insert_save_result,
+    find_existing_success_save,
+    record_http_failure,
+)
+from models import (
+    ArchiveResult,
+    SaveRequest,
+    SaveResponse,
+    BatchCreateRequest,
+    TaskAccepted,
+)
 from core.utils import sanitize_filename
+from core.utils import get_url_status
 
 
 router = APIRouter()
@@ -38,13 +50,34 @@ def _archive_with(
     else:
         archiver = registry.get(archiver_name)
         if archiver is None:
-            raise HTTPException(status_code=404, detail=f"Unknown archiver: {archiver_name}")
+            raise HTTPException(
+                status_code=404, detail=f"Unknown archiver: {archiver_name}"
+            )
         archiver_items = [(archiver_name, archiver)]
 
     last_result: ArchiveResult | None = None
     last_row_id: int | None = None
     # Run each archiver sequentially and record a row per run
     for name, archiver_obj in archiver_items:
+        # Pre-check URL reachability and map 404 -> immediate failure
+        try:
+            status = get_url_status(str(payload.url))
+        except Exception:
+            status = None
+        if status == 404:
+            # Record failed result with exit_code=404 via central helper
+            try:
+                last_row_id = record_http_failure(
+                    db_path=settings.resolved_db_path,
+                    item_id=safe_id,
+                    url=str(payload.url),
+                    archiver_name=name,
+                    exit_code=404,
+                )
+            except Exception:
+                last_row_id = None
+            last_result = ArchiveResult(success=False, exit_code=404, saved_path=None)
+            continue
         # Optional per-archiver skip
         if settings.skip_existing_saves:
             try:
@@ -57,7 +90,9 @@ def _archive_with(
             except Exception:
                 existing = None
             if existing is not None:
-                last_result = ArchiveResult(success=True, exit_code=0, saved_path=existing.saved_path)
+                last_result = ArchiveResult(
+                    success=True, exit_code=0, saved_path=existing.saved_path
+                )
                 try:
                     init_db(settings.resolved_db_path)
                     last_row_id = insert_save_result(
@@ -136,61 +171,6 @@ def save_default(
         raise HTTPException(status_code=500, detail="task manager not initialized")
     task_id = tm.enqueue("all", items)
     return TaskAccepted(task_id=task_id, count=len(items))
-    # Run all archivers sequentially and return list of results
-    # registry: Dict[str, object] = getattr(request.app.state, "archivers", {})
-    # item_id = payload.id.strip()
-    # if not item_id:
-    #     raise HTTPException(status_code=400, detail="id is required")
-    # safe_id = sanitize_filename(item_id)
-
-    # # Optionally skip if already successfully saved (returns single result)
-    # if settings.skip_existing_saves:
-    #     existing = find_existing_success_save(
-    #         settings.resolved_db_path, item_id=safe_id, url=str(payload.url)
-    #     )
-    #     if existing is not None:
-    #         return [
-    #             SaveResponse(
-    #                 ok=True,
-    #                 exit_code=0,
-    #                 saved_path=existing.saved_path,
-    #                 id=safe_id,
-    #                 db_rowid=int(existing.rowid) if getattr(existing, "rowid", None) is not None else None,
-    #             )
-    #         ]
-
-    # archiver_items = list(registry.items())
-    # if not archiver_items:
-    #     raise HTTPException(status_code=500, detail="no archivers registered")
-
-    # results: List[SaveResponse] = []
-    # for name, archiver_obj in archiver_items:
-    #     result: ArchiveResult = archiver_obj.archive(
-    #         url=str(payload.url), item_id=safe_id, out_name=payload.name
-    #     )
-    #     # Record to DB (best-effort)
-    #     try:
-    #         init_db(settings.resolved_db_path)
-    #         row_id = insert_save_result(
-    #             db_path=settings.resolved_db_path,
-    #             item_id=safe_id,
-    #             url=str(payload.url),
-    #             success=result.success,
-    #             exit_code=result.exit_code,
-    #             saved_path=result.saved_path,
-    #         )
-    #     except Exception:
-    #         row_id = None
-    #     results.append(
-    #         SaveResponse(
-    #             ok=result.success,
-    #             exit_code=result.exit_code,
-    #             saved_path=result.saved_path,
-    #             id=safe_id,
-    #             db_rowid=row_id,
-    #         )
-    #     )
-    # return results
 
 
 @router.post("/archive/{archiver}/batch", response_model=TaskAccepted, status_code=202)

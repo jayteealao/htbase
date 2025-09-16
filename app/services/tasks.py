@@ -13,7 +13,9 @@ from db.repository import (
     is_already_saved_success,
     find_existing_success_save,
 )
+from db.repository import record_http_failure
 from models import ArchiveResult
+from core.utils import get_url_status
 
 if TYPE_CHECKING:
     from core.config import AppSettings
@@ -68,11 +70,14 @@ class TaskManager:
             # Insert one pending row per archiver in the pipeline
             for arch_name in archiver_order:
                 if self.settings.skip_existing_saves and is_already_saved_success(
-                    self.settings.resolved_db_path, item_id=iid, url=url, archiver=arch_name
+                    self.settings.resolved_db_path,
+                    item_id=iid,
+                    url=url,
+                    archiver=arch_name,
                 ):
                     # Skip inserting pending row if already saved successfully
                     continue
-                    
+
                 rowid = insert_pending_save(
                     db_path=self.settings.resolved_db_path,
                     item_id=iid,
@@ -91,7 +96,9 @@ class TaskManager:
 
         # Ensure processing order: for each input item, run each archiver in registration order
         # Items were appended in that order above, so just enqueue as-is
-        self.q.put(BatchTask(task_id=task_id, archiver_name=archiver_name, items=batch_items))
+        self.q.put(
+            BatchTask(task_id=task_id, archiver_name=archiver_name, items=batch_items)
+        )
         self.start()
         return task_id
 
@@ -111,10 +118,35 @@ class TaskManager:
                         )
                         continue
                     try:
+                        # Pre-check URL reachability and handle 404 as immediate failure
+                        try:
+                            status = get_url_status(it.url)
+                        except Exception:
+                            status = None
+                        if status == 404:
+                            try:
+                                record_http_failure(
+                                    db_path=self.settings.resolved_db_path,
+                                    rowid=it.rowid,
+                                    exit_code=404,
+                                )
+                            except Exception:
+                                # best-effort; fall back to finalize
+                                finalize_save_result(
+                                    db_path=self.settings.resolved_db_path,
+                                    rowid=it.rowid,
+                                    success=False,
+                                    exit_code=404,
+                                    saved_path=None,
+                                )
+                            continue
                         # Double-check skip condition at execution time
                         if self.settings.skip_existing_saves:
                             existing = find_existing_success_save(
-                                self.settings.resolved_db_path, item_id=it.item_id, url=it.url, archiver=it.archiver_name
+                                self.settings.resolved_db_path,
+                                item_id=it.item_id,
+                                url=it.url,
+                                archiver=it.archiver_name,
                             )
                             if existing is not None:
                                 finalize_save_result(
@@ -139,7 +171,10 @@ class TaskManager:
                         try:
                             from db.repository import insert_save_metadata
 
-                            if getattr(result, "metadata", None) and it.archiver_name == "readability":
+                            if (
+                                getattr(result, "metadata", None)
+                                and it.archiver_name == "readability"
+                            ):
                                 insert_save_metadata(
                                     db_path=self.settings.resolved_db_path,
                                     save_rowid=it.rowid,
