@@ -23,7 +23,6 @@ if TYPE_CHECKING:
 class BatchItem:
     item_id: str
     url: str
-    name: Optional[str]
     rowid: int
     archiver_name: str
 
@@ -50,10 +49,10 @@ class TaskManager:
             self.worker = threading.Thread(target=self._run, daemon=True)
             self.worker.start()
 
-    def enqueue(self, archiver_name: str, items: List[Dict[str, Optional[str]]]) -> str:
+    def enqueue(self, archiver_name: str, items: List[Dict[str, str]]) -> str:
         """Insert pending rows and enqueue async task; returns task_id.
 
-        items: list of dicts with keys: item_id, url, name
+        items: list of dicts with keys: item_id, url
         """
         task_id = uuid.uuid4().hex
         batch_items: List[BatchItem] = []
@@ -79,14 +78,12 @@ class TaskManager:
                     item_id=iid,
                     url=url,
                     task_id=task_id,
-                    name=it.get("name"),
                     archiver_name=arch_name,
                 )
                 batch_items.append(
                     BatchItem(
                         item_id=iid,
                         url=url,
-                        name=it.get("name"),
                         rowid=rowid,
                         archiver_name=arch_name,
                     )
@@ -129,7 +126,7 @@ class TaskManager:
                                 )
                                 continue
                         result: ArchiveResult = archiver.archive(
-                            url=it.url, item_id=it.item_id, out_name=it.name
+                            url=it.url, item_id=it.item_id
                         )
                         finalize_save_result(
                             db_path=self.settings.resolved_db_path,

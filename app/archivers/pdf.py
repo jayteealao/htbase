@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
-from typing import Optional
 import shlex
 
 from archivers.base import BaseArchiver
@@ -19,19 +17,12 @@ class PDFArchiver(BaseArchiver):
         super().__init__(settings)
         self.ht_runner = ht_runner
 
-    def archive(self, *, url: str, item_id: str, out_name: Optional[str]) -> ArchiveResult:
-        # Determine output filename
-        if out_name:
-            out_name = sanitize_filename(out_name)
-            if not out_name.endswith(".pdf"):
-                out_name += ".pdf"
-        else:
-            out_name = "output.pdf"
-
+    def archive(self, *, url: str, item_id: str) -> ArchiveResult:
         safe_item = sanitize_filename(item_id)
         out_dir = Path(self.settings.data_dir) / safe_item / self.name
         out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / out_name
+        out_path = out_dir / "output.pdf"
+
 
         url_q = shlex.quote(url)
         out_q = shlex.quote(str(out_path))

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import abc
-from typing import Optional
 
 from core.config import AppSettings
 from models import ArchiveResult
@@ -14,6 +13,6 @@ class BaseArchiver(abc.ABC):
         self.settings = settings
 
     @abc.abstractmethod
-    def archive(self, *, url: str, item_id: str, out_name: Optional[str]) -> ArchiveResult:  # noqa: D401
+    def archive(self, *, url: str, item_id: str) -> ArchiveResult:  # noqa: D401
         """Archive the given URL keyed by item_id; returns result metadata."""
         raise NotImplementedError

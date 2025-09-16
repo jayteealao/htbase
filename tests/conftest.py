@@ -33,23 +33,22 @@ def test_client(temp_env) -> Generator:
     from core.config import get_settings
     from models import ArchiveResult
     from core.utils import sanitize_filename
+    from services.tasks import TaskManager
 
     class DummyArchiver(BaseArchiver):
         name = "monolith"
 
-        def archive(self, *, url: str, item_id: str, out_name: str | None) -> ArchiveResult:
+        def archive(self, *, url: str, item_id: str) -> ArchiveResult:
             settings = get_settings()
             safe_item = sanitize_filename(item_id)
             out_dir = Path(settings.data_dir) / safe_item / self.name
             out_dir.mkdir(parents=True, exist_ok=True)
-            fname = out_name or "page.html"
-            if not fname.endswith(".html"):
-                fname += ".html"
-            out_path = out_dir / fname
+            out_path = out_dir / "output.html"
             out_path.write_text(f"<html><body>Dummy saved: {url}</body></html>", encoding="utf-8")
             return ArchiveResult(success=True, exit_code=0, saved_path=str(out_path))
 
     server.app.state.archivers = {"monolith": DummyArchiver(get_settings())}
+    server.app.state.task_manager = TaskManager(get_settings(), server.app.state.archivers)
 
     try:
         yield client

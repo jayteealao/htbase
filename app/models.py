@@ -12,7 +12,6 @@ class SaveRequest(BaseModel):
         validation_alias=AliasChoices("id", "user_id"),
         serialization_alias="id",
     )
-    name: Optional[str] = None
 
 
 class ArchiveResult(BaseModel):
@@ -37,7 +36,6 @@ class BatchItemRequest(BaseModel):
         validation_alias=AliasChoices("id", "user_id"),
         serialization_alias="id",
     )
-    name: Optional[str] = None
 
 
 class BatchCreateRequest(BaseModel):

@@ -74,7 +74,7 @@ def _archive_with(
                 continue
 
         result: ArchiveResult = archiver_obj.archive(
-            url=str(payload.url), item_id=safe_id, out_name=payload.name
+            url=str(payload.url), item_id=safe_id
         )
         last_result = result
         # Record to DB (best-effort)
@@ -127,7 +127,7 @@ def save_default(
         raise HTTPException(status_code=400, detail="id is required")
     safe_id = sanitize_filename(item_id)
 
-    items = [{"item_id": safe_id, "url": str(payload.url), "name": payload.name}]
+    items = [{"item_id": safe_id, "url": str(payload.url)}]
 
     # Let TaskManager handle per-archiver skip logic instead of dropping upfront
 
@@ -206,7 +206,7 @@ def archive_with_batch(
         safe_id = sanitize_filename(it.id.strip())
         if not safe_id:
             raise HTTPException(status_code=400, detail="id is required for each item")
-        items.append({"item_id": safe_id, "url": str(it.url), "name": it.name})
+        items.append({"item_id": safe_id, "url": str(it.url)})
 
     # Let TaskManager handle per-archiver skip logic
 

@@ -18,14 +18,14 @@
 
     <section class="bg-white rounded-lg shadow p-4">
       <h2 class="font-semibold mb-3">New Save</h2>
-      <form id="save-form" class="grid grid-cols-1 md:grid-cols-5 gap-3">
+      <form id="save-form" class="grid grid-cols-1 md:grid-cols-4 gap-3">
         <input name="url" type="url" placeholder="https://example.com/article" required class="md:col-span-2 border rounded px-3 py-2 w-full" />
         <input name="id" type="text" placeholder="item id" required class="border rounded px-3 py-2 w-full" />
-        <input name="name" type="text" placeholder="output name (optional).html" class="border rounded px-3 py-2 w-full" />
         <select name="archiver" id="archiver" class="border rounded px-3 py-2 w-full"></select>
         <button class="bg-blue-600 text-white rounded px-4 py-2">Save</button>
       </form>
       <p id="save-msg" class="text-sm mt-2 text-slate-600"></p>
+      <p class="text-xs text-slate-500">Files are saved as output.&lt;type&gt; inside each item folder.</p>
     </section>
 
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -133,9 +133,8 @@
       const fd = new FormData(e.currentTarget);
       const url = fd.get('url');
       const id = fd.get('id');
-      const name = fd.get('name');
       const archiver = fd.get('archiver') || 'monolith';
-      const body = { url, id, name };
+      const body = { url, id };
       const r = await fetch('/archive/' + encodeURIComponent(archiver), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -144,7 +143,7 @@
       const data = await r.json();
       const msg = document.getElementById('save-msg');
       msg.textContent = data.ok ? 'Saved!' : 'Failed (exit_code=' + data.exit_code + ')';
-      if (data.saved_path) msg.textContent += ' → ' + data.saved_path;
+      if (data.saved_path) msg.textContent += ' Ã¢â€ â€™ ' + data.saved_path;
       loadSaves();
     });
 

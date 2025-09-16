@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
-from typing import Optional
 import shlex
 
 from archivers.base import BaseArchiver
@@ -24,19 +22,11 @@ class ScreenshotArchiver(BaseArchiver):
         # Height large enough for many pages; CLI screenshot doesn't truly do full-page
         self.viewport_height = 8000
 
-    def archive(self, *, url: str, item_id: str, out_name: Optional[str]) -> ArchiveResult:
-        # Determine output filename
-        if out_name:
-            out_name = sanitize_filename(out_name)
-            if not out_name.endswith(".png"):
-                out_name += ".png"
-        else:
-            out_name = "output.png"
-
+    def archive(self, *, url: str, item_id: str) -> ArchiveResult:
         safe_item = sanitize_filename(item_id)
         out_dir = Path(self.settings.data_dir) / safe_item / self.name
         out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / out_name
+        out_path = out_dir / "output.png"
 
         url_q = shlex.quote(url)
         out_q = shlex.quote(str(out_path))

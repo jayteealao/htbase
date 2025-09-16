@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 import shlex
 
 from archivers.base import BaseArchiver
@@ -19,7 +18,7 @@ class SingleFileCLIArchiver(BaseArchiver):
         super().__init__(settings)
         self.ht_runner = ht_runner
 
-    def archive(self, *, url: str, item_id: str, out_name: Optional[str]) -> ArchiveResult:
+    def archive(self, *, url: str, item_id: str) -> ArchiveResult:
         # Output path is fixed to output.html in <DATA_DIR>/<item_id>/singlefile/
         safe_item = sanitize_filename(item_id)
         out_dir = Path(self.settings.data_dir) / safe_item / self.name

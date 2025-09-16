@@ -73,19 +73,11 @@ class ReadabilityArchiver(BaseArchiver):
         except Exception:
             return None
 
-    def archive(self, *, url: str, item_id: str, out_name: Optional[str]) -> ArchiveResult:
-        # Determine output filename (HTML)
-        if out_name:
-            out_name = sanitize_filename(out_name)
-            if not out_name.endswith(".html"):
-                out_name += ".html"
-        else:
-            out_name = "output.html"
-
+    def archive(self, *, url: str, item_id: str) -> ArchiveResult:
         safe_item = sanitize_filename(item_id)
         out_dir = Path(self.settings.data_dir) / safe_item / self.name
         out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / out_name
+        out_path = out_dir / "output.html"
 
         # Obtain page HTML (Chromium dump preferred; HTTP fallback)
         html = self._get_source_html(url)
@@ -166,7 +158,7 @@ class ReadabilityArchiver(BaseArchiver):
             # Persist metadata JSON alongside the HTML for inspection/debugging
             try:
                 import json
-                meta_path = out_dir / (out_name.rsplit(".html", 1)[0] + ".json")
+                meta_path = out_dir / "output.json"
                 meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
             except Exception:
                 pass
