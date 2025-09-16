@@ -1,51 +1,46 @@
 from __future__ import annotations
 
-from sqlalchemy import Boolean, Column, DateTime, Index, Integer, String, Text, ForeignKey, Float, text as sa_text
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    Index,
+    Integer,
+    String,
+    Text,
+    ForeignKey,
+    Float,
+    UniqueConstraint,
+    text as sa_text,
+)
 from sqlalchemy.orm import declarative_base
 
 
 Base = declarative_base()
 
 
-class Save(Base):
-    __tablename__ = "saves"
-
-    # Keep the primary key column named 'rowid' for compatibility with existing code
-    rowid = Column(Integer, primary_key=True, autoincrement=True)
-
-    item_id = Column(String, nullable=False)
-    # Optional legacy column for backward compatibility
-    user_id = Column(String, nullable=True)
-
-    url = Column(Text, nullable=False)
-    success = Column(Boolean, nullable=False, default=False, server_default=sa_text("0"))
-    exit_code = Column(Integer, nullable=True)
-    saved_path = Column(Text, nullable=True)
-    created_at = Column(
-        DateTime,
-        nullable=False,
-        server_default=sa_text("datetime('now')"),
-    )
-    status = Column(String, nullable=True, server_default=sa_text("'pending'"))
-    task_id = Column(String, nullable=True)
-    name = Column(String, nullable=True)
-    # Name of the archiver that produced this row (e.g., monolith, screenshot)
-    archiver = Column(String, nullable=True)
-
-
-# Indices matching the raw-SQL schema intent
-Index("idx_saves_item_id_created_at", Save.item_id, Save.created_at)
-Index("idx_saves_user_id_created_at", Save.user_id, Save.created_at)
-# Useful for per-archiver lookups and skipping existing saves
-Index("idx_saves_item_archiver_created_at", Save.item_id, Save.archiver, Save.created_at)
-
-
-class SaveMetadata(Base):
-    __tablename__ = "save_metadata"
+class ArchivedUrl(Base):
+    __tablename__ = "archived_urls"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    # FK to saves.rowid (one metadata row per save)
-    save_rowid = Column(Integer, ForeignKey("saves.rowid"), nullable=False)
+    # Original identifier provided by client (kept for compatibility/labeling)
+    item_id = Column(String, nullable=True)
+    # The canonical URL for this entry; enforce single row per URL
+    url = Column(Text, nullable=False, unique=True)
+    name = Column(String, nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default=sa_text("now()"))
+
+    # Convenience indices
+    __table_args__ = (
+        Index("idx_archived_urls_item_id", "item_id"),
+    )
+
+
+class UrlMetadata(Base):
+    __tablename__ = "url_metadata"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    archived_url_id = Column(Integer, ForeignKey("archived_urls.id"), nullable=False, unique=True)
     # Core
     source_url = Column(Text, nullable=True)
     title = Column(Text, nullable=True)
@@ -65,6 +60,30 @@ class SaveMetadata(Base):
     word_count = Column(Integer, nullable=True)
     reading_time_minutes = Column(Float, nullable=True)
 
-    created_at = Column(DateTime, nullable=False, server_default=sa_text("datetime('now')"))
+    created_at = Column(DateTime, nullable=False, server_default=sa_text("now()"))
 
-Index("idx_save_metadata_save_rowid", SaveMetadata.save_rowid)
+    __table_args__ = (
+        Index("idx_url_metadata_archived_url_id", "archived_url_id"),
+    )
+
+
+class ArchiveArtifact(Base):
+    __tablename__ = "archive_artifact"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    archived_url_id = Column(Integer, ForeignKey("archived_urls.id"), nullable=False)
+    archiver = Column(String, nullable=False)
+    # Execution/result fields
+    success = Column(Boolean, nullable=False, server_default=sa_text("false"))
+    exit_code = Column(Integer, nullable=True)
+    saved_path = Column(Text, nullable=True)
+    status = Column(String, nullable=True, server_default=sa_text("'pending'"))
+    task_id = Column(String, nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default=sa_text("now()"))
+    updated_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("archived_url_id", "archiver", name="uq_artifact_url_archiver"),
+        Index("idx_artifact_task_id", "task_id"),
+        Index("idx_artifact_archiver", "archiver"),
+    )

@@ -8,6 +8,7 @@ ARG DEBIAN_FRONTEND
 ARG MONOLITH_VERSION
 ARG HT_VERSION
 
+# Install dependencies + Chromium + Node.js + npm
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
      ca-certificates curl bash python3 python3-pip python3-venv \
@@ -88,4 +89,9 @@ ENV SINGLEFILE_FLAGS="--browser-executable-path=/usr/bin/chromium --browser-args
 
 # Use the venv's interpreter/binaries via PATH
 # Run DB migrations via Alembic, then start the API
-CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000"]
+# Copy entrypoint script and make it executable
+COPY app/scripts/entrypoint.sh /app/scripts/entrypoint.sh
+RUN chmod +x /app/scripts/entrypoint.sh
+
+# Run Alembic migrations on startup, then launch the API
+CMD ["/app/scripts/entrypoint.sh"]

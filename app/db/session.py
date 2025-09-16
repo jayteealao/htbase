@@ -9,28 +9,32 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from core.config import get_settings
+
 
 @lru_cache(maxsize=None)
-def _engine_for_path(path_str: str) -> Engine:
-    # Ensure parent directory exists
-    Path(path_str).parent.mkdir(parents=True, exist_ok=True)
-    return create_engine(
-        f"sqlite:///{path_str}",
-        connect_args={"check_same_thread": False},
-        future=True,
-    )
+def _engine_for_url(_: str = "default") -> Engine:
+    """Create a singleton Engine for the configured Postgres database.
+
+    The input key is ignored but retained for lru_cache signature stability
+    relative to previous sqlite-based code which cached by path.
+    """
+    settings = get_settings()
+    url = settings.database_url
+    # Create engine with pool_pre_ping for better resiliency
+    return create_engine(url, pool_pre_ping=True, future=True)
 
 
-def get_engine(db_path: Path) -> Engine:
-    return _engine_for_path(str(db_path))
+def get_engine(db_path: Path | None = None) -> Engine:  # db_path ignored; kept for compatibility
+    return _engine_for_url()
 
 
-def get_sessionmaker(db_path: Path) -> sessionmaker[Session]:
+def get_sessionmaker(db_path: Path | None = None) -> sessionmaker[Session]:
     return sessionmaker(bind=get_engine(db_path), autoflush=False, autocommit=False, expire_on_commit=False, future=True)
 
 
 @contextmanager
-def get_session(db_path: Path) -> Iterator[Session]:
+def get_session(db_path: Path | None = None) -> Iterator[Session]:
     SessionLocal = get_sessionmaker(db_path)
     session: Session = SessionLocal()
     try:
@@ -41,4 +45,3 @@ def get_session(db_path: Path) -> Iterator[Session]:
         raise
     finally:
         session.close()
-

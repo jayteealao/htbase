@@ -31,13 +31,13 @@ def list_saves_endpoint(
     from pathlib import Path
 
     data_root = Path(settings.data_dir).resolve()
-    for r in rows:
-        created_val = getattr(r, "created_at", None)
+    for art, au in rows:
+        created_val = getattr(art, "created_at", None)
         created_at = created_val.isoformat() if hasattr(created_val, "isoformat") else created_val
-        saved_path = r.saved_path
+        saved_path = art.saved_path
         file_exists = False
         rel_path = None
-        archiver = getattr(r, "archiver", None)
+        archiver = getattr(art, "archiver", None)
         if saved_path:
             p = Path(saved_path)
             file_exists = p.exists()
@@ -55,14 +55,14 @@ def list_saves_endpoint(
                     archiver = parts[-2]
         out.append(
             {
-                "rowid": int(r.rowid),
-                "id": r.item_id,
-                "url": r.url,
-                "name": r.name,
-                "status": r.status,
-                "success": 1 if r.success else 0,
-                "exit_code": r.exit_code,
-                "saved_path": r.saved_path,
+                "rowid": int(art.id),
+                "id": au.item_id,
+                "url": au.url,
+                "name": au.name,
+                "status": art.status,
+                "success": 1 if art.success else 0,
+                "exit_code": art.exit_code,
+                "saved_path": art.saved_path,
                 "file_exists": file_exists,
                 "relative_path": rel_path,
                 "archiver": archiver,
@@ -137,7 +137,7 @@ def delete_saves_by_item(
     rows = get_saves_by_item_id(settings.resolved_db_path, item_id)
     if not rows:
         raise HTTPException(status_code=404, detail="no saves for item_id")
-    rowids = [int(r.rowid) for r in rows]
+    rowids = [int(r.id) for r in rows]
     saved_paths = [r.saved_path for r in rows if r.saved_path]
     deleted = delete_saves_by_rowids(settings.resolved_db_path, rowids)
 
@@ -184,7 +184,7 @@ def delete_saves_by_url_endpoint(
     rows = get_saves_by_url(settings.resolved_db_path, url)
     if not rows:
         raise HTTPException(status_code=404, detail="no saves for url")
-    rowids = [int(r.rowid) for r in rows]
+    rowids = [int(r.id) for r in rows]
     saved_paths = [r.saved_path for r in rows if r.saved_path]
     deleted = delete_saves_by_rowids(settings.resolved_db_path, rowids)
 

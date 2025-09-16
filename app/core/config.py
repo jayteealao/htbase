@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import quote_plus
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -14,7 +15,15 @@ class AppSettings(BaseSettings):
     """
 
     data_dir: Path = Field(default=Path("/data"), alias="DATA_DIR")
+    # Legacy sqlite path (ignored when using Postgres)
     db_path: Path | None = Field(default=None, alias="DB_PATH")
+
+    # Postgres connection settings
+    db_host: str = Field(default="192.168.1.12", alias="DB_HOST")
+    db_port: int = Field(default=5432, alias="DB_PORT")
+    db_name: str = Field(default="htbase", alias="DB_NAME")
+    db_user: str = Field(default="postgres", alias="DB_USER")
+    db_password: str = Field(default="your_password", alias="DB_PASSWORD")
     ht_bin: str = Field(default="/usr/local/bin/ht", alias="HT_BIN")
     monolith_bin: str = Field(default="/usr/local/bin/monolith", alias="MONOLITH_BIN")
     use_chromium: bool = Field(default=True, alias="USE_CHROMIUM")
@@ -45,6 +54,19 @@ class AppSettings(BaseSettings):
     @property
     def resolved_db_path(self) -> Path:
         return self.db_path or (self.data_dir / "app.db")
+
+    @property
+    def database_url(self) -> str:
+        """Build a SQLAlchemy DSN for Postgres using psycopg driver.
+
+        Example: postgresql+psycopg://user:pass@host:5432/db
+        """
+        user = quote_plus(self.db_user)
+        pwd = quote_plus(self.db_password)
+        host = self.db_host
+        port = self.db_port
+        name = self.db_name
+        return f"postgresql+psycopg://{user}:{pwd}@{host}:{port}/{name}"
 
 
 @lru_cache

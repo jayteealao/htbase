@@ -1,30 +1,70 @@
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
-from sqlalchemy import select, or_, desc, delete
+from sqlalchemy import select, or_, desc, update, delete
 
 import json
-from .models import Base, Save, SaveMetadata
+from .models import Base, ArchivedUrl, UrlMetadata, ArchiveArtifact
 from .session import get_engine, get_session
 
 
-def init_db(db_path: Path) -> None:
-    """Ensure the database exists and the schema is created.
-
-    Alembic should manage migrations, but creating tables here makes
-    first-run/local dev smoother if migrations haven't been applied yet.
-    """
-    engine = get_engine(db_path)
-    # Use WAL for better concurrent write performance
-    with engine.begin() as conn:
-        conn.exec_driver_sql("PRAGMA journal_mode=WAL;")
-    # Schema management is exclusively done via Alembic. Do not create or
-    # mutate tables here. Ensure `alembic upgrade head` has been run.
+def init_db(db_path: Path | None = None) -> None:
+    """Schema is managed by Alembic; nothing to do here for Postgres."""
+    # Keeping this function for compatibility; Postgres schema creation is handled
+    # by Alembic migrations. This becomes a no-op at runtime.
+    _ = get_engine(db_path)  # ensure engine is initialized
     return
 
 
+def _get_or_create_archived_url(session, *, url: str, item_id: Optional[str], name: Optional[str]) -> ArchivedUrl:
+    row = session.execute(select(ArchivedUrl).where(ArchivedUrl.url == url)).scalars().first()
+    if row is None:
+        row = ArchivedUrl(url=url, item_id=item_id, name=name)
+        session.add(row)
+        session.flush()
+    else:
+        # backfill item_id/name if missing
+        changed = False
+        if item_id and not row.item_id:
+            row.item_id = item_id
+            changed = True
+        if name and not row.name:
+            row.name = name
+            changed = True
+        if changed:
+            session.flush()
+    return row
+
+
+def _get_or_create_artifact(session, *, archived_url_id: int, archiver: str, task_id: Optional[str] = None) -> ArchiveArtifact:
+    art = (
+        session.execute(
+            select(ArchiveArtifact).where(
+                ArchiveArtifact.archived_url_id == archived_url_id, ArchiveArtifact.archiver == archiver
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if art is None:
+        art = ArchiveArtifact(
+            archived_url_id=archived_url_id,
+            archiver=archiver,
+            task_id=task_id,
+            status="pending" if task_id else None,
+        )
+        session.add(art)
+        session.flush()
+    else:
+        if task_id:
+            art.task_id = task_id
+            art.status = "pending"
+            session.flush()
+    return art
+
+
 def insert_save_result(
-    db_path: Path,
+    db_path: Path | None,
     item_id: str,
     url: str,
     success: bool,
@@ -34,82 +74,73 @@ def insert_save_result(
 ) -> int:
     init_db(db_path)
     with get_session(db_path) as session:
-        row = Save(
-            item_id=item_id,
-            user_id=item_id,  # keep legacy column populated too
-            url=url,
-            success=bool(success),
-            exit_code=exit_code,
-            saved_path=saved_path,
-            status=("success" if success else "failed"),
-            archiver=archiver_name,
-        )
-        session.add(row)
-        session.flush()  # populate PK
-        return int(row.rowid)
+        archiver = archiver_name or "unknown"
+        au = _get_or_create_archived_url(session, url=url, item_id=item_id, name=None)
+        art = _get_or_create_artifact(session, archived_url_id=au.id, archiver=archiver)
+        art.success = bool(success)
+        art.exit_code = exit_code
+        art.saved_path = saved_path
+        art.status = "success" if success else "failed"
+        session.flush()
+        return int(art.id)
 
 
 def insert_pending_save(
-    db_path: Path,
+    db_path: Path | None,
     item_id: str,
     url: str,
     task_id: str,
     name: Optional[str] = None,
     archiver_name: Optional[str] = None,
 ) -> int:
-    """Insert a pending save row for async processing and return rowid."""
+    """Ensure an artifact row exists and mark it pending; return artifact id."""
     init_db(db_path)
     with get_session(db_path) as session:
-        row = Save(
-            item_id=item_id,
-            user_id=item_id,  # keep legacy column populated too
-            url=url,
-            success=False,
-            status="pending",
-            task_id=task_id,
-            name=name,
-            archiver=archiver_name,
-        )
-        session.add(row)
-        session.flush()
-        return int(row.rowid)
+        au = _get_or_create_archived_url(session, url=url, item_id=item_id, name=name)
+        art = _get_or_create_artifact(session, archived_url_id=au.id, archiver=archiver_name or "unknown", task_id=task_id)
+        return int(art.id)
 
 
 def finalize_save_result(
-    db_path: Path,
+    db_path: Path | None,
     rowid: int,
     success: bool,
     exit_code: Optional[int],
     saved_path: Optional[str],
 ) -> None:
-    """Update an existing row with final result and status."""
+    """Update an existing artifact row with final result and status."""
     init_db(db_path)
     with get_session(db_path) as session:
-        row: Save | None = session.get(Save, rowid)
-        if row is None:
+        art: ArchiveArtifact | None = session.get(ArchiveArtifact, rowid)
+        if art is None:
             return
-        row.success = bool(success)
-        row.exit_code = exit_code
-        row.saved_path = saved_path
-        row.status = "success" if success else "failed"
+        art.success = bool(success)
+        art.exit_code = exit_code
+        art.saved_path = saved_path
+        art.status = "success" if success else "failed"
 
 
 def insert_save_metadata(
-    db_path: Path,
+    db_path: Path | None,
     *,
     save_rowid: int,
     data: Dict[str, Any],
 ) -> int:
-    """Insert readability-derived metadata associated with a save row; returns metadata id.
+    """Insert readability-derived metadata associated with an archived URL; returns metadata id.
 
-    Expected keys in data: source_url, title, byline, site_name, description,
-    published, language, canonical_url, top_image, favicon, keywords (list),
-    text, word_count, reading_time_minutes.
+    The input `save_rowid` refers to the artifact id (for compatibility). We
+    resolve the parent archived_url_id and upsert metadata for that URL.
     """
     init_db(db_path)
     with get_session(db_path) as session:
-        row = SaveMetadata(
-            save_rowid=save_rowid,
+        art: ArchiveArtifact | None = session.get(ArchiveArtifact, save_rowid)
+        if art is None:
+            raise ValueError("artifact not found")
+        au_id = art.archived_url_id
+
+        row = session.execute(select(UrlMetadata).where(UrlMetadata.archived_url_id == au_id)).scalars().first()
+        payload = dict(
+            archived_url_id=au_id,
             source_url=data.get("source_url"),
             title=data.get("title"),
             byline=data.get("byline"),
@@ -125,108 +156,126 @@ def insert_save_metadata(
             word_count=int(data.get("word_count")) if data.get("word_count") is not None else None,
             reading_time_minutes=float(data.get("reading_time_minutes")) if data.get("reading_time_minutes") is not None else None,
         )
-        session.add(row)
-        session.flush()
+        if row is None:
+            row = UrlMetadata(**payload)  # type: ignore[arg-type]
+            session.add(row)
+            session.flush()
+        else:
+            for k, v in payload.items():
+                setattr(row, k, v)
+            session.flush()
         return int(row.id)
 
 
-def get_task_rows(db_path: Path, task_id: str) -> List[Dict[str, Any]]:
+def get_task_rows(db_path: Path | None, task_id: str) -> List[Dict[str, Any]]:
     init_db(db_path)
     with get_session(db_path) as session:
-        stmt = select(Save).where(Save.task_id == task_id).order_by(Save.rowid.asc())
-        rows = session.execute(stmt).scalars().all()
+        stmt = (
+            select(ArchiveArtifact, ArchivedUrl)
+            .join(ArchivedUrl, ArchiveArtifact.archived_url_id == ArchivedUrl.id)
+            .where(ArchiveArtifact.task_id == task_id)
+            .order_by(ArchiveArtifact.id.asc())
+        )
+        rows = session.execute(stmt).all()
         out: List[Dict[str, Any]] = []
-        for r in rows:
-            created_val = getattr(r, "created_at", None)
+        for art, au in rows:
+            created_val = getattr(art, "created_at", None)
             created_at = created_val.isoformat() if hasattr(created_val, "isoformat") else created_val
             out.append(
                 {
-                    "rowid": r.rowid,
-                    "item_id": r.item_id,
-                    "user_id": r.user_id,
-                    "url": r.url,
-                    "success": 1 if r.success else 0,
-                    "exit_code": r.exit_code,
-                    "saved_path": r.saved_path,
+                    "rowid": art.id,
+                    "item_id": au.item_id,
+                    "user_id": None,
+                    "url": au.url,
+                    "success": 1 if art.success else 0,
+                    "exit_code": art.exit_code,
+                    "saved_path": art.saved_path,
                     "created_at": created_at,
-                    "status": r.status,
-                    "task_id": r.task_id,
-                    "name": r.name,
+                    "status": art.status,
+                    "task_id": art.task_id,
+                    "name": au.name,
                 }
             )
         return out
 
 
 def find_existing_success_save(
-    db_path: Path, *, item_id: str, url: str, archiver: str
-) -> Optional[Save]:
-    """Return the most recent successful save row for a specific archiver.
-
-    Filters by archiver, and matches by item_id or url. Orders by created_at/rowid
-    descending to get the latest.
-    """
+    db_path: Path | None, *, item_id: str, url: str, archiver: str
+) -> Optional[ArchiveArtifact]:
+    """Return the successful artifact row for a specific archiver and URL."""
     init_db(db_path)
     with get_session(db_path) as session:
-        stmt = (
-            select(Save)
-            .where(
-                or_(Save.item_id == item_id, Save.url == url),
-                Save.success == True,  # noqa: E712
-                Save.archiver == archiver,
+        au = session.execute(select(ArchivedUrl).where(or_(ArchivedUrl.url == url, ArchivedUrl.item_id == item_id))).scalars().first()
+        if not au:
+            return None
+        art = (
+            session.execute(
+                select(ArchiveArtifact)
+                .where(
+                    ArchiveArtifact.archived_url_id == au.id,
+                    ArchiveArtifact.archiver == archiver,
+                    ArchiveArtifact.success == True,  # noqa: E712
+                )
+                .limit(1)
             )
-            .order_by(desc(Save.created_at), desc(Save.rowid))
-            .limit(1)
+            .scalars()
+            .first()
         )
-        row = session.execute(stmt).scalars().first()
-        return row
+        return art
 
 
-def is_already_saved_success(db_path: Path, *, item_id: str, url: str, archiver: str) -> bool:
-    """Convenience predicate to check for existing successful save for archiver."""
+def is_already_saved_success(db_path: Path | None, *, item_id: str, url: str, archiver: str) -> bool:
     return find_existing_success_save(db_path, item_id=item_id, url=url, archiver=archiver) is not None
 
 
-def get_save_by_rowid(db_path: Path, rowid: int) -> Optional[Save]:
+def get_save_by_rowid(db_path: Path | None, rowid: int) -> Optional[ArchiveArtifact]:
     init_db(db_path)
     with get_session(db_path) as session:
-        return session.get(Save, rowid)
+        return session.get(ArchiveArtifact, rowid)
 
 
-def get_saves_by_item_id(db_path: Path, item_id: str) -> List[Save]:
+def get_saves_by_item_id(db_path: Path | None, item_id: str) -> List[ArchiveArtifact]:
     init_db(db_path)
     with get_session(db_path) as session:
-        stmt = select(Save).where(Save.item_id == item_id)
+        stmt = (
+            select(ArchiveArtifact)
+            .join(ArchivedUrl, ArchiveArtifact.archived_url_id == ArchivedUrl.id)
+            .where(ArchivedUrl.item_id == item_id)
+        )
         return list(session.execute(stmt).scalars().all())
 
 
-def get_saves_by_url(db_path: Path, url: str) -> List[Save]:
+def get_saves_by_url(db_path: Path | None, url: str) -> List[ArchiveArtifact]:
     init_db(db_path)
     with get_session(db_path) as session:
-        stmt = select(Save).where(Save.url == url)
+        stmt = (
+            select(ArchiveArtifact)
+            .join(ArchivedUrl, ArchiveArtifact.archived_url_id == ArchivedUrl.id)
+            .where(ArchivedUrl.url == url)
+        )
         return list(session.execute(stmt).scalars().all())
 
 
-def delete_saves_by_rowids(db_path: Path, rowids: List[int]) -> int:
+def delete_saves_by_rowids(db_path: Path | None, rowids: List[int]) -> int:
     """Delete saves with the given rowids. Returns number of rows deleted."""
     if not rowids:
         return 0
     init_db(db_path)
     with get_session(db_path) as session:
-        stmt = delete(Save).where(Save.rowid.in_(rowids))
+        stmt = delete(ArchiveArtifact).where(ArchiveArtifact.id.in_(rowids))
         result = session.execute(stmt)
-        # SQLAlchemy 2.0 returns rows affected via rowcount
         return int(result.rowcount or 0)
 
 
-def list_saves(db_path: Path, limit: int = 200, offset: int = 0) -> List[Save]:
-    """Return latest saves limited and offset for pagination."""
+def list_saves(db_path: Path | None, limit: int = 200, offset: int = 0) -> List[tuple[ArchiveArtifact, ArchivedUrl]]:
+    """Return latest artifact rows with their URL anchor for pagination."""
     init_db(db_path)
     with get_session(db_path) as session:
         stmt = (
-            select(Save)
-            .order_by(desc(Save.created_at), desc(Save.rowid))
+            select(ArchiveArtifact, ArchivedUrl)
+            .join(ArchivedUrl, ArchiveArtifact.archived_url_id == ArchivedUrl.id)
+            .order_by(desc(ArchiveArtifact.created_at), desc(ArchiveArtifact.id))
             .limit(int(max(1, limit)))
             .offset(int(max(0, offset)))
         )
-        rows = session.execute(stmt).scalars().all()
-        return list(rows)
+        return list(session.execute(stmt).all())
