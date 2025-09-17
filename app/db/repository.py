@@ -1,10 +1,18 @@
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Sequence
 
 from sqlalchemy import select, or_, desc, update, delete
 
 import json
-from .models import Base, ArchivedUrl, UrlMetadata, ArchiveArtifact
+from .models import (
+    Base,
+    ArchivedUrl,
+    UrlMetadata,
+    ArchiveArtifact,
+    ArticleSummary,
+    ArticleEntity,
+    ArticleTag,
+)
 from .session import get_engine, get_session
 
 
@@ -361,3 +369,210 @@ def list_saves(
             .offset(int(max(0, offset)))
         )
         return list(session.execute(stmt).all())
+
+
+def upsert_article_summary(
+    db_path: Path | None,
+    *,
+    archived_url_id: int,
+    summary_type: str,
+    summary_text: str,
+    bullet_points: Optional[List[Any]] = None,
+    model_name: Optional[str] = None,
+) -> int:
+    """Create or update a summary row for an archived URL.
+
+    Returns the summary row id."""
+    normalized_type = (summary_type or "default").strip() or "default"
+    init_db(db_path)
+    with get_session(db_path) as session:
+        summary = (
+            session.execute(
+                select(ArticleSummary).where(
+                    ArticleSummary.archived_url_id == archived_url_id,
+                    ArticleSummary.summary_type == normalized_type,
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if summary is None:
+            summary = ArticleSummary(
+                archived_url_id=archived_url_id,
+                summary_type=normalized_type,
+                summary_text=summary_text,
+                bullet_points=bullet_points,
+                model_name=model_name,
+            )
+            session.add(summary)
+        else:
+            summary.summary_text = summary_text
+            summary.bullet_points = bullet_points
+            summary.model_name = model_name
+        session.flush()
+        return int(summary.id)
+
+
+def get_article_summary(
+    db_path: Path | None,
+    *,
+    archived_url_id: int,
+    summary_type: str = "default",
+) -> Optional[ArticleSummary]:
+    init_db(db_path)
+    normalized_type = (summary_type or "default").strip() or "default"
+    with get_session(db_path) as session:
+        return (
+            session.execute(
+                select(ArticleSummary).where(
+                    ArticleSummary.archived_url_id == archived_url_id,
+                    ArticleSummary.summary_type == normalized_type,
+                )
+            )
+            .scalars()
+            .first()
+        )
+
+
+def list_article_summaries(
+    db_path: Path | None,
+    *,
+    archived_url_id: int,
+) -> List[ArticleSummary]:
+    init_db(db_path)
+    with get_session(db_path) as session:
+        stmt = (
+            select(ArticleSummary)
+            .where(ArticleSummary.archived_url_id == archived_url_id)
+            .order_by(ArticleSummary.summary_type.asc())
+        )
+        return list(session.execute(stmt).scalars().all())
+
+
+
+def _coerce_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+
+def replace_article_tags(
+    db_path: Path | None,
+    *,
+    archived_url_id: int,
+    tags: Sequence[Dict[str, Any]],
+) -> int:
+    """Replace all tag rows for an archived URL; returns number of rows inserted."""
+    init_db(db_path)
+    normalized: list[ArticleTag] = []
+    seen: set[tuple[str, str]] = set()
+    for payload in tags:
+        if not payload:
+            continue
+        raw_tag = str(payload.get("tag", "")).strip()
+        if not raw_tag:
+            continue
+        raw_source = str(payload.get("source", "llm")).strip() or "llm"
+        key = (raw_tag.lower(), raw_source.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(
+            ArticleTag(
+                archived_url_id=archived_url_id,
+                tag=raw_tag,
+                source=raw_source,
+                confidence=_coerce_float(payload.get("confidence")),
+                reason=payload.get("reason"),
+            )
+        )
+    with get_session(db_path) as session:
+        session.execute(
+            delete(ArticleTag).where(ArticleTag.archived_url_id == archived_url_id)
+        )
+        for obj in normalized:
+            session.add(obj)
+        session.flush()
+        return len(normalized)
+
+
+
+def list_article_tags(
+    db_path: Path | None,
+    *,
+    archived_url_id: int,
+) -> List[ArticleTag]:
+    init_db(db_path)
+    with get_session(db_path) as session:
+        stmt = (
+            select(ArticleTag)
+            .where(ArticleTag.archived_url_id == archived_url_id)
+            .order_by(ArticleTag.source.asc(), ArticleTag.tag.asc())
+        )
+        return list(session.execute(stmt).scalars().all())
+
+
+
+def replace_article_entities(
+    db_path: Path | None,
+    *,
+    archived_url_id: int,
+    entities: Sequence[Dict[str, Any]],
+) -> int:
+    """Replace entity rows for an archived URL; returns number of rows inserted."""
+    init_db(db_path)
+    normalized: list[ArticleEntity] = []
+    seen: set[tuple[str, Optional[str]]] = set()
+    for payload in entities:
+        if not payload:
+            continue
+        raw_entity = str(payload.get("entity", "")).strip()
+        if not raw_entity:
+            continue
+        raw_type_value = payload.get("entity_type")
+        raw_type = str(raw_type_value).strip() if raw_type_value else None
+        key = (raw_entity.lower(), raw_type.lower() if raw_type else None)
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(
+            ArticleEntity(
+                archived_url_id=archived_url_id,
+                entity=raw_entity,
+                entity_type=raw_type,
+                alias=(
+                    str(payload.get("alias", "")).strip() or None
+                ),
+                reason=payload.get("reason"),
+                confidence=_coerce_float(payload.get("confidence")),
+                validated=bool(payload.get("validated", True)),
+            )
+        )
+    with get_session(db_path) as session:
+        session.execute(
+            delete(ArticleEntity).where(ArticleEntity.archived_url_id == archived_url_id)
+        )
+        for obj in normalized:
+            session.add(obj)
+        session.flush()
+        return len(normalized)
+
+
+
+def list_article_entities(
+    db_path: Path | None,
+    *,
+    archived_url_id: int,
+) -> List[ArticleEntity]:
+    init_db(db_path)
+    with get_session(db_path) as session:
+        stmt = (
+            select(ArticleEntity)
+            .where(ArticleEntity.archived_url_id == archived_url_id)
+            .order_by(ArticleEntity.entity_type.asc().nullsfirst(), ArticleEntity.entity.asc())
+        )
+        return list(session.execute(stmt).scalars().all())
