@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Optional, List
 
-from pydantic import BaseModel, Field, HttpUrl, AliasChoices
+from pydantic import BaseModel, Field, HttpUrl, AliasChoices, model_validator
 
 
 class SaveRequest(BaseModel):
@@ -69,3 +69,21 @@ class DeleteResponse(BaseModel):
     deleted_rowids: List[int]
     removed_files: List[str] = []
     errors: List[str] = []
+
+
+class SummarizeRequest(BaseModel):
+    rowid: Optional[int] = Field(default=None, ge=1)
+    item_id: Optional[str] = None
+    url: Optional[HttpUrl] = None
+
+    @model_validator(mode="after")
+    def _ensure_target(self) -> "SummarizeRequest":
+        if not any((self.rowid, self.item_id, self.url)):
+            raise ValueError("rowid, item_id, or url must be provided")
+        return self
+
+
+class SummarizeResponse(BaseModel):
+    ok: bool
+    archived_url_id: int
+    summary_created: bool

@@ -15,6 +15,7 @@ from core.config import get_settings
 from db.repository import init_db
 from core.ht_runner import HTRunner
 from services.tasks import TaskManager
+from services.summarizer import SummaryService
 
 
 settings = get_settings()
@@ -47,6 +48,8 @@ async def lifespan_context(app: FastAPI):
         print(f"ht: {out}")
     except Exception:
         print("ht: not available")
+    
+    print(f"Summarization enabled: {settings.enable_summarization}")
     if settings.start_ht:
         ht_runner.start()
     # Register archivers on app state
@@ -62,8 +65,13 @@ async def lifespan_context(app: FastAPI):
     }
     # Expose ht runner on app state for APIs
     app.state.ht_runner = ht_runner
+    app.state.summarizer = SummaryService(settings)
     # Inject archivers into task manager now that they exist
-    app.state.task_manager = TaskManager(settings, app.state.archivers)
+    app.state.task_manager = TaskManager(
+        settings,
+        app.state.archivers,
+        summarizer=app.state.summarizer,
+    )
     try:
         yield
     finally:

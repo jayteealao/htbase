@@ -8,10 +8,12 @@ services:
     ports:
       - "8000:8000"   # REST API
       - "7681:7681"   # ht live preview
+    env_file:
+      - .env
     environment:
       - DATA_DIR=/data
       - HT_LISTEN=0.0.0.0:7681
-      - MONOLITH_FLAGS=${MONOLITH_FLAGS:-}
+      - MONOLITH_FLAGS=${MONOLITH_FLAGS}
     volumes:
       - ./data:/data
     develop:

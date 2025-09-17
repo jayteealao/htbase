@@ -10,7 +10,9 @@ from db.repository import (
     insert_save_result,
     find_existing_success_save,
     record_http_failure,
+    insert_save_metadata,
 )
+from services.summarizer import trigger_summarization_if_ready
 from models import (
     ArchiveResult,
     SaveRequest,
@@ -23,6 +25,7 @@ from core.utils import get_url_status
 
 
 router = APIRouter()
+
 
 
 def _archive_with(
@@ -57,6 +60,8 @@ def _archive_with(
 
     last_result: ArchiveResult | None = None
     last_row_id: int | None = None
+    summarizer = getattr(request.app.state, "summarizer", None)
+
     # Run each archiver sequentially and record a row per run
     for name, archiver_obj in archiver_items:
         # Pre-check URL reachability and map 404 -> immediate failure
@@ -104,6 +109,14 @@ def _archive_with(
                         saved_path=existing.saved_path,
                         archiver_name=name,
                     )
+                    if last_row_id is not None and name == "readability":
+                        trigger_summarization_if_ready(
+                            summarizer,
+                            settings=settings,
+                            rowid=last_row_id,
+                            archived_url_id=existing.archived_url_id,
+                            reason=f"api-existing-{name}",
+                        )
                 except Exception:
                     last_row_id = None
                 continue
@@ -124,6 +137,30 @@ def _archive_with(
                 saved_path=result.saved_path,
                 archiver_name=name,
             )
+            if (
+                result.success
+                and getattr(result, "metadata", None)
+                and name == "readability"
+                and last_row_id is not None
+            ):
+                try:
+                    insert_save_metadata(
+                        db_path=settings.resolved_db_path,
+                        save_rowid=last_row_id,
+                        data=result.metadata,  # type: ignore[arg-type]
+                    )
+                except Exception as exc:
+                    print(
+                        f"Failed to persist readability metadata (rowid={last_row_id}): {exc}"
+                    )
+
+            if result.success and last_row_id is not None and name == "readability":
+                trigger_summarization_if_ready(
+                    summarizer,
+                    settings=settings,
+                    rowid=last_row_id,
+                    reason=f"api-{name}",
+                )
         except Exception:
             last_row_id = None
 
@@ -205,3 +242,5 @@ def save_default_batch(
 ):
     # Default: run all archivers sequentially per item
     return archive_with_batch("all", payload, request, settings)
+
+

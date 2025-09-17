@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -12,8 +12,9 @@ from db.repository import (
     get_saves_by_url,
     delete_saves_by_rowids,
 )
-from models import DeleteResponse
+from models import DeleteResponse, SummarizeRequest, SummarizeResponse
 from core.utils import sanitize_filename
+from services.summarizer import trigger_summarization_if_ready
 
 
 router = APIRouter()
@@ -76,6 +77,58 @@ def list_saves_endpoint(
 def list_archivers(request: Request):
     registry: Dict[str, object] = getattr(request.app.state, "archivers", {})
     return sorted(registry.keys())
+
+
+@router.post("/summarize", response_model=SummarizeResponse)
+def summarize_article(
+    payload: SummarizeRequest,
+    request: Request,
+    settings: AppSettings = Depends(get_settings),
+):
+    summarizer = getattr(request.app.state, "summarizer", None)
+    if summarizer is None or not summarizer.is_enabled:
+        raise HTTPException(status_code=503, detail="summarizer unavailable")
+
+    archived_url_id: Optional[int] = None
+    rowid: Optional[int] = None
+
+    if payload.rowid is not None:
+        row = get_save_by_rowid(settings.resolved_db_path, int(payload.rowid))
+        if row is None:
+            raise HTTPException(status_code=404, detail="save not found")
+        archived_url_id = row.archived_url_id
+        rowid = int(row.id)
+    elif payload.item_id:
+        safe_id = sanitize_filename(payload.item_id.strip())
+        rows = get_saves_by_item_id(settings.resolved_db_path, safe_id)
+        if not rows:
+            raise HTTPException(status_code=404, detail="no saves for item_id")
+        first = rows[0]
+        archived_url_id = first.archived_url_id
+        rowid = int(first.id)
+    elif payload.url:
+        rows = get_saves_by_url(settings.resolved_db_path, str(payload.url))
+        if not rows:
+            raise HTTPException(status_code=404, detail="no saves for url")
+        first = rows[0]
+        archived_url_id = first.archived_url_id
+        rowid = int(first.id)
+
+    if archived_url_id is None:
+        raise HTTPException(status_code=404, detail="unable to resolve archived url")
+
+    summary_created = trigger_summarization_if_ready(
+        summarizer,
+        settings=settings,
+        rowid=rowid,
+        archived_url_id=archived_url_id,
+        reason="admin-api",
+    )
+    return SummarizeResponse(
+        ok=True,
+        archived_url_id=archived_url_id,
+        summary_created=summary_created,
+    )
 
 
 @router.delete("/saves/{rowid}", response_model=DeleteResponse)

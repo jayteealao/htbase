@@ -16,9 +16,13 @@ from db.repository import (
 from db.repository import record_http_failure
 from models import ArchiveResult
 from core.utils import get_url_status
+from services.summarizer import trigger_summarization_if_ready
 
 if TYPE_CHECKING:
     from core.config import AppSettings
+    from services.summarizer import SummaryService
+
+
 
 
 @dataclass
@@ -37,9 +41,15 @@ class BatchTask:
 
 
 class TaskManager:
-    def __init__(self, settings: "AppSettings", archivers: Dict[str, Any]):
+    def __init__(
+        self,
+        settings: "AppSettings",
+        archivers: Dict[str, Any],
+        summarizer: Optional["SummaryService"] = None,
+    ):
         self.settings = settings
         self.archivers = archivers
+        self.summarizer = summarizer
         self.q: "queue.Queue[BatchTask]" = queue.Queue()
         self.worker: Optional[threading.Thread] = None
         self._lock = threading.Lock()
@@ -156,6 +166,14 @@ class TaskManager:
                                     exit_code=0,
                                     saved_path=existing.saved_path,
                                 )
+                                if it.archiver_name == "readability":
+                                    trigger_summarization_if_ready(
+                                        self.summarizer,
+                                        settings=self.settings,
+                                        rowid=it.rowid,
+                                        archived_url_id=existing.archived_url_id,
+                                        reason="task-existing",
+                                    )
                                 continue
                         result: ArchiveResult = archiver.archive(
                             url=it.url, item_id=it.item_id
@@ -182,6 +200,15 @@ class TaskManager:
                                 )
                         except Exception:
                             pass
+                        
+                        if result.success and it.archiver_name == "readability":
+                            print(f"result.success: {result.success}, it.archiver_name: {it.archiver_name}, it.rowid: {it.rowid}")
+                            trigger_summarization_if_ready(
+                                self.summarizer,
+                                settings=self.settings,
+                                rowid=it.rowid,
+                                reason=f"task-{it.archiver_name}",
+                            )
                     except Exception:
                         finalize_save_result(
                             db_path=self.settings.resolved_db_path,
@@ -192,3 +219,4 @@ class TaskManager:
                         )
             finally:
                 self.q.task_done()
+

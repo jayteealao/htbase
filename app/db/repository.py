@@ -322,6 +322,23 @@ def get_save_by_rowid(db_path: Path | None, rowid: int) -> Optional[ArchiveArtif
         return session.get(ArchiveArtifact, rowid)
 
 
+def get_archived_url_by_id(
+    db_path: Path | None, archived_url_id: int
+) -> Optional[ArchivedUrl]:
+    init_db(db_path)
+    with get_session(db_path) as session:
+        return session.get(ArchivedUrl, archived_url_id)
+
+
+def get_metadata_for_archived_url(
+    db_path: Path | None, archived_url_id: int
+) -> Optional[UrlMetadata]:
+    init_db(db_path)
+    with get_session(db_path) as session:
+        stmt = select(UrlMetadata).where(UrlMetadata.archived_url_id == archived_url_id)
+        return session.execute(stmt).scalars().first()
+
+
 def get_saves_by_item_id(db_path: Path | None, item_id: str) -> List[ArchiveArtifact]:
     init_db(db_path)
     with get_session(db_path) as session:
