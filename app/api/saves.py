@@ -12,7 +12,6 @@ from db.repository import (
     record_http_failure,
     insert_save_metadata,
 )
-from services.summarizer import trigger_summarization_if_ready
 from models import (
     ArchiveResult,
     SaveRequest,
@@ -60,7 +59,7 @@ def _archive_with(
 
     last_result: ArchiveResult | None = None
     last_row_id: int | None = None
-    summarizer = getattr(request.app.state, "summarizer", None)
+    summarization = getattr(request.app.state, "summarization", None)
 
     # Run each archiver sequentially and record a row per run
     for name, archiver_obj in archiver_items:
@@ -109,10 +108,12 @@ def _archive_with(
                         saved_path=existing.saved_path,
                         archiver_name=name,
                     )
-                    if last_row_id is not None and name == "readability":
-                        trigger_summarization_if_ready(
-                            summarizer,
-                            settings=settings,
+                    if (
+                        last_row_id is not None
+                        and name == "readability"
+                        and summarization is not None
+                    ):
+                        summarization.schedule(
                             rowid=last_row_id,
                             archived_url_id=existing.archived_url_id,
                             reason=f"api-existing-{name}",
@@ -154,10 +155,13 @@ def _archive_with(
                         f"Failed to persist readability metadata (rowid={last_row_id}): {exc}"
                     )
 
-            if result.success and last_row_id is not None and name == "readability":
-                trigger_summarization_if_ready(
-                    summarizer,
-                    settings=settings,
+            if (
+                result.success
+                and last_row_id is not None
+                and name == "readability"
+                and summarization is not None
+            ):
+                summarization.schedule(
                     rowid=last_row_id,
                     reason=f"api-{name}",
                 )
@@ -201,7 +205,7 @@ def save_default(
 
     items = [{"item_id": safe_id, "url": str(payload.url)}]
 
-    # Let TaskManager handle per-archiver skip logic instead of dropping upfront
+    # Let the archiver task manager handle per-archiver skip logic instead of dropping upfront
 
     tm = getattr(request.app.state, "task_manager", None)
     if tm is None:
@@ -225,7 +229,7 @@ def archive_with_batch(
             raise HTTPException(status_code=400, detail="id is required for each item")
         items.append({"item_id": safe_id, "url": str(it.url)})
 
-    # Let TaskManager handle per-archiver skip logic
+    # Let the archiver task manager handle per-archiver skip logic
 
     tm = getattr(request.app.state, "task_manager", None)
     if tm is None:
