@@ -62,6 +62,11 @@ class AppSettings(BaseSettings):
     summary_max_bullets: int = Field(
         default=6, alias="SUMMARY_MAX_BULLETS"
     )
+    summary_source_archivers_raw: str | None = Field(
+        default=None,
+        alias="SUMMARY_SOURCE_ARCHIVERS",
+    )
+    summary_source_archivers: list[str] = Field(default_factory=list)
     summary_tag_whitelist_raw: str | None = Field(
         default=None,
         alias="SUMMARY_TAG_WHITELIST",
@@ -93,6 +98,22 @@ class AppSettings(BaseSettings):
         else:
             self.summary_tag_whitelist = []
         # print(f"Using summary_tag_whitelist: {self.summary_tag_whitelist}")
+
+        raw_sources = self.summary_source_archivers_raw
+        if raw_sources is None:
+            parsed_sources = ["readability"]
+        elif isinstance(raw_sources, str):
+            parsed_sources = [
+                item.strip() for item in raw_sources.split(",") if item.strip()
+            ]
+        elif isinstance(raw_sources, (list, tuple, set)):
+            parsed_sources = [
+                str(item).strip() for item in raw_sources if str(item).strip()
+            ]
+        else:
+            parsed_sources = []
+        self.summary_source_archivers = parsed_sources
+
         return self
 
     @property

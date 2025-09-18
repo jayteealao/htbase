@@ -14,7 +14,6 @@ from db.repository import (
 )
 from models import DeleteResponse, SummarizeRequest, SummarizeResponse
 from core.utils import sanitize_filename
-from services.summarizer import trigger_summarization_if_ready
 
 
 router = APIRouter()
@@ -85,8 +84,8 @@ def summarize_article(
     request: Request,
     settings: AppSettings = Depends(get_settings),
 ):
-    summarizer = getattr(request.app.state, "summarizer", None)
-    if summarizer is None or not summarizer.is_enabled:
+    summarization = getattr(request.app.state, "summarization", None)
+    if summarization is None or not summarization.is_enabled:
         raise HTTPException(status_code=503, detail="summarizer unavailable")
 
     archived_url_id: Optional[int] = None
@@ -117,9 +116,7 @@ def summarize_article(
     if archived_url_id is None:
         raise HTTPException(status_code=404, detail="unable to resolve archived url")
 
-    summary_created = trigger_summarization_if_ready(
-        summarizer,
-        settings=settings,
+    summary_created = summarization.schedule(
         rowid=rowid,
         archived_url_id=archived_url_id,
         reason="admin-api",

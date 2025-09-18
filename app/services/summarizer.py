@@ -30,7 +30,6 @@ from core.config import AppSettings
 from db.repository import (
     get_archived_url_by_id,
     get_metadata_for_archived_url,
-    get_save_by_rowid,
     replace_article_entities,
     replace_article_tags,
     upsert_article_summary,
@@ -472,64 +471,4 @@ class SummaryService:
             return False
         pattern = re.compile(rf"(?<!\w){re.escape(needle)}(?!\w)")
         return bool(pattern.search(haystack))
-
-def trigger_summarization_if_ready(
-    summarizer: "SummaryService" | None,
-    *,
-    settings: AppSettings,
-    rowid: Optional[int] = None,
-    archived_url_id: Optional[int] = None,
-    reason: str | None = None,
-) -> bool:
-    """Run summarization if metadata exists and the service is ready."""
-
-    print(f"trigger_summarization_if_ready called | rowid={rowid} archived_url_id={archived_url_id} reason={reason}")
-    print(f"summarizer: {summarizer}, enabled: {summarizer.is_enabled if summarizer else 'n/a'}")
-    if summarizer is None or not summarizer.is_enabled:
-        return False
-
-    reason = reason or "unspecified"
-
-    try:
-        target_id = archived_url_id
-        if target_id is None and rowid is not None:
-            artifact = get_save_by_rowid(settings.resolved_db_path, rowid)
-            if artifact is None:
-                print(
-                    f"Skipping summarization: artifact missing | rowid={rowid} reason={reason}"
-
-                )
-                return False
-            target_id = artifact.archived_url_id
-
-        if target_id is None:
-            print(
-                f"Skipping summarization: archived_url unresolved | rowid={rowid} reason={reason}"
-
-            )
-            return False
-
-        metadata = get_metadata_for_archived_url(
-            settings.resolved_db_path, target_id
-        )
-        if metadata is None or not getattr(metadata, "text", None):
-            print(
-                f"Skipping summarization: metadata unavailable | archived_url_id={target_id} rowid={rowid} reason={reason}"
-
-            )
-            return False
-
-        print(
-            f"Triggering summarization | archived_url_id={target_id} rowid={rowid} reason={reason}"
-
-        )
-        summarizer.generate_for_archived_url(target_id)
-        return True
-    except Exception:
-        print(
-            f"Failed to execute summarization | archived_url_id={archived_url_id} rowid={rowid} reason={reason}"
-
-        )
-        traceback.print_exc()
-        return False
 

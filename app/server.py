@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import queue
 import subprocess
 
 from fastapi import FastAPI
@@ -14,8 +15,13 @@ from archivers.readability import ReadabilityArchiver
 from core.config import get_settings
 from db.repository import init_db
 from core.ht_runner import HTRunner
-from services.tasks import TaskManager
 from services.summarizer import SummaryService
+from task_manager import (
+    ArchiverTaskManager,
+    SummarizeTask,
+    SummarizationCoordinator,
+    SummarizationTaskManager,
+)
 
 
 settings = get_settings()
@@ -66,11 +72,26 @@ async def lifespan_context(app: FastAPI):
     # Expose ht runner on app state for APIs
     app.state.ht_runner = ht_runner
     app.state.summarizer = SummaryService(settings)
+    summarization_queue: "queue.Queue[SummarizeTask]" = queue.Queue()
+    app.state.summarization_manager = SummarizationTaskManager(
+        settings,
+        summarizer=app.state.summarizer,
+        task_queue=summarization_queue,
+    )
+    app.state.summarization_manager.start()
+    app.state.summarizer_manager = app.state.summarization_manager
+    app.state.summarization_queue = summarization_queue
+    app.state.summarization = SummarizationCoordinator(
+        settings,
+        summarizer=app.state.summarizer,
+        task_queue=summarization_queue,
+    )
+    app.state.summarization_coordinator = app.state.summarization
     # Inject archivers into task manager now that they exist
-    app.state.task_manager = TaskManager(
+    app.state.task_manager = ArchiverTaskManager(
         settings,
         app.state.archivers,
-        summarizer=app.state.summarizer,
+        summarization=app.state.summarization,
     )
     try:
         yield
