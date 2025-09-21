@@ -4,9 +4,9 @@ import re
 import traceback
 from dataclasses import dataclass
 from textwrap import dedent
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 try:
     from chonkie import TokenChunker
@@ -16,43 +16,30 @@ except Exception as exc:
     TokenChunker = None  # type: ignore[assignment]
 
 try:
-    from pydantic_ai import Agent
-    from pydantic_ai.models.openai import OpenAIChatModel
-    from pydantic_ai.providers.openrouter import OpenRouterProvider
+    from huggingface_hub import InferenceClient
 except Exception as exc:
-    print(f'Failed to import pydantic-ai or components: {exc}')
+    print(f'Failed to import huggingface_hub InferenceClient: {exc}')
     traceback.print_exc()
-    Agent = None  # type: ignore[assignment]
-    OpenAIChatModel = None  # type: ignore[assignment]
-    OpenRouterProvider = None  # type: ignore[assignment]
+    InferenceClient = None  # type: ignore[assignment]
+
+try:
+    import outlines
+except Exception as exc:
+    print(f'Failed to import outlines: {exc}')
+    traceback.print_exc()
+    outlines = None  # type: ignore[assignment]
 
 from core.config import AppSettings
 from db.repository import (
     get_archived_url_by_id,
     get_metadata_for_archived_url,
     get_save_by_rowid,
-    replace_article_entities,
-    replace_article_tags,
     upsert_article_summary,
 )
 
-class TagSuggestion(BaseModel):
-    tag: str = Field(..., min_length=1)
-    confidence: Optional[float] = Field(default=None, ge=0, le=1)
-    reason: Optional[str] = None
-
-class EntitySuggestion(BaseModel):
-    entity: str = Field(..., min_length=1)
-    entity_type: Optional[str] = None
-    alias: Optional[str] = None
-    reason: Optional[str] = None
-    confidence: Optional[float] = Field(default=None, ge=0, le=1)
-
 class SummaryLLMOutput(BaseModel):
+    lede: str = Field(..., min_length=1)
     summary: str = Field(..., min_length=1)
-    bullet_points: List[str] = Field(default_factory=list, max_length=12)
-    recommended_tags: List[TagSuggestion] = Field(default_factory=list)
-    entities: List[EntitySuggestion] = Field(default_factory=list)
 
 @dataclass
 class SummaryInputs:
@@ -68,16 +55,17 @@ class SummaryService:
         missing: list[str] = []
         if not settings.enable_summarization:
             missing.append("feature flag disabled")
-        if not settings.openrouter_api_key:
-            missing.append("OPENROUTER_API_KEY missing")
+        if not (settings.openrouter_api_key or settings.summarization_api_base):
+            missing.append("No summarization provider configured (set OPENROUTER_API_KEY or SUMMARIZATION_API_BASE)")
         if TokenChunker is None:
             missing.append("chonkie not installed")
-        if Agent is None or OpenAIChatModel is None or OpenRouterProvider is None:
-            missing.append("pydantic-ai or providers unavailable")
+        if InferenceClient is None or outlines is None:
+            missing.append("huggingface_hub or outlines unavailable")
 
         self._enabled = not missing
         self._chunker: Optional[TokenChunker] = None  # type: ignore[type-arg]
-        self._agent: Optional[Agent[SummaryLLMOutput]] = None  # type: ignore[misc]
+        self._hf_client: Optional[InferenceClient] = None  # type: ignore[type-arg]
+        self._outlines_model = None
         self._whitelist_entries: List[Tuple[str, re.Pattern[str]]] = []
 
         for raw_tag in self.settings.summary_tag_whitelist:
@@ -109,32 +97,55 @@ class SummaryService:
             return
 
         try:
-            provider = OpenRouterProvider(api_key=self.settings.openrouter_api_key)
-            model = OpenAIChatModel(self.settings.summarization_model, provider=provider)
-            instructions = dedent(
-                f"""
-                You are an editorial assistant. Produce concise outputs following the
-                SummaryLLMOutput schema. Keep sentences factual, avoid speculation, and
-                limit bullet_points to at most {self.settings.summary_max_bullets} items,
-                each no longer than 20 words. Only emit entities that appear verbatim in
-                the provided material.
+            # Build TokenChunker
+            if self._chunker is None:
+                pass  # already built above
+
+            # Configure TGI URL from settings; strip trailing '/v1' if provided
+            base = (self.settings.summarization_api_base or '').strip()
+            if base.endswith('/v1'):
+                base = base[:-3]
+            tgi_url = base or 'http://text-generation'
+            token = None if not self.settings.summarization_api_key or self.settings.summarization_api_key == '-' else self.settings.summarization_api_key
+            self._hf_client = InferenceClient(tgi_url, token=token)
+
+            # Outlines model backed by TGI
+            self._outlines_model = outlines.from_tgi(self._hf_client)
+
+            self._instructions = dedent(
+                """
+                You are a senior editorial assistant with many years of experience crafting beautiful ledes and concise summaries for busy readers. Adopt an authoritative, polished editorial voice: selective, economical, and graceful. Prioritize the single most important takeaway and render it with clarity and craft.
+
+                Hard rules:
+                - Always respond in valid JSON only. Do not include any text outside the JSON.
+                - Output must contain exactly two fields: "lede" and "summary".
+                - "lede": one sentence, ≤30 words, capturing the article’s core takeaway. Must NOT start with "The" or "the".
+                - "summary": one flowing paragraph, ≤150 words, expanding on the lede and providing the essential context and significance.
+                - No sentence in either field may start with "The" or "the".
+                - Do not hallucinate or invent facts. If source lacks details, summarise what is present without fabricating.
+                - Keep language elegant, plain, and precise. Prefer active voice and concrete nouns.
+
+                Quality checks (apply before returning output):
+                1. Confirm lede is a single sentence and avoid begin with "The"/"the".
+                2. Confirm summary is one paragraph, ≤150 words, and no sentence begins with "The"/"the".
+                3. Ensure lede states the core takeaway first (inverted-pyramid).
+                4. Remove any stray commentary, system text, or markdown — output must be pure JSON.
+
+                Strict output shape:
+                {
+                  "lede": "<one sentence ≤30 words, avoid start with 'The' or 'the'>",
+                  "summary": "<one paragraph ≤150 words, avoid sentence starts with 'The' or 'the'>"
+                }
                 """
             ).strip()
-            self._agent = Agent(
-                model=model,
-                output_type=SummaryLLMOutput,
-                instructions=instructions,
-            )
         except Exception:
-
-            print("Failed to initialise summarization agent; disabling")
+            print("Failed to initialise TGI/Outlines; disabling summarization")
             traceback.print_exc()
-
             self._enabled = False
 
     @property
     def is_enabled(self) -> bool:
-        return bool(self._enabled and self._agent and self._chunker)
+        return bool(self._enabled and self._outlines_model and self._hf_client and self._chunker)
 
     def generate_for_archived_url(self, archived_url_id: int) -> bool:
         if not self.is_enabled:
@@ -176,7 +187,7 @@ class SummaryService:
         chunk_outputs: List[SummaryLLMOutput] = []
         if len(chunk_texts) == 1:
             prompt = self._build_single_prompt(chunk_texts[0], summary_inputs)
-            result = self._invoke_agent(prompt)
+            result = self._invoke_model(prompt)
             if result is None:
                 print(
                     f"WARNING: Summarization aborted: LLM call failed | archived_url_id={archived_url_id}"
@@ -190,7 +201,7 @@ class SummaryService:
                 prompt = self._build_chunk_prompt(
                     chunk_text, summary_inputs, idx, len(chunk_texts)
                 )
-                result = self._invoke_agent(prompt)
+                result = self._invoke_model(prompt)
                 if result is None:
                     print(
                         f"WARNING: Summarization aborted: LLM chunk call failed | archived_url_id={archived_url_id} chunk_index={idx}"
@@ -200,7 +211,7 @@ class SummaryService:
                 chunk_outputs.append(result)
 
             reduce_prompt = self._build_reduce_prompt(chunk_outputs, summary_inputs)
-            final_output = self._invoke_agent(reduce_prompt)
+            final_output = self._invoke_model(reduce_prompt)
             if final_output is None:
                 print(
                     f"WARNING: Summarization aborted: reduce step failed | archived_url_id={archived_url_id}"
@@ -220,12 +231,12 @@ class SummaryService:
     # ------------------------------------------------------------------
     def _build_single_prompt(self, chunk: str, info: SummaryInputs) -> str:
         header = self._format_header(info, position="complete article")
+        print(f"Single prompt header: {header}")
         return dedent(
             f"""
             {header}
 
-            Provide an article-level summary, bullet points, recommended topical tags,
-            and named entities. Use only information from the article text.
+            Using only the information below, generate the required JSON with fields "lede" and "summary" following all rules and quality checks.
 
             <article>
             {chunk}
@@ -237,13 +248,12 @@ class SummaryService:
         self, chunk: str, info: SummaryInputs, index: int, total: int
     ) -> str:
         header = self._format_header(info, position=f"chunk {index} of {total}")
+        print(f"Chunk prompt header: {header}")
         return dedent(
             f"""
             {header}
 
-            Analyse the following article chunk. Summarise only the information in
-            this chunk, note key bullet points, suggest topical tags, and list named
-            entities present in the text.
+            Analyse the following article chunk and return JSON with fields "lede" and "summary" based only on this chunk, following all rules and quality checks.
 
             <article_chunk>
             {chunk}
@@ -256,17 +266,12 @@ class SummaryService:
     ) -> str:
         header = self._format_header(info, position="chunk analyses")
         pieces = []
+        print(f"Reduce prompt header: {header}")
         for idx, output in enumerate(chunk_outputs, start=1):
-            bullets = "\n".join(f"- {pt}" for pt in output.bullet_points)
-            tags = ", ".join(tag.tag for tag in output.recommended_tags)
-            entities = ", ".join(ent.entity for ent in output.entities)
             section = dedent(
                 f"""
+                Chunk {idx} lede: {output.lede}
                 Chunk {idx} summary: {output.summary}
-                Bullet points:
-                {bullets or '- (none)'}
-                Tags: {tags or 'n/a'}
-                Entities: {entities or 'n/a'}
                 """
             ).strip()
             pieces.append(section)
@@ -275,9 +280,7 @@ class SummaryService:
             f"""
             {header}
 
-            Combine the chunk analyses below into a single cohesive summary for the
-            full article. Avoid repetition, consolidate bullet points, and merge tags
-            and entities. Output the final result in the expected schema.
+            Combine the chunk ledes and summaries into a single cohesive JSON output for the full article with fields "lede" and "summary". Avoid repetition and ensure the result follows all rules and quality checks.
 
             {body}
             """
@@ -288,6 +291,7 @@ class SummaryService:
         published = f"Published: {info.published}" if info.published else ""
         url = f"URL: {info.url}" if info.url else ""
         parts = [part for part in (f"Article title: {title}", position, url, published) if part]
+        print(f"Formatted header: {' | '.join(parts)}")
         return " | ".join(parts)
 
     # ------------------------------------------------------------------
@@ -307,18 +311,146 @@ class SummaryService:
             chunk_text = getattr(chunk, "text", None)
             if chunk_text and chunk_text.strip():
                 out.append(chunk_text.strip())
+        print(f"Segmented article into {len(out)} chunks")
         return out
 
-    def _invoke_agent(self, prompt: str) -> Optional[SummaryLLMOutput]:
-        if not self._agent:
+    def _invoke_model(self, prompt: str) -> Optional[SummaryLLMOutput]:
+        if not self._outlines_model:
             return None
         try:
-            result = self._agent.run_sync(prompt)
-            return result.output
+            instructions = getattr(self, "_instructions", "") or ""
+            full_prompt = f"{instructions}\n\n{prompt}" if instructions else prompt
+            try:
+                raw = self._outlines_model(
+                    full_prompt,
+                    output_type=SummaryLLMOutput,
+                    max_new_tokens=400,
+                    temperature=0.2,
+                    top_p=0.95,
+                    return_full_text=False,
+                )
+            except TypeError:
+                # Some Outlines/TGI versions may not accept return_full_text; retry without it
+                raw = self._outlines_model(
+                    full_prompt,
+                    output_type=SummaryLLMOutput,
+                    max_new_tokens=400,
+                    temperature=0.2,
+                    top_p=0.95,
+                )
+            try:
+                print(f"Raw model output: {raw}")
+                return SummaryLLMOutput.model_validate_json(raw)
+            except ValidationError:
+                print("Model output failed schema validation; attempting extraction")
+                text = str(raw)
+                parsed = self._extract_summary_from_text(text)
+                if parsed is not None:
+                    return parsed
+                # Final fallback: synthesize lede from first sentence, use text as summary
+                text = (text or "").strip()
+                if not text:
+                    return None
+                lede_guess = self._first_sentence(text)
+                return SummaryLLMOutput(lede=lede_guess, summary=text)
         except Exception:
-            print("Summarization agent call failed")
+            print("Summarization model call failed")
             traceback.print_exc()
             return None
+
+    def _extract_summary_from_text(self, text: str) -> Optional[SummaryLLMOutput]:
+        """Extract a JSON object containing a 'summary' field from messy output.
+
+        Heuristics:
+        - If the whole text is JSON for SummaryLLMOutput, parse it directly.
+        - Prefer scanning after known closing tags (</article_chunk>, </article>) to
+          avoid braces inside the input body.
+        - Scan for the first balanced JSON object and validate against Pydantic.
+        - Strip code fences like ```json ... ``` if present.
+        """
+        if not text:
+            return None
+
+        # Quick path: try full text as JSON
+        try:
+            return SummaryLLMOutput.model_validate_json(text.strip())
+        except Exception:
+            pass
+
+        # Remove common code fences around JSON
+        fenced = text
+        if "```" in fenced:
+            parts = fenced.split("```")
+            for i in range(1, len(parts), 2):  # odd indices are inside fences
+                candidate_block = parts[i]
+                if "{" in candidate_block and "}" in candidate_block:
+                    block = candidate_block
+                    if "\n" in block:
+                        lang, rest = block.split("\n", 1)
+                        block = rest if "{" in rest else candidate_block
+                    try:
+                        return SummaryLLMOutput.model_validate_json(block.strip())
+                    except Exception:
+                        continue
+
+        # Choose a safer starting point after our closing tags
+        start = 0
+        for tag in ("</article_chunk>", "</article>"):
+            idx = text.rfind(tag)
+            if idx != -1:
+                start = max(start, idx + len(tag))
+
+        # Scan for balanced JSON objects starting from 'start'
+        src = text[start:]
+        n = len(src)
+        i = 0
+        while i < n:
+            if src[i] == "{":
+                depth = 0
+                in_str = False
+                esc = False
+                j = i
+                while j < n:
+                    ch = src[j]
+                    if in_str:
+                        if esc:
+                            esc = False
+                        elif ch == "\\":
+                            esc = True
+                        elif ch == '"':
+                            in_str = False
+                    else:
+                        if ch == '"':
+                            in_str = True
+                        elif ch == "{":
+                            depth += 1
+                        elif ch == "}":
+                            depth -= 1
+                            if depth == 0:
+                                candidate = src[i : j + 1]
+                                try:
+                                    return SummaryLLMOutput.model_validate_json(candidate)
+                                except Exception:
+                                    break
+                    j += 1
+                i = j + 1
+                continue
+            i += 1
+
+        # As a last heuristic, split on an exact marker if present
+        marker = "</article_chunk>{"
+        m_idx = text.find(marker)
+        if m_idx != -1:
+            tail = "{" + text[m_idx + len(marker) :]
+            rbrace = tail.rfind("}")
+            if rbrace != -1:
+                tail = tail[: rbrace + 1]
+            try:
+                return SummaryLLMOutput.model_validate_json(tail.strip())
+            except Exception:
+                pass
+
+        return None
 
     def _persist_outputs(
         self,
@@ -338,140 +470,40 @@ class SummaryService:
             print(f"DEBUG: No summary generated for archived_url_id={archived_url_id}; aborting")
             return False
 
-        bullet_points = [pt.strip() for pt in final_output.bullet_points if pt.strip()]
-        bullet_points = bullet_points[: self.settings.summary_max_bullets]
-
-        whitelist_tags = self._extract_whitelist_tags(source_text)
-        llm_tags = self._normalise_llm_tags(final_output.recommended_tags)
-        tags_payload = self._merge_tags(whitelist_tags, llm_tags)
-
-        entities_payload = self._validate_entities(
-            source_text,
-            final_output.entities,
-        )
+        # Store the lede in the bullet_points column as a single-item list
+        lede_text = (final_output.lede or "").strip()
+        bullets = [lede_text] if lede_text else None
 
         upsert_article_summary(
             self.settings.resolved_db_path,
             archived_url_id=archived_url_id,
             summary_type="default",
             summary_text=summary_text,
-            bullet_points=bullet_points or None,
+            bullet_points=bullets,
             model_name=self.settings.summarization_model,
-        )
-        replace_article_tags(
-            self.settings.resolved_db_path,
-            archived_url_id=archived_url_id,
-            tags=tags_payload,
-        )
-        replace_article_entities(
-            self.settings.resolved_db_path,
-            archived_url_id=archived_url_id,
-            entities=entities_payload,
         )
         print(
             "Completed summarization run | "
             f"archived_url_id={archived_url_id} "
-            f"tags={len(tags_payload)} "
-            f"entities={len(entities_payload)} "
-            f"bullet_points={len(bullet_points)}"
+            f"summary_length={len(summary_text)}"
 
         )
         return True
 
-    def _extract_whitelist_tags(self, text: str) -> List[Dict[str, object]]:
-        if not text:
-            return []
-        matches: List[Dict[str, object]] = []
-        for tag, pattern in self._whitelist_entries:
-            if pattern.search(text):
-                matches.append(
-                    {
-                        "tag": tag,
-                        "source": "whitelist",
-                        "confidence": 1.0,
-                        "reason": "Matched whitelist term in article",
-                    }
-                )
-        return matches
+    def _first_sentence(self, text: str) -> str:
+        """Naive first-sentence extractor, capped at ~30 words for a lede fallback."""
+        s = (text or "").strip()
+        if not s:
+            return s
+        # Split on common sentence enders.
+        import re as _re
+        parts = _re.split(r"(?<=[\.!?])\s+", s)
+        first = parts[0] if parts else s
+        words = first.split()
+        if len(words) > 30:
+            first = " ".join(words[:30])
+        return first.strip()
 
-    def _normalise_llm_tags(
-        self, suggestions: Sequence[TagSuggestion]
-    ) -> List[Dict[str, object]]:
-        out: List[Dict[str, object]] = []
-        for suggestion in suggestions:
-            tag = suggestion.tag.strip()
-            if not tag:
-                continue
-            out.append(
-                {
-                    "tag": tag,
-                    "source": "llm",
-                    "confidence": suggestion.confidence,
-                    "reason": suggestion.reason,
-                }
-            )
-        return out
-
-    def _merge_tags(
-        self,
-        whitelist_tags: Sequence[Dict[str, object]],
-        llm_tags: Sequence[Dict[str, object]],
-    ) -> List[Dict[str, object]]:
-        seen: set[Tuple[str, str]] = set()
-        merged: List[Dict[str, object]] = []
-        for candidate in list(whitelist_tags) + list(llm_tags):
-            tag = str(candidate.get("tag", "")).strip()
-            source = str(candidate.get("source", "")).strip() or "llm"
-            if not tag:
-                continue
-            key = (tag.lower(), source.lower())
-            if key in seen:
-                continue
-            seen.add(key)
-            merged.append({**candidate, "tag": tag, "source": source})
-        return merged
-
-    def _validate_entities(
-        self,
-        source_text: str,
-        suggestions: Sequence[EntitySuggestion],
-    ) -> List[Dict[str, object]]:
-        haystack = source_text.lower()
-        results: List[Dict[str, object]] = []
-        seen: set[Tuple[str, Optional[str]]] = set()
-        for suggestion in suggestions:
-            entity = suggestion.entity.strip()
-            if not entity:
-                continue
-            entity_key = entity.lower()
-            entity_type = suggestion.entity_type.strip() if suggestion.entity_type else None
-
-            alias = suggestion.alias.strip() if suggestion.alias else None
-            if not self._entity_in_text(entity_key, haystack):
-                if not alias or not self._entity_in_text(alias.lower(), haystack):
-                    continue
-
-            key = (entity_key, entity_type.lower() if entity_type else None)
-            if key in seen:
-                continue
-            seen.add(key)
-            results.append(
-                {
-                    "entity": entity,
-                    "entity_type": entity_type,
-                    "alias": alias,
-                    "reason": suggestion.reason,
-                    "confidence": suggestion.confidence,
-                    "validated": True,
-                }
-            )
-        return results
-
-    def _entity_in_text(self, needle: str, haystack: str) -> bool:
-        if not needle:
-            return False
-        pattern = re.compile(rf"(?<!\w){re.escape(needle)}(?!\w)")
-        return bool(pattern.search(haystack))
 
 def trigger_summarization_if_ready(
     summarizer: "SummaryService" | None,
@@ -532,4 +564,3 @@ def trigger_summarization_if_ready(
         )
         traceback.print_exc()
         return False
-

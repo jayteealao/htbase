@@ -56,6 +56,12 @@ class AppSettings(BaseSettings):
     summarization_model: str = Field(
         default="openrouter/sonoma-sky-alpha", alias="SUMMARIZATION_MODEL"
     )
+    summarization_api_base: str | None = Field(
+        default=None, alias="SUMMARIZATION_API_BASE"
+    )
+    summarization_api_key: str | None = Field(
+        default=None, alias="SUMMARIZATION_API_KEY"
+    )
     summary_chunk_size: int = Field(
         default=1200, alias="SUMMARY_CHUNK_SIZE"
     )
