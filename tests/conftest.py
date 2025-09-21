@@ -33,7 +33,7 @@ def test_client(temp_env) -> Generator:
     from core.config import get_settings
     from models import ArchiveResult
     from core.utils import sanitize_filename
-    from services.tasks import TaskManager
+    from task_manager import ArchiverTaskManager
 
     class DummyArchiver(BaseArchiver):
         name = "monolith"
@@ -48,7 +48,11 @@ def test_client(temp_env) -> Generator:
             return ArchiveResult(success=True, exit_code=0, saved_path=str(out_path))
 
     server.app.state.archivers = {"monolith": DummyArchiver(get_settings())}
-    server.app.state.task_manager = TaskManager(get_settings(), server.app.state.archivers)
+    server.app.state.task_manager = ArchiverTaskManager(
+        get_settings(),
+        server.app.state.archivers,
+        summarization=getattr(server.app.state, "summarization", None),
+    )
 
     try:
         yield client
