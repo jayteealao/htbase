@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import traceback
 from dataclasses import dataclass
+import asyncio
 from textwrap import dedent
 from typing import List, Optional, Sequence, Tuple
 
@@ -16,11 +17,14 @@ except Exception as exc:
     TokenChunker = None  # type: ignore[assignment]
 
 try:
-    from huggingface_hub import InferenceClient
+    from huggingface_hub import InferenceClient, AsyncInferenceClient
+    from huggingface_hub.errors import GenerationError
 except Exception as exc:
-    print(f'Failed to import huggingface_hub InferenceClient: {exc}')
+    print(f'Failed to import huggingface_hub clients: {exc}')
     traceback.print_exc()
     InferenceClient = None  # type: ignore[assignment]
+    AsyncInferenceClient = None  # type: ignore[assignment]
+    GenerationError = Exception  # type: ignore[assignment]
 
 try:
     import outlines
@@ -33,9 +37,6 @@ from core.config import AppSettings
 from db.repository import (
     get_archived_url_by_id,
     get_metadata_for_archived_url,
-    get_save_by_rowid,
-    replace_article_entities,
-    replace_article_tags,
     upsert_article_summary,
 )
 
@@ -61,13 +62,16 @@ class SummaryService:
             missing.append("No summarization provider configured (set OPENROUTER_API_KEY or SUMMARIZATION_API_BASE)")
         if TokenChunker is None:
             missing.append("chonkie not installed")
-        if InferenceClient is None or outlines is None:
-            missing.append("huggingface_hub or outlines unavailable")
+        # We only require at least one client implementation from huggingface_hub.
+        if InferenceClient is None and AsyncInferenceClient is None:
+            missing.append("huggingface_hub unavailable")
 
         self._enabled = not missing
         self._chunker: Optional[TokenChunker] = None  # type: ignore[type-arg]
         self._hf_client: Optional[InferenceClient] = None  # type: ignore[type-arg]
         self._outlines_model = None
+        self._hf_base_url: Optional[str] = None
+        self._hf_token: Optional[str] = None
         self._whitelist_entries: List[Tuple[str, re.Pattern[str]]] = []
 
         for raw_tag in self.settings.summary_tag_whitelist:
@@ -109,10 +113,17 @@ class SummaryService:
                 base = base[:-3]
             tgi_url = base or 'http://text-generation'
             token = None if not self.settings.summarization_api_key or self.settings.summarization_api_key == '-' else self.settings.summarization_api_key
-            self._hf_client = InferenceClient(tgi_url, token=token)
+            self._hf_base_url = tgi_url
+            self._hf_token = token
 
-            # Outlines model backed by TGI
-            self._outlines_model = outlines.from_tgi(self._hf_client)
+            # Prefer Outlines if available for single-shot JSON typing, but it's optional.
+            if outlines is not None and InferenceClient is not None:
+                self._hf_client = InferenceClient(tgi_url, token=token)
+                try:
+                    self._outlines_model = outlines.from_tgi(self._hf_client)
+                except Exception:
+                    # Outlines is optional; continue without it
+                    self._outlines_model = None
 
             self._instructions = dedent(
                 """
@@ -147,7 +158,9 @@ class SummaryService:
 
     @property
     def is_enabled(self) -> bool:
-        return bool(self._enabled and self._outlines_model and self._hf_client and self._chunker)
+        # Enabled if config + chunker are ready and we have at least one client path
+        has_provider = bool(self._outlines_model) or bool(AsyncInferenceClient) or bool(self._hf_client)
+        return bool(self._enabled and self._chunker and has_provider)
 
     def generate_for_archived_url(self, archived_url_id: int) -> bool:
         if not self.is_enabled:
@@ -187,39 +200,68 @@ class SummaryService:
         )
 
         chunk_outputs: List[SummaryLLMOutput] = []
-        if len(chunk_texts) == 1:
+        # Use async HF client for multi-chunk; optionally fall back to it even for single-chunk
+        if len(chunk_texts) == 1 and self._outlines_model is not None:
             prompt = self._build_single_prompt(chunk_texts[0], summary_inputs)
             result = self._invoke_model(prompt)
+            if result is None and AsyncInferenceClient is not None and self._hf_base_url:
+                # Fallback to async client for single-chunk
+                async def _single_async() -> Optional[SummaryLLMOutput]:
+                    async with AsyncInferenceClient(self._hf_base_url, token=self._hf_token) as aclient:
+                        return await self._invoke_model_async(aclient, prompt)
+
+                try:
+                    result = asyncio.run(_single_async())
+                except Exception:
+                    result = None
             if result is None:
                 print(
                     f"WARNING: Summarization aborted: LLM call failed | archived_url_id={archived_url_id}"
-
                 )
                 return False
             chunk_outputs.append(result)
             final_output = result
         else:
-            for idx, chunk_text in enumerate(chunk_texts, start=1):
-                prompt = self._build_chunk_prompt(
-                    chunk_text, summary_inputs, idx, len(chunk_texts)
-                )
-                result = self._invoke_model(prompt)
-                if result is None:
-                    print(
-                        f"WARNING: Summarization aborted: LLM chunk call failed | archived_url_id={archived_url_id} chunk_index={idx}"
+            # Run chunk prompts concurrently via AsyncInferenceClient
+            prompts = [
+                self._build_chunk_prompt(txt, summary_inputs, idx + 1, len(chunk_texts))
+                for idx, txt in enumerate(chunk_texts)
+            ]
 
-                    )
-                    return False
-                chunk_outputs.append(result)
+            async def _run_chunks_and_reduce() -> Optional[Tuple[List[SummaryLLMOutput], SummaryLLMOutput]]:
+                if AsyncInferenceClient is None or not self._hf_base_url:
+                    return None
+                # Reuse one async client for all concurrent requests
+                async with AsyncInferenceClient(self._hf_base_url, token=self._hf_token) as aclient:
+                    # Fire off chunk generations concurrently, respecting max concurrency
+                    raw_limit = getattr(self.settings, "summary_max_concurrency", 0) or 0
+                    limit = max(1, min(int(raw_limit) if isinstance(raw_limit, int) else 0, len(prompts))) if raw_limit else len(prompts)
+                    sem = asyncio.Semaphore(limit)
 
-            reduce_prompt = self._build_reduce_prompt(chunk_outputs, summary_inputs)
-            final_output = self._invoke_model(reduce_prompt)
-            if final_output is None:
+                    async def run_one(prompt: str):
+                        async with sem:
+                            return await self._invoke_model_async(aclient, prompt)
+
+                    tasks = [run_one(p) for p in prompts]
+                    results = await asyncio.gather(*tasks, return_exceptions=False)
+                    # Abort if any failed
+                    if any(r is None for r in results):
+                        return None
+                    chunk_outs = [r for r in results if r is not None]  # type: ignore[list-item]
+                    # Reduce step
+                    reduce_prompt = self._build_reduce_prompt(chunk_outs, summary_inputs)
+                    reduced = await self._invoke_model_async(aclient, reduce_prompt)
+                    if reduced is None:
+                        return None
+                    return chunk_outs, reduced
+
+            done = asyncio.run(_run_chunks_and_reduce())
+            if not done:
                 print(
-                    f"WARNING: Summarization aborted: reduce step failed | archived_url_id={archived_url_id}"
-
+                    f"WARNING: Summarization aborted: async chunk or reduce step failed | archived_url_id={archived_url_id}"
                 )
                 return False
+            chunk_outputs, final_output = done
 
         return self._persist_outputs(
             archived_url_id=archived_url_id,
@@ -357,6 +399,73 @@ class SummaryService:
                 return SummaryLLMOutput(lede=lede_guess, summary=text)
         except Exception:
             print("Summarization model call failed")
+            traceback.print_exc()
+            return None
+
+    async def _invoke_model_async(
+        self, aclient: "AsyncInferenceClient", prompt: str
+    ) -> Optional[SummaryLLMOutput]:
+        try:
+            instructions = getattr(self, "_instructions", "") or ""
+            full_prompt = f"{instructions}\n\n{prompt}" if instructions else prompt
+            # Try parameter variants to avoid backend compatibility issues
+            variants = [
+                {"temperature": 0.2, "top_p": 0.95, "do_sample": True, "max_new_tokens": 400, "return_full_text": False},
+                {"temperature": 0.0, "top_p": 1.0, "do_sample": False, "max_new_tokens": 300, "return_full_text": False},
+                {"temperature": 0.2, "top_p": 0.90, "do_sample": True, "max_new_tokens": 280, "return_full_text": False},
+            ]
+            last_err: Exception | None = None
+            raw = None
+            for params in variants:
+                try:
+                    raw = await aclient.text_generation(
+                        full_prompt,
+                        **params,
+                    )
+                    last_err = None
+                    break
+                except TypeError:
+                    # Some client versions may not support return_full_text or do_sample; retry without them
+                    try:
+                        simplified = dict(params)
+                        simplified.pop("return_full_text", None)
+                        raw = await aclient.text_generation(
+                            full_prompt,
+                            **simplified,
+                        )
+                        last_err = None
+                        break
+                    except Exception as e2:
+                        last_err = e2
+                        await asyncio.sleep(0.25)
+                        continue
+                except GenerationError as e:
+                    last_err = e
+                    await asyncio.sleep(0.25)
+                    continue
+                except Exception as e:
+                    last_err = e
+                    await asyncio.sleep(0.25)
+                    continue
+            if raw is None:
+                if last_err:
+                    print(f"Async generation failed after variants: {last_err}")
+                return None
+            try:
+                print(f"Raw async model output: {raw}")
+                return SummaryLLMOutput.model_validate_json(str(raw))
+            except ValidationError:
+                text = str(raw)
+                parsed = self._extract_summary_from_text(text)
+                if parsed is not None:
+                    return parsed
+                text = (text or "").strip()
+                if not text:
+                    return None
+                lede_guess = self._first_sentence(text)
+                return SummaryLLMOutput(lede=lede_guess, summary=text)
+        except Exception:
+            print("Async summarization model call failed")
             traceback.print_exc()
             return None
 

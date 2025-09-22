@@ -65,6 +65,9 @@ class AppSettings(BaseSettings):
     summary_chunk_size: int = Field(
         default=1200, alias="SUMMARY_CHUNK_SIZE"
     )
+    summary_max_concurrency: int = Field(
+        default=4, alias="SUMMARY_MAX_CONCURRENCY"
+    )
     summary_max_bullets: int = Field(
         default=6, alias="SUMMARY_MAX_BULLETS"
     )
