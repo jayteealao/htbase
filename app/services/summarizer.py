@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import asyncio
+from copy import deepcopy
 import re
 import traceback
 from dataclasses import dataclass
-import asyncio
 from textwrap import dedent
-from typing import List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -17,7 +18,7 @@ except Exception as exc:
     TokenChunker = None  # type: ignore[assignment]
 
 try:
-    from huggingface_hub import InferenceClient, AsyncInferenceClient
+    from huggingface_hub import AsyncInferenceClient, InferenceClient
     from huggingface_hub.errors import GenerationError
 except Exception as exc:
     print(f'Failed to import huggingface_hub clients: {exc}')
@@ -25,13 +26,6 @@ except Exception as exc:
     InferenceClient = None  # type: ignore[assignment]
     AsyncInferenceClient = None  # type: ignore[assignment]
     GenerationError = Exception  # type: ignore[assignment]
-
-try:
-    import outlines
-except Exception as exc:
-    print(f'Failed to import outlines: {exc}')
-    traceback.print_exc()
-    outlines = None  # type: ignore[assignment]
 
 from core.config import AppSettings
 from db.repository import (
@@ -69,9 +63,9 @@ class SummaryService:
         self._enabled = not missing
         self._chunker: Optional[TokenChunker] = None  # type: ignore[type-arg]
         self._hf_client: Optional[InferenceClient] = None  # type: ignore[type-arg]
-        self._outlines_model = None
         self._hf_base_url: Optional[str] = None
         self._hf_token: Optional[str] = None
+        self._hf_grammar: Optional[Dict[str, Any]] = None
         self._whitelist_entries: List[Tuple[str, re.Pattern[str]]] = []
 
         for raw_tag in self.settings.summary_tag_whitelist:
@@ -116,14 +110,15 @@ class SummaryService:
             self._hf_base_url = tgi_url
             self._hf_token = token
 
-            # Prefer Outlines if available for single-shot JSON typing, but it's optional.
-            if outlines is not None and InferenceClient is not None:
-                self._hf_client = InferenceClient(tgi_url, token=token)
+            if InferenceClient is not None:
                 try:
-                    self._outlines_model = outlines.from_tgi(self._hf_client)
+                    self._hf_client = InferenceClient(tgi_url, token=token)
                 except Exception:
-                    # Outlines is optional; continue without it
-                    self._outlines_model = None
+                    print("Failed to initialise InferenceClient; continuing without sync client")
+                    traceback.print_exc()
+                    self._hf_client = None
+
+            self._hf_grammar = self._build_summary_json_grammar()
 
             self._instructions = dedent(
                 """
@@ -152,14 +147,15 @@ class SummaryService:
                 """
             ).strip()
         except Exception:
-            print("Failed to initialise TGI/Outlines; disabling summarization")
+            print("Failed to initialise Hugging Face clients; disabling summarization")
             traceback.print_exc()
             self._enabled = False
 
     @property
     def is_enabled(self) -> bool:
         # Enabled if config + chunker are ready and we have at least one client path
-        has_provider = bool(self._outlines_model) or bool(AsyncInferenceClient) or bool(self._hf_client)
+        has_async = bool(AsyncInferenceClient) and bool(self._hf_base_url)
+        has_provider = bool(self._hf_client) or has_async
         return bool(self._enabled and self._chunker and has_provider)
 
     def generate_for_archived_url(self, archived_url_id: int) -> bool:
@@ -201,7 +197,7 @@ class SummaryService:
 
         chunk_outputs: List[SummaryLLMOutput] = []
         # Use async HF client for multi-chunk; optionally fall back to it even for single-chunk
-        if len(chunk_texts) == 1 and self._outlines_model is not None:
+        if len(chunk_texts) == 1 and self._hf_client is not None:
             prompt = self._build_single_prompt(chunk_texts[0], summary_inputs)
             result = self._invoke_model(prompt)
             if result is None and AsyncInferenceClient is not None and self._hf_base_url:
@@ -359,39 +355,60 @@ class SummaryService:
         return out
 
     def _invoke_model(self, prompt: str) -> Optional[SummaryLLMOutput]:
-        if not self._outlines_model:
+        if not self._hf_client:
             return None
         try:
             instructions = getattr(self, "_instructions", "") or ""
             full_prompt = f"{instructions}\n\n{prompt}" if instructions else prompt
+            variants = self._build_text_generation_variants()
+            raw: Any = None
+            last_err: Exception | None = None
+            for params in variants:
+                try:
+                    raw = self._hf_client.text_generation(full_prompt, **params)
+                    last_err = None
+                    break
+                except TypeError as exc:
+                    simplified = dict(params)
+                    simplified.pop("return_full_text", None)
+                    try:
+                        raw = self._hf_client.text_generation(full_prompt, **simplified)
+                        last_err = None
+                        break
+                    except TypeError as exc2:
+                        if "grammar" in str(exc2):
+                            simplified.pop("grammar", None)
+                            try:
+                                raw = self._hf_client.text_generation(full_prompt, **simplified)
+                                last_err = None
+                                break
+                            except Exception as exc3:
+                                last_err = exc3
+                                continue
+                        last_err = exc2
+                        continue
+                    except Exception as exc2:
+                        last_err = exc2
+                        continue
+                except GenerationError as exc:
+                    last_err = exc
+                    continue
+                except Exception as exc:
+                    last_err = exc
+                    continue
+            if raw is None:
+                if last_err is not None:
+                    print(f"Summarization model call failed: {last_err}")
+                return None
+            text = self._coerce_generated_text(raw)
             try:
-                raw = self._outlines_model(
-                    full_prompt,
-                    output_type=SummaryLLMOutput,
-                    max_new_tokens=400,
-                    temperature=0.2,
-                    top_p=0.95,
-                    return_full_text=False,
-                )
-            except TypeError:
-                # Some Outlines/TGI versions may not accept return_full_text; retry without it
-                raw = self._outlines_model(
-                    full_prompt,
-                    output_type=SummaryLLMOutput,
-                    max_new_tokens=400,
-                    temperature=0.2,
-                    top_p=0.95,
-                )
-            try:
-                print(f"Raw model output: {raw}")
-                return SummaryLLMOutput.model_validate_json(raw)
+                print(f"Raw model output: {text}")
+                return SummaryLLMOutput.model_validate_json(text)
             except ValidationError:
                 print("Model output failed schema validation; attempting extraction")
-                text = str(raw)
                 parsed = self._extract_summary_from_text(text)
                 if parsed is not None:
                     return parsed
-                # Final fallback: synthesize lede from first sentence, use text as summary
                 text = (text or "").strip()
                 if not text:
                     return None
@@ -409,11 +426,7 @@ class SummaryService:
             instructions = getattr(self, "_instructions", "") or ""
             full_prompt = f"{instructions}\n\n{prompt}" if instructions else prompt
             # Try parameter variants to avoid backend compatibility issues
-            variants = [
-                {"temperature": 0.2, "top_p": 0.95, "do_sample": True, "max_new_tokens": 400, "return_full_text": False},
-                {"temperature": 0.0, "top_p": 1.0, "do_sample": False, "max_new_tokens": 300, "return_full_text": False},
-                {"temperature": 0.2, "top_p": 0.90, "do_sample": True, "max_new_tokens": 280, "return_full_text": False},
-            ]
+            variants = self._build_text_generation_variants()
             last_err: Exception | None = None
             raw = None
             for params in variants:
@@ -424,19 +437,29 @@ class SummaryService:
                     )
                     last_err = None
                     break
-                except TypeError:
-                    # Some client versions may not support return_full_text or do_sample; retry without them
+                except TypeError as exc:
                     try:
                         simplified = dict(params)
                         simplified.pop("return_full_text", None)
-                        raw = await aclient.text_generation(
-                            full_prompt,
-                            **simplified,
-                        )
+                        raw = await aclient.text_generation(full_prompt, **simplified)
                         last_err = None
                         break
-                    except Exception as e2:
-                        last_err = e2
+                    except TypeError as exc2:
+                        if "grammar" in str(exc2):
+                            simplified.pop("grammar", None)
+                            try:
+                                raw = await aclient.text_generation(full_prompt, **simplified)
+                                last_err = None
+                                break
+                            except Exception as exc3:
+                                last_err = exc3
+                                await asyncio.sleep(0.25)
+                                continue
+                        last_err = exc2
+                        await asyncio.sleep(0.25)
+                        continue
+                    except Exception as exc2:
+                        last_err = exc2
                         await asyncio.sleep(0.25)
                         continue
                 except GenerationError as e:
@@ -452,10 +475,11 @@ class SummaryService:
                     print(f"Async generation failed after variants: {last_err}")
                 return None
             try:
-                print(f"Raw async model output: {raw}")
-                return SummaryLLMOutput.model_validate_json(str(raw))
+                text = self._coerce_generated_text(raw)
+                print(f"Raw async model output: {text}")
+                return SummaryLLMOutput.model_validate_json(text)
             except ValidationError:
-                text = str(raw)
+                text = self._coerce_generated_text(raw)
                 parsed = self._extract_summary_from_text(text)
                 if parsed is not None:
                     return parsed
@@ -562,6 +586,60 @@ class SummaryService:
                 pass
 
         return None
+
+    def _build_summary_json_grammar(self) -> Optional[Dict[str, Any]]:
+        try:
+            schema = deepcopy(SummaryLLMOutput.model_json_schema())
+        except Exception:
+            return None
+
+        # Ensure schema is explicit about required fields and shape
+        required = list(dict.fromkeys([*(schema.get("required") or []), "lede", "summary"]))
+        schema["required"] = required
+        schema["additionalProperties"] = False
+
+        properties = schema.setdefault("properties", {})
+        if isinstance(properties, dict):
+            for field in ("lede", "summary"):
+                field_schema = properties.get(field) or {}
+                if not isinstance(field_schema, dict):
+                    field_schema = {}
+                field_schema.setdefault("type", "string")
+                field_schema.setdefault("minLength", 1)
+                properties[field] = field_schema
+
+        return {"type": "json_schema", "value": schema}
+
+    def _build_text_generation_variants(self) -> List[Dict[str, Any]]:
+        base_variants: List[Dict[str, Any]] = [
+            {"temperature": 0.2, "top_p": 0.95, "do_sample": True, "max_new_tokens": 400, "return_full_text": False},
+            {"temperature": 0.0, "top_p": 1.0, "do_sample": False, "max_new_tokens": 300, "return_full_text": False},
+            {"temperature": 0.2, "top_p": 0.90, "do_sample": True, "max_new_tokens": 280, "return_full_text": False},
+        ]
+
+        grammar = getattr(self, "_hf_grammar", None)
+        variants: List[Dict[str, Any]] = []
+        for params in base_variants:
+            variant = dict(params)
+            if grammar:
+                variant["grammar"] = grammar
+            variants.append(variant)
+        return variants
+
+    def _coerce_generated_text(self, raw: Any) -> str:
+        if raw is None:
+            return ""
+        if isinstance(raw, str):
+            return raw
+        text = getattr(raw, "generated_text", None)
+        if isinstance(text, str):
+            return text
+        if isinstance(raw, dict):
+            for key in ("generated_text", "text", "content"):
+                value = raw.get(key)
+                if isinstance(value, str):
+                    return value
+        return str(raw)
 
     def _persist_outputs(
         self,
