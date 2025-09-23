@@ -9,7 +9,7 @@ from textwrap import dedent
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from chonkie import TokenChunker
-from huggingface_hub import AsyncInferenceClient, InferenceClient
+from huggingface_hub import AsyncInferenceClient
 from huggingface_hub.errors import GenerationError
 from pydantic import BaseModel, Field, ValidationError
 
@@ -37,7 +37,6 @@ class SummaryService:
         self.settings = settings
         self._enabled = False
         self._chunker: Optional[TokenChunker] = None  # type: ignore[type-arg]
-        self._hf_client: Optional[InferenceClient] = None  # type: ignore[type-arg]
         self._hf_base_url: Optional[str] = None
         self._hf_token: Optional[str] = None
         self._hf_grammar: Optional[Dict[str, Any]] = None
@@ -97,15 +96,6 @@ class SummaryService:
             self._hf_base_url = tgi_url
             self._hf_token = token
 
-            try:
-                self._hf_client = InferenceClient(tgi_url, token=token)
-            except Exception:
-                print(
-                    "Failed to initialise InferenceClient; continuing without sync client"
-                )
-                traceback.print_exc()
-                self._hf_client = None
-
             self._hf_grammar = self._build_summary_json_grammar()
             return True
         except Exception:
@@ -145,8 +135,7 @@ class SummaryService:
     def is_enabled(self) -> bool:
         # Enabled if config + chunker are ready and we have at least one client path
         has_async = bool(self._hf_base_url)
-        has_provider = bool(self._hf_client) or has_async
-        return bool(self._enabled and self._chunker and has_provider)
+        return bool(self._enabled and self._chunker and has_async)
 
     def generate_for_archived_url(self, archived_url_id: int) -> bool:
         if not self.is_enabled:
@@ -216,7 +205,7 @@ class SummaryService:
         chunk_texts: Sequence[str],
         summary_inputs: SummaryInputs,
     ) -> Optional[Tuple[List[SummaryLLMOutput], SummaryLLMOutput]]:
-        if len(chunk_texts) == 1 and self._hf_client is not None:
+        if len(chunk_texts) == 1:
             result = self._run_single_chunk(chunk_texts[0], summary_inputs)
             if result is None:
                 print(
@@ -239,9 +228,6 @@ class SummaryService:
         self, chunk: str, summary_inputs: SummaryInputs
     ) -> Optional[SummaryLLMOutput]:
         prompt = self._build_single_prompt(chunk, summary_inputs)
-        result = self._invoke_model(prompt)
-        if result is not None:
-            return result
         return self._run_async_prompt(prompt)
 
     def _run_multi_chunk(
@@ -400,22 +386,6 @@ class SummaryService:
         print(f"Segmented article into {len(out)} chunks")
         return out
 
-    def _invoke_model(self, prompt: str) -> Optional[SummaryLLMOutput]:
-        if not self._hf_client:
-            return None
-        try:
-            full_prompt = self._apply_instructions(prompt)
-            raw, last_err = self._generate_sync(full_prompt)
-            if raw is None:
-                if last_err is not None:
-                    print(f"Summarization model call failed: {last_err}")
-                return None
-            return self._parse_llm_response(raw, label="Raw")
-        except Exception:
-            print("Summarization model call failed")
-            traceback.print_exc()
-            return None
-
     async def _invoke_model_async(
         self, aclient: "AsyncInferenceClient", prompt: str
     ) -> Optional[SummaryLLMOutput]:
@@ -436,19 +406,6 @@ class SummaryService:
         instructions = self._instructions.strip()
         return f"{instructions}\n\n{prompt}" if instructions else prompt
 
-    def _generate_sync(self, full_prompt: str) -> Tuple[Any | None, Exception | None]:
-        if not self._hf_client:
-            return None, None
-
-        last_err: Exception | None = None
-        for params in self._build_text_generation_variants():
-            result, err = self._try_single_variant_sync(full_prompt, params)
-            if result is not None:
-                return result, None
-            if err is not None:
-                last_err = err
-        return None, last_err
-
     async def _generate_async(
         self, aclient: "AsyncInferenceClient", full_prompt: str
     ) -> Tuple[Any | None, Exception | None]:
@@ -462,44 +419,6 @@ class SummaryService:
             if err is not None:
                 last_err = err
         return None, last_err
-
-    def _try_single_variant_sync(
-        self, full_prompt: str, params: Dict[str, Any]
-    ) -> Tuple[Any | None, Exception | None]:
-        if not self._hf_client:
-            return None, None
-
-        current = dict(params)
-        removed_return_full = False
-        removed_grammar = False
-        last_err: Exception | None = None
-
-        while True:
-            try:
-                return self._hf_client.text_generation(full_prompt, **current), None
-            except TypeError as exc:
-                last_err = exc
-                if not removed_return_full and "return_full_text" in current:
-                    current = dict(current)
-                    current.pop("return_full_text", None)
-                    removed_return_full = True
-                    continue
-                if (
-                    not removed_grammar
-                    and "grammar" in current
-                    and "grammar" in str(exc)
-                ):
-                    current = dict(current)
-                    current.pop("grammar", None)
-                    removed_grammar = True
-                    continue
-                return None, last_err
-            except GenerationError as exc:
-                last_err = exc
-                return None, last_err
-            except Exception as exc:
-                last_err = exc
-                return None, last_err
 
     async def _try_single_variant_async(
         self,
