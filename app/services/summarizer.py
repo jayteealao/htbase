@@ -8,24 +8,10 @@ from dataclasses import dataclass
 from textwrap import dedent
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from chonkie import TokenChunker
+from huggingface_hub import AsyncInferenceClient, InferenceClient
+from huggingface_hub.errors import GenerationError
 from pydantic import BaseModel, Field, ValidationError
-
-try:
-    from chonkie import TokenChunker
-except Exception as exc:
-    print(f'Failed to import chonkie: {exc}')
-    traceback.print_exc()
-    TokenChunker = None  # type: ignore[assignment]
-
-try:
-    from huggingface_hub import AsyncInferenceClient, InferenceClient
-    from huggingface_hub.errors import GenerationError
-except Exception as exc:
-    print(f'Failed to import huggingface_hub clients: {exc}')
-    traceback.print_exc()
-    InferenceClient = None  # type: ignore[assignment]
-    AsyncInferenceClient = None  # type: ignore[assignment]
-    GenerationError = Exception  # type: ignore[assignment]
 
 from core.config import AppSettings
 from db.repository import (
@@ -60,12 +46,8 @@ class SummaryService:
             self._build_whitelist(settings.summary_tag_whitelist)
         )
 
-        missing = self._check_missing_dependencies()
-        if missing:
-            print(
-                "SummaryService disabled: "
-                + (", ".join(missing) if missing else "unknown reason")
-            )
+        if not self.settings.enable_summarization:
+            print("SummaryService disabled: feature flag disabled")
             return
 
         if not self._init_chunker():
@@ -92,25 +74,7 @@ class SummaryService:
             entries.append((tag, pattern))
         return entries
 
-    def _check_missing_dependencies(self) -> List[str]:
-        missing: List[str] = []
-        if not self.settings.enable_summarization:
-            missing.append("feature flag disabled")
-        if not (
-            self.settings.openrouter_api_key or self.settings.summarization_api_base
-        ):
-            missing.append(
-                "No summarization provider configured (set OPENROUTER_API_KEY or SUMMARIZATION_API_BASE)"
-            )
-        if TokenChunker is None:
-            missing.append("chonkie not installed")
-        if InferenceClient is None and AsyncInferenceClient is None:
-            missing.append("huggingface_hub unavailable")
-        return missing
-
     def _init_chunker(self) -> bool:
-        if TokenChunker is None:
-            return False
         try:
             self._chunker = TokenChunker(  # type: ignore[call-arg]
                 chunk_size=self.settings.summary_chunk_size
@@ -133,22 +97,20 @@ class SummaryService:
             self._hf_base_url = tgi_url
             self._hf_token = token
 
-            if InferenceClient is not None:
-                try:
-                    self._hf_client = InferenceClient(tgi_url, token=token)
-                except Exception:
-                    print(
-                        "Failed to initialise InferenceClient; continuing without sync client"
-                    )
-                    traceback.print_exc()
-                    self._hf_client = None
+            try:
+                self._hf_client = InferenceClient(tgi_url, token=token)
+            except Exception:
+                print(
+                    "Failed to initialise InferenceClient; continuing without sync client"
+                )
+                traceback.print_exc()
+                self._hf_client = None
 
             self._hf_grammar = self._build_summary_json_grammar()
             return True
         except Exception:
             print("Failed to initialise Hugging Face clients; disabling summarization")
             traceback.print_exc()
-            self._enabled = False
             return False
 
     def _build_instructions(self) -> str:
@@ -182,7 +144,7 @@ class SummaryService:
     @property
     def is_enabled(self) -> bool:
         # Enabled if config + chunker are ready and we have at least one client path
-        has_async = bool(AsyncInferenceClient) and bool(self._hf_base_url)
+        has_async = bool(self._hf_base_url)
         has_provider = bool(self._hf_client) or has_async
         return bool(self._enabled and self._chunker and has_provider)
 
@@ -285,7 +247,7 @@ class SummaryService:
     def _run_multi_chunk(
         self, chunk_texts: Sequence[str], summary_inputs: SummaryInputs
     ) -> Optional[Tuple[List[SummaryLLMOutput], SummaryLLMOutput]]:
-        if AsyncInferenceClient is None or not self._hf_base_url:
+        if not self._hf_base_url:
             return None
 
         prompts = [
@@ -301,7 +263,7 @@ class SummaryService:
             return None
 
     def _run_async_prompt(self, prompt: str) -> Optional[SummaryLLMOutput]:
-        if AsyncInferenceClient is None or not self._hf_base_url:
+        if not self._hf_base_url:
             return None
 
         async def _single_async() -> Optional[SummaryLLMOutput]:
@@ -318,7 +280,7 @@ class SummaryService:
         prompts: Sequence[str],
         summary_inputs: SummaryInputs,
     ) -> Optional[Tuple[List[SummaryLLMOutput], SummaryLLMOutput]]:
-        if AsyncInferenceClient is None or not self._hf_base_url:
+        if not self._hf_base_url:
             return None
 
         async with AsyncInferenceClient(self._hf_base_url, token=self._hf_token) as aclient:
