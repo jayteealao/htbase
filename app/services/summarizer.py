@@ -5,7 +5,7 @@ import traceback
 from dataclasses import dataclass
 import asyncio
 from textwrap import dedent
-from typing import List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, List, Optional, Sequence, Tuple
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -16,15 +16,19 @@ except Exception as exc:
     traceback.print_exc()
     TokenChunker = None  # type: ignore[assignment]
 
-try:
+if TYPE_CHECKING:
     from huggingface_hub import InferenceClient, AsyncInferenceClient
     from huggingface_hub.errors import GenerationError
-except Exception as exc:
-    print(f'Failed to import huggingface_hub clients: {exc}')
-    traceback.print_exc()
-    InferenceClient = None  # type: ignore[assignment]
-    AsyncInferenceClient = None  # type: ignore[assignment]
-    GenerationError = Exception  # type: ignore[assignment]
+else:
+    try:
+        from huggingface_hub import InferenceClient, AsyncInferenceClient
+        from huggingface_hub.errors import GenerationError
+    except Exception as exc:
+        print(f'Failed to import huggingface_hub clients: {exc}')
+        traceback.print_exc()
+        InferenceClient = None  # type: ignore[assignment]
+        AsyncInferenceClient = None  # type: ignore[assignment]
+        GenerationError = Exception  # type: ignore[assignment]
 
 try:
     import outlines
@@ -403,7 +407,7 @@ class SummaryService:
             return None
 
     async def _invoke_model_async(
-        self, aclient: "AsyncInferenceClient", prompt: str
+        self, aclient: AsyncInferenceClient, prompt: str
     ) -> Optional[SummaryLLMOutput]:
         try:
             instructions = getattr(self, "_instructions", "") or ""
