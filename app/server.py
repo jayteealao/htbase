@@ -69,10 +69,12 @@ async def lifespan_context(app: FastAPI):
         "screenshot": ScreenshotArchiver(ht_runner=ht_runner, settings=settings),
         "pdf": PDFArchiver(ht_runner=ht_runner, settings=settings),
     }
+    summarization_queue: "queue.Queue[SummarizeTask]" = queue.Queue()
+    
     # Expose ht runner on app state for APIs
     app.state.ht_runner = ht_runner
+    
     app.state.summarizer = SummaryService(settings)
-    summarization_queue: "queue.Queue[SummarizeTask]" = queue.Queue()
     app.state.summarization_manager = SummarizationTaskManager(
         settings,
         summarizer=app.state.summarizer,

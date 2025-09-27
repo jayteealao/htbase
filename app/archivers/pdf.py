@@ -41,6 +41,9 @@ class PDFArchiver(BaseArchiver):
         with self.ht_runner.lock:
             self.ht_runner.send_input(cmd + "\r")
             code = self.ht_runner.wait_for_done_marker("__DONE__", timeout=300.0)
+            if code is None:
+                self._cleanup_after_timeout()
+                return ArchiveResult(success=False, exit_code=None, saved_path=None)
 
         if code is None:
             return ArchiveResult(success=False, exit_code=None, saved_path=None)
@@ -51,3 +54,13 @@ class PDFArchiver(BaseArchiver):
             exit_code=code,
             saved_path=str(out_path) if success else None,
         )
+
+    def _cleanup_after_timeout(self) -> None:
+        self.ht_runner.interrupt()
+        cleanup_cmd = (
+            "pkill -f 'chromium' >/dev/null 2>&1 || true; "
+            "pkill -f 'chrome' >/dev/null 2>&1 || true; "
+            "echo __CLEANUP__:0"
+        )
+        self.ht_runner.send_input(cleanup_cmd + "\r")
+        self.ht_runner.wait_for_done_marker("__CLEANUP__", timeout=15.0)

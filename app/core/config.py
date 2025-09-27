@@ -48,7 +48,7 @@ class AppSettings(BaseSettings):
 
     # Summarization / analysis feature flags and configuration
     enable_summarization: bool = Field(
-        default=True, alias="ENABLE_SUMMARIZATION"
+        default=False, alias="ENABLE_SUMMARIZATION"
     )
     openrouter_api_key: str | None = Field(
         default=None, alias="OPENROUTER_API_KEY"
