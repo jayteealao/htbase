@@ -23,13 +23,25 @@ class PDFArchiver(BaseArchiver):
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / "output.pdf"
 
+        print(f"PDFArchiver: archiving {url} as {item_id}")
+
 
         url_q = shlex.quote(url)
         out_q = shlex.quote(str(out_path))
+        user_data_dir = self.settings.resolved_chromium_user_data_dir
+        user_data_dir.mkdir(parents=True, exist_ok=True)
+        user_data_q = shlex.quote(str(user_data_dir))
+        profile_raw = getattr(self.settings, "chromium_profile_directory", "")
+        profile_name = str(profile_raw).strip() if profile_raw is not None else ""
+        profile_flag = (
+            f"--profile-directory={shlex.quote(profile_name)} " if profile_name else ""
+        )
 
         # Compose Chromium headless PDF print command
         cmd = (
             f"{self.settings.chromium_bin} --headless=new "
+            f"--user-data-dir={user_data_q} "
+            f"{profile_flag}"
             f"--print-to-pdf={out_q} --print-to-pdf-no-header "
             "--run-all-compositor-stages-before-draw --virtual-time-budget=9000 "
             "--no-sandbox --disable-gpu --disable-software-rasterizer "

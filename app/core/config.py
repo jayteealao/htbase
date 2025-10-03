@@ -30,6 +30,12 @@ class AppSettings(BaseSettings):
     monolith_bin: str = Field(default="/usr/local/bin/monolith", alias="MONOLITH_BIN")
     use_chromium: bool = Field(default=True, alias="USE_CHROMIUM")
     chromium_bin: str = Field(default="/usr/bin/chromium", alias="CHROMIUM_BIN")
+    chromium_user_data_dir: Path | None = Field(
+        default=None, alias="CHROMIUM_USER_DATA_DIR"
+    )
+    chromium_profile_directory: str = Field(
+        default="Default", alias="CHROMIUM_PROFILE_DIRECTORY"
+    )
     # Extra flags to pass to monolith (space-separated, supports quotes)
     monolith_flags: str = Field(default="", alias="MONOLITH_FLAGS")
     # SingleFile CLI configuration
@@ -123,11 +129,19 @@ class AppSettings(BaseSettings):
             parsed_sources = []
         self.summary_source_archivers = parsed_sources
 
+        profile_dir = getattr(self, 'chromium_profile_directory', 'Default')
+        profile_str = str(profile_dir).strip() if profile_dir is not None else ''
+        self.chromium_profile_directory = profile_str or 'Default'
+
         return self
 
     @property
     def resolved_db_path(self) -> Path:
         return self.db_path or (self.data_dir / "app.db")
+
+    @property
+    def resolved_chromium_user_data_dir(self) -> Path:
+        return self.chromium_user_data_dir or (self.data_dir / "chromium-user-data")
 
     @property
     def database_url(self) -> str:

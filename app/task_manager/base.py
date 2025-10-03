@@ -24,19 +24,25 @@ class BackgroundTaskManager(ABC, Generic[TaskT]):
     def start(self) -> None:
         with self._lock:
             if self._worker and self._worker.is_alive():
+                print(f'[{self.__class__.__name__}] Worker already running; skipping start')
                 return
+            print(f'[{self.__class__.__name__}] Starting worker thread')
             self._worker = threading.Thread(target=self._run, daemon=True)
             self._worker.start()
 
     def submit(self, task: TaskT) -> None:
+        print(f'[{self.__class__.__name__}] Submitting task: {task}')
         self._queue.put(task)
         self.start()
 
     def _run(self) -> None:
+        print(f'[{self.__class__.__name__}] Worker loop started')
         while True:
             task = self._queue.get()
             try:
+                print(f'[{self.__class__.__name__}] Processing task: {task}')
                 self.process(task)
+                print(f'[{self.__class__.__name__}] Finished task: {task}')
             finally:
                 self._queue.task_done()
 

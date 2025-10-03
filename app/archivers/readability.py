@@ -79,6 +79,8 @@ class ReadabilityArchiver(BaseArchiver):
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / "output.html"
 
+        print(f"ReadabilityArchiver: archiving {url} as {item_id}")
+
         # Obtain page HTML (Chromium dump preferred; HTTP fallback)
         html = self._get_source_html(url)
         if not html:

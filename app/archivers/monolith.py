@@ -20,14 +20,25 @@ class MonolithArchiver(BaseArchiver):
 
     def archive(self, *, url: str, item_id: str) -> ArchiveResult:
         # Build output path: <DATA_DIR>/<item_id>/monolith/output.html
+        print(f"MonolithArchiver: archiving {url} as {item_id}")
         safe_item = sanitize_filename(item_id)
         out_dir = Path(self.settings.data_dir) / safe_item / self.name
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / "output.html"
 
+
         # Compose monolith command to run via ht
         url_q = shlex.quote(url)
         out_q = shlex.quote(str(out_path))
+
+        user_data_dir = self.settings.resolved_chromium_user_data_dir
+        user_data_dir.mkdir(parents=True, exist_ok=True)
+        user_data_q = shlex.quote(str(user_data_dir))
+        profile_raw = getattr(self.settings, "chromium_profile_directory", "")
+        profile_name = str(profile_raw).strip() if profile_raw is not None else ""
+        profile_flag = (
+            f"--profile-directory={shlex.quote(profile_name)} " if profile_name else ""
+        )
         # Parse and safely quote any extra monolith flags from config
         extra_flags = self.settings.monolith_flags.strip()
         if extra_flags:
@@ -46,6 +57,8 @@ class MonolithArchiver(BaseArchiver):
             # Fresh Chromium dump piped directly into monolith (no raw reuse)
             chromium_cmd = (
                 f"{self.settings.chromium_bin} --headless=new "
+                f"--user-data-dir={user_data_q} "
+                f"{profile_flag}"
                 "--window-size=1920,1080 "
                 "--run-all-compositor-stages-before-draw --virtual-time-budget=9000 "
                 "--incognito --dump-dom "

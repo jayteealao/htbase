@@ -96,6 +96,15 @@ async def lifespan_context(app: FastAPI):
         summarization=app.state.summarization,
     )
     try:
+        print("Resuming any pending artifacts...")
+        resumed_tasks = app.state.task_manager.resume_pending_artifacts()
+        if resumed_tasks:
+            print(
+                f"Recovered pending artifacts across {len(resumed_tasks)} task(s)."
+            )
+    except Exception as exc:
+        print(f"Failed to resume pending artifacts: {exc}")
+    try:
         yield
     finally:
         # Shutdown
