@@ -22,11 +22,7 @@ class SingleFileCLIArchiver(BaseArchiver, ChromiumArchiverMixin):
         self.chromium_builder = ChromiumCommandBuilder(settings)
 
     def archive(self, *, url: str, item_id: str) -> ArchiveResult:
-        # Output path is fixed to output.html in <DATA_DIR>/<item_id>/singlefile/
-        safe_item = sanitize_filename(item_id)
-        out_dir = Path(self.settings.data_dir) / safe_item / self.name
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / "output.html"
+        out_dir, out_path = self.get_output_path(item_id)
 
         print(f"SingleFileCLIArchiver: archiving {url} as {item_id}")
 
@@ -110,9 +106,7 @@ class SingleFileCLIArchiver(BaseArchiver, ChromiumArchiverMixin):
             sf_cmd += f" {extra_q}"
         cmd = f"{sf_cmd}; echo __DONE__:$?"
 
-        with self.ht_runner.lock:
-            self.ht_runner.send_input(cmd + "\r")
-            code = self.ht_runner.wait_for_done_marker("__DONE__", timeout=300.0)
+        code = self.ht_runner.execute_command(cmd, timeout=300.0)
 
         if code is None:
             return ArchiveResult(success=False, exit_code=None, saved_path=None)

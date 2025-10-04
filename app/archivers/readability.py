@@ -69,10 +69,7 @@ class ReadabilityArchiver(BaseArchiver, ChromiumArchiverMixin):
             return None
 
     def archive(self, *, url: str, item_id: str) -> ArchiveResult:
-        safe_item = sanitize_filename(item_id)
-        out_dir = Path(self.settings.data_dir) / safe_item / self.name
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / "output.html"
+        out_dir, out_path = self.get_output_path(item_id)
 
         print(f"ReadabilityArchiver: archiving {url} as {item_id}")
 

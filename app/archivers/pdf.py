@@ -13,6 +13,7 @@ from models import ArchiveResult
 
 class PDFArchiver(BaseArchiver, ChromiumArchiverMixin):
     name = "pdf"
+    output_extension = "pdf"
 
     def __init__(self, ht_runner: HTRunner, settings: AppSettings):
         super().__init__(settings)
@@ -20,10 +21,7 @@ class PDFArchiver(BaseArchiver, ChromiumArchiverMixin):
         self.chromium_builder = ChromiumCommandBuilder(settings)
 
     def archive(self, *, url: str, item_id: str) -> ArchiveResult:
-        safe_item = sanitize_filename(item_id)
-        out_dir = Path(self.settings.data_dir) / safe_item / self.name
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / "output.pdf"
+        out_dir, out_path = self.get_output_path(item_id)
 
         print(f"PDFArchiver: archiving {url} as {item_id}")
 
@@ -34,12 +32,11 @@ class PDFArchiver(BaseArchiver, ChromiumArchiverMixin):
         chromium_args = self.chromium_builder.build_pdf_args(url, out_path)
         cmd = " ".join(shlex.quote(arg) for arg in chromium_args) + "; echo __DONE__:$?"
 
-        with self.ht_runner.lock:
-            self.ht_runner.send_input(cmd + "\r")
-            code = self.ht_runner.wait_for_done_marker("__DONE__", timeout=300.0)
-            if code is None:
-                self.cleanup_after_timeout()
-                return ArchiveResult(success=False, exit_code=None, saved_path=None)
+        code = self.ht_runner.execute_command(
+            cmd,
+            timeout=300.0,
+            cleanup_on_timeout=self.cleanup_after_timeout,
+        )
 
         if code is None:
             return ArchiveResult(success=False, exit_code=None, saved_path=None)
