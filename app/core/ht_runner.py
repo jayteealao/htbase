@@ -4,6 +4,7 @@ import re
 import subprocess
 import threading
 import time
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, TextIO, Union
@@ -120,6 +121,31 @@ class HTRunner:
                 if m:
                     return int(m.group("code"))
         return None
+
+    def execute_command(
+        self,
+        cmd: str,
+        marker: str = "__DONE__",
+        timeout: float = 300.0,
+        cleanup_on_timeout: Optional[Callable[[], None]] = None,
+    ) -> Optional[int]:
+        """Execute a shell command and wait for completion marker.
+
+        Args:
+            cmd: Shell command to execute (without the trailing marker)
+            marker: Completion marker to wait for (default: "__DONE__")
+            timeout: Timeout in seconds (default: 300.0)
+            cleanup_on_timeout: Optional callback to run if command times out
+
+        Returns:
+            Exit code as integer, or None if timed out
+        """
+        with self.lock:
+            self.send_input(cmd + "\r")
+            code = self.wait_for_done_marker(marker, timeout=timeout)
+            if code is None and cleanup_on_timeout:
+                cleanup_on_timeout()
+            return code
 
     def stop(self, timeout: float = 5.0):
         """Gracefully stop the ht process and reader thread.
