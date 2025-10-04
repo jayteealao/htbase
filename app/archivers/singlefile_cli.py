@@ -1,40 +1,42 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 import shlex
 
 from archivers.base import BaseArchiver
+from core.chromium_utils import ChromiumArchiverMixin, ChromiumCommandBuilder
 from core.config import AppSettings
 from core.ht_runner import HTRunner
 from core.utils import sanitize_filename
 from models import ArchiveResult
 
+logger = logging.getLogger(__name__)
 
-class SingleFileCLIArchiver(BaseArchiver):
+
+class SingleFileCLIArchiver(BaseArchiver, ChromiumArchiverMixin):
     # Folder name to write under each item_id
     name = "singlefile"
 
     def __init__(self, ht_runner: HTRunner, settings: AppSettings):
         super().__init__(settings)
         self.ht_runner = ht_runner
+        self.chromium_builder = ChromiumCommandBuilder(settings)
 
     def archive(self, *, url: str, item_id: str) -> ArchiveResult:
-        # Output path is fixed to output.html in <DATA_DIR>/<item_id>/singlefile/
-        safe_item = sanitize_filename(item_id)
-        out_dir = Path(self.settings.data_dir) / safe_item / self.name
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / "output.html"
+        out_dir, out_path = self.get_output_path(item_id)
 
-        print(f"SingleFileCLIArchiver: archiving {url} as {item_id}")
+        logger.info(f"Archiving {url}", extra={"item_id": item_id, "archiver": "singlefile"})
+
+        # Setup Chromium (create user data dir and clean locks)
+        self.setup_chromium()
 
         # Compose command to run via ht
         url_q = shlex.quote(url)
         out_q = shlex.quote(str(out_path))
         user_data_dir = self.settings.resolved_chromium_user_data_dir
-        user_data_dir.mkdir(parents=True, exist_ok=True)
-        profile_raw = getattr(self.settings, "chromium_profile_directory", "")
-        profile_name = str(profile_raw).strip() if profile_raw is not None else ""
+
         chromium_bin = getattr(self.settings, "chromium_bin", "")
         chromium_bin = chromium_bin.strip() if isinstance(chromium_bin, str) else str(chromium_bin)
 
@@ -62,24 +64,34 @@ class SingleFileCLIArchiver(BaseArchiver):
         for idx, token in enumerate(tokens):
             if token.startswith("--browser-args="):
                 existing_browser_args_idx = idx
-                # Extract existing args JSON
+                # Extract existing args JSON (handle both quoted and unquoted JSON)
                 try:
                     existing_args_json = token.split("=", 1)[1]
+                    # Remove any surrounding quotes that might have survived shlex
+                    existing_args_json = existing_args_json.strip("'\"")
                     browser_args = json.loads(existing_args_json)
-                except (json.JSONDecodeError, IndexError):
+                    if not isinstance(browser_args, list):
+                        browser_args = []
+                except (json.JSONDecodeError, IndexError, ValueError) as e:
+                    logger.warning(f"Failed to parse existing browser-args: {e}")
                     browser_args = []
                 break
 
         # Add user-data-dir if not already present
+        # Using default profile (no --profile-directory) to share login state across all archiving runs
         user_data_arg = f"--user-data-dir={str(user_data_dir)}"
         if not any(arg.startswith("--user-data-dir=") for arg in browser_args):
             browser_args.append(user_data_arg)
 
-        # Add profile-directory if profile_name is set and not already present
-        if profile_name:
-            profile_arg = f"--profile-directory={profile_name}"
-            if not any(arg.startswith("--profile-directory=") for arg in browser_args):
-                browser_args.append(profile_arg)
+        # Add critical flags to prevent exit code 21 (profile lock conflicts)
+        critical_flags = [
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-features=LockProfileCookieDatabase",
+        ]
+        for flag in critical_flags:
+            if flag not in browser_args and not any(arg.startswith(flag.split("=")[0]) for arg in browser_args):
+                browser_args.append(flag)
 
         # Update or add --browser-args token
         browser_args_json = json.dumps(browser_args)
@@ -97,14 +109,16 @@ class SingleFileCLIArchiver(BaseArchiver):
             sf_cmd += f" {extra_q}"
         cmd = f"{sf_cmd}; echo __DONE__:$?"
 
-        with self.ht_runner.lock:
-            self.ht_runner.send_input(cmd + "\r")
-            code = self.ht_runner.wait_for_done_marker("__DONE__", timeout=300.0)
+        code = self.ht_runner.execute_command(cmd, timeout=300.0)
 
         if code is None:
             return ArchiveResult(success=False, exit_code=None, saved_path=None)
 
         success = code == 0 and out_path.exists() and out_path.stat().st_size > 0
+
+        # Clean up Chromium singleton locks after archiving
+        self.cleanup_chromium()
+
         return ArchiveResult(
             success=success,
             exit_code=code,

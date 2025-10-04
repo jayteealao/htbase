@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Optional, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from core.config import AppSettings, get_settings
+
+logger = logging.getLogger(__name__)
 from db.repository import (
     list_saves,
     get_save_by_rowid,
@@ -122,7 +125,7 @@ def requeue_saves(
         payload_snapshot = payload.model_dump()  # type: ignore[attr-defined]
     except AttributeError:
         payload_snapshot = payload.dict()  # type: ignore[attr-defined]
-    print(f'[AdminAPI] Requeue requested | payload={payload_snapshot}')
+    logger.info(f"Requeue requested | payload={payload_snapshot}")
 
     artifacts: List[Dict[str, Any]] = []
     statuses_lower = set()
@@ -133,16 +136,16 @@ def requeue_saves(
 
     if payload.artifact_ids:
         fetched_by_id = get_artifacts_by_ids(settings.resolved_db_path, payload.artifact_ids)
-        print(f'[AdminAPI] Loaded artifacts by id | requested={len(payload.artifact_ids)} found={len(fetched_by_id)}')
+        logger.info(f"Loaded artifacts by id | requested={len(payload.artifact_ids)} found={len(fetched_by_id)}")
         artifacts.extend(fetched_by_id)
 
     if pull_all and payload.status:
         fetched_by_status = list_artifacts_by_status(settings.resolved_db_path, [payload.status])
-        print(f'[AdminAPI] Loaded artifacts by status | status={payload.status} count={len(fetched_by_status)}')
+        logger.info(f"Loaded artifacts by status | status={payload.status} count={len(fetched_by_status)}")
         artifacts.extend(fetched_by_status)
 
     if not payload.artifact_ids and not pull_all:
-        print('[AdminAPI] Requeue rejected | reason=no-selection')
+        logger.info("Requeue rejected | reason=no-selection")
         raise HTTPException(
             status_code=400,
             detail="Provide artifact_ids or set include_all with a status to requeue.",
@@ -153,32 +156,32 @@ def requeue_saves(
     for record in artifacts:
         artifact_id = int(record.get("artifact_id"))
         if artifact_id in seen:
-            print(f'[AdminAPI] Skipping duplicate artifact | artifact_id={artifact_id}')
+            logger.info(f"Skipping duplicate artifact | artifact_id={artifact_id}")
             continue
         seen.add(artifact_id)
         status = (record.get("status") or "").lower()
         if status not in {"failed", "pending"}:
-            print(f'[AdminAPI] Skipping artifact due to status | artifact_id={artifact_id} status={status}')
+            logger.info(f"Skipping artifact due to status | artifact_id={artifact_id} status={status}")
             continue
         if statuses_lower and status not in statuses_lower:
-            print(f'[AdminAPI] Skipping artifact due to filter | artifact_id={artifact_id} status={status} allowed={sorted(statuses_lower)}')
+            logger.info(f"Skipping artifact due to filter | artifact_id={artifact_id} status={status} allowed={sorted(statuses_lower)}")
             continue
         filtered.append(record)
-        print(f'[AdminAPI] Artifact ready for requeue | artifact_id={artifact_id} status={status}')
+        logger.info(f"Artifact ready for requeue | artifact_id={artifact_id} status={status}")
 
     if not filtered:
-        print('[AdminAPI] No artifacts matched filters; nothing to requeue')
+        logger.info("No artifacts matched filters; nothing to requeue")
         return RequeueResponse(requeued_count=0, task_ids=[])
 
-    print(
-        f'[AdminAPI] Dispatching {len(filtered)} artifact(s) | chunk_size={REQUEUE_CHUNK_SIZE} priority={ARCHIVER_REQUEUE_PRIORITY}'
+    logger.info(
+        f"Dispatching {len(filtered)} artifact(s) | chunk_size={REQUEUE_CHUNK_SIZE} priority={ARCHIVER_REQUEUE_PRIORITY}"
     )
     task_ids = task_manager.enqueue_artifacts_and_wait(
         filtered,
         chunk_size=REQUEUE_CHUNK_SIZE,
         priorities=ARCHIVER_REQUEUE_PRIORITY,
     )
-    print(f'[AdminAPI] Requeue completed | requeued={len(filtered)} tasks={task_ids}')
+    logger.info(f"Requeue completed | requeued={len(filtered)} tasks={task_ids}")
     return RequeueResponse(requeued_count=len(filtered), task_ids=task_ids)
 
 

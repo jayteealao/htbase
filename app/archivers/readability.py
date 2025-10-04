@@ -1,23 +1,28 @@
 from __future__ import annotations
 
 from datetime import datetime
+import logging
 from pathlib import Path
 from typing import Optional
 import subprocess
 
 from archivers.base import BaseArchiver
+from core.chromium_utils import ChromiumArchiverMixin, ChromiumCommandBuilder
 from core.config import AppSettings
 from core.utils import sanitize_filename
 from models import ArchiveResult
 
+logger = logging.getLogger(__name__)
 
-class ReadabilityArchiver(BaseArchiver):
+
+class ReadabilityArchiver(BaseArchiver, ChromiumArchiverMixin):
     name = "readability"
 
     def __init__(self, ht_runner, settings: AppSettings):
         super().__init__(settings)
         # ht_runner no longer required; kept for constructor compatibility
         self.ht_runner = ht_runner
+        self.chromium_builder = ChromiumCommandBuilder(settings)
 
     def _get_source_html(self, url: str) -> Optional[str]:
         """Return page HTML either via headless Chromium (--dump-dom) or HTTP GET.
@@ -28,21 +33,12 @@ class ReadabilityArchiver(BaseArchiver):
         # Try Chromium first if enabled
         try:
             if getattr(self.settings, "use_chromium", True):
-                args = [
-                    self.settings.chromium_bin,
-                    "--headless=new",
-                    "--dump-dom",
-                    "--run-all-compositor-stages-before-draw",
-                    "--virtual-time-budget=9000",
-                    "--hide-scrollbars",
-                    "--no-sandbox",
-                    "--disable-gpu",
-                    "--disable-software-rasterizer",
-                    "--disable-dev-shm-usage",
-                    "--disable-setuid-sandbox",
-                    "--disable-features=NetworkService,NetworkServiceInProcess",
-                    url,
-                ]
+                # Setup Chromium (create user data dir and clean locks)
+                self.setup_chromium()
+
+                # Build Chromium command for DOM dumping
+                args = self.chromium_builder.build_dump_dom_args(url)
+
                 proc = subprocess.run(
                     args,
                     check=False,
@@ -51,6 +47,8 @@ class ReadabilityArchiver(BaseArchiver):
                     timeout=120,
                 )
                 if proc.returncode == 0 and proc.stdout.strip():
+                    # Clean up after Chromium completes
+                    self.cleanup_chromium()
                     return proc.stdout
         except Exception:
             # Fall through to requests
@@ -74,12 +72,9 @@ class ReadabilityArchiver(BaseArchiver):
             return None
 
     def archive(self, *, url: str, item_id: str) -> ArchiveResult:
-        safe_item = sanitize_filename(item_id)
-        out_dir = Path(self.settings.data_dir) / safe_item / self.name
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / "output.html"
+        out_dir, out_path = self.get_output_path(item_id)
 
-        print(f"ReadabilityArchiver: archiving {url} as {item_id}")
+        logger.info(f"Archiving {url}", extra={"item_id": item_id, "archiver": "readability"})
 
         # Obtain page HTML (Chromium dump preferred; HTTP fallback)
         html = self._get_source_html(url)
