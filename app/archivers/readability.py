@@ -6,18 +6,20 @@ from typing import Optional
 import subprocess
 
 from archivers.base import BaseArchiver
+from core.chromium_utils import ChromiumArchiverMixin, ChromiumCommandBuilder
 from core.config import AppSettings
-from core.utils import cleanup_chromium_singleton_locks, sanitize_filename
+from core.utils import sanitize_filename
 from models import ArchiveResult
 
 
-class ReadabilityArchiver(BaseArchiver):
+class ReadabilityArchiver(BaseArchiver, ChromiumArchiverMixin):
     name = "readability"
 
     def __init__(self, ht_runner, settings: AppSettings):
         super().__init__(settings)
         # ht_runner no longer required; kept for constructor compatibility
         self.ht_runner = ht_runner
+        self.chromium_builder = ChromiumCommandBuilder(settings)
 
     def _get_source_html(self, url: str) -> Optional[str]:
         """Return page HTML either via headless Chromium (--dump-dom) or HTTP GET.
@@ -28,26 +30,12 @@ class ReadabilityArchiver(BaseArchiver):
         # Try Chromium first if enabled
         try:
             if getattr(self.settings, "use_chromium", True):
-                # Clean up stale Chromium singleton locks before launching
-                user_data_dir = self.settings.resolved_chromium_user_data_dir
-                user_data_dir.mkdir(parents=True, exist_ok=True)
-                cleanup_chromium_singleton_locks(user_data_dir)
+                # Setup Chromium (create user data dir and clean locks)
+                self.setup_chromium()
 
-                args = [
-                    self.settings.chromium_bin,
-                    "--headless=new",
-                    "--dump-dom",
-                    "--run-all-compositor-stages-before-draw",
-                    "--virtual-time-budget=9000",
-                    "--hide-scrollbars",
-                    "--no-sandbox",
-                    "--disable-gpu",
-                    "--disable-software-rasterizer",
-                    "--disable-dev-shm-usage",
-                    "--disable-setuid-sandbox",
-                    "--disable-features=NetworkService,NetworkServiceInProcess",
-                    url,
-                ]
+                # Build Chromium command for DOM dumping
+                args = self.chromium_builder.build_dump_dom_args(url)
+
                 proc = subprocess.run(
                     args,
                     check=False,
@@ -57,7 +45,7 @@ class ReadabilityArchiver(BaseArchiver):
                 )
                 if proc.returncode == 0 and proc.stdout.strip():
                     # Clean up after Chromium completes
-                    cleanup_chromium_singleton_locks(user_data_dir)
+                    self.cleanup_chromium()
                     return proc.stdout
         except Exception:
             # Fall through to requests
