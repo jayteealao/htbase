@@ -47,6 +47,9 @@ class AppSettings(BaseSettings):
     # Log all ht stdin/stdout to a file under data dir by default
     ht_log_file: Path = Field(default=Path("/data/ht.log"), alias="HT_LOG_FILE")
 
+    # Logging configuration
+    log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+
     # Skip re-archiving when a successful save already exists for the same
     # item_id or URL (checks the saves table). Disabled by default to preserve
     # current behavior unless explicitly enabled.

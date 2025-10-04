@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 import shlex
 
@@ -9,6 +10,8 @@ from core.config import AppSettings
 from core.ht_runner import HTRunner
 from core.utils import sanitize_filename
 from models import ArchiveResult
+
+logger = logging.getLogger(__name__)
 
 
 class ScreenshotArchiver(BaseArchiver, ChromiumArchiverMixin):
@@ -28,7 +31,7 @@ class ScreenshotArchiver(BaseArchiver, ChromiumArchiverMixin):
     def archive(self, *, url: str, item_id: str) -> ArchiveResult:
         out_dir, out_path = self.get_output_path(item_id)
 
-        print(f"ScreenshotArchiver: archiving {url} as {item_id}")
+        logger.info(f"Archiving {url}", extra={"item_id": item_id, "archiver": "screenshot"})
 
         # Setup Chromium (create user data dir and clean locks)
         self.setup_chromium()

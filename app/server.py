@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import logging
 import queue
 import subprocess
 
@@ -13,6 +14,7 @@ from archivers.screenshot import ScreenshotArchiver
 from archivers.pdf import PDFArchiver
 from archivers.readability import ReadabilityArchiver
 from core.config import get_settings
+from core.logging import setup_logging
 from core.utils import cleanup_chromium_singleton_locks
 from db.repository import init_db
 from core.ht_runner import HTRunner
@@ -26,6 +28,9 @@ from task_manager import (
 
 
 settings = get_settings()
+setup_logging(settings.log_level)
+logger = logging.getLogger(__name__)
+
 ht_runner = HTRunner(settings.ht_bin, settings.ht_listen, log_path=settings.ht_log_file)
 
 
@@ -43,26 +48,26 @@ async def lifespan_context(app: FastAPI):
     # Log chromium and monolith versions (best-effort)
     try:
         out = subprocess.check_output([settings.chromium_bin, "--version"], text=True).strip()
-        print(f"Chromium: {out}")
+        logger.info(f"Chromium: {out}")
     except Exception:
-        print("Chromium: not available")
+        logger.warning("Chromium: not available")
     try:
         out = subprocess.check_output([settings.monolith_bin, "--version"], text=True).strip()
-        print(f"Monolith: {out}")
+        logger.info(f"Monolith: {out}")
     except Exception:
-        print("Monolith: not available")
+        logger.warning("Monolith: not available")
     try:
         out = subprocess.check_output([settings.singlefile_bin, "--version"], text=True).strip()
-        print(f"SingleFile CLI: {out}")
+        logger.info(f"SingleFile CLI: {out}")
     except Exception:
-        print("SingleFile CLI: not available")
+        logger.warning("SingleFile CLI: not available")
     try:
         out = subprocess.check_output([settings.ht_bin, "--version"], text=True).strip()
-        print(f"ht: {out}")
+        logger.info(f"ht: {out}")
     except Exception:
-        print("ht: not available")
-    
-    print(f"Summarization enabled: {settings.enable_summarization}")
+        logger.warning("ht: not available")
+
+    logger.info(f"Summarization enabled: {settings.enable_summarization}")
     if settings.start_ht:
         ht_runner.start()
     # Register archivers on app state
@@ -103,14 +108,14 @@ async def lifespan_context(app: FastAPI):
         summarization=app.state.summarization,
     )
     try:
-        print("Resuming any pending artifacts...")
+        logger.info("Resuming any pending artifacts...")
         # resumed_tasks = app.state.task_manager.resume_pending_artifacts()
         # if resumed_tasks:
-        #     print(
+        #     logger.info(
         #         f"Recovered pending artifacts across {len(resumed_tasks)} task(s)."
         #     )
     except Exception as exc:
-        print(f"Failed to resume pending artifacts: {exc}")
+        logger.error(f"Failed to resume pending artifacts: {exc}")
     try:
         yield
     finally:

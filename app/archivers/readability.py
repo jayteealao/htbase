@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import logging
 from pathlib import Path
 from typing import Optional
 import subprocess
@@ -10,6 +11,8 @@ from core.chromium_utils import ChromiumArchiverMixin, ChromiumCommandBuilder
 from core.config import AppSettings
 from core.utils import sanitize_filename
 from models import ArchiveResult
+
+logger = logging.getLogger(__name__)
 
 
 class ReadabilityArchiver(BaseArchiver, ChromiumArchiverMixin):
@@ -71,7 +74,7 @@ class ReadabilityArchiver(BaseArchiver, ChromiumArchiverMixin):
     def archive(self, *, url: str, item_id: str) -> ArchiveResult:
         out_dir, out_path = self.get_output_path(item_id)
 
-        print(f"ReadabilityArchiver: archiving {url} as {item_id}")
+        logger.info(f"Archiving {url}", extra={"item_id": item_id, "archiver": "readability"})
 
         # Obtain page HTML (Chromium dump preferred; HTTP fallback)
         html = self._get_source_html(url)

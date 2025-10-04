@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 import shlex
 
@@ -10,6 +11,8 @@ from core.config import AppSettings
 from core.ht_runner import HTRunner
 from core.utils import sanitize_filename
 from models import ArchiveResult
+
+logger = logging.getLogger(__name__)
 
 
 class SingleFileCLIArchiver(BaseArchiver, ChromiumArchiverMixin):
@@ -24,7 +27,7 @@ class SingleFileCLIArchiver(BaseArchiver, ChromiumArchiverMixin):
     def archive(self, *, url: str, item_id: str) -> ArchiveResult:
         out_dir, out_path = self.get_output_path(item_id)
 
-        print(f"SingleFileCLIArchiver: archiving {url} as {item_id}")
+        logger.info(f"Archiving {url}", extra={"item_id": item_id, "archiver": "singlefile"})
 
         # Setup Chromium (create user data dir and clean locks)
         self.setup_chromium()
@@ -70,7 +73,7 @@ class SingleFileCLIArchiver(BaseArchiver, ChromiumArchiverMixin):
                     if not isinstance(browser_args, list):
                         browser_args = []
                 except (json.JSONDecodeError, IndexError, ValueError) as e:
-                    print(f"Warning: Failed to parse existing browser-args: {e}")
+                    logger.warning(f"Failed to parse existing browser-args: {e}")
                     browser_args = []
                 break
 

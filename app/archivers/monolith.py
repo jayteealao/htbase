@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 import shlex
 
@@ -9,6 +10,8 @@ from core.config import AppSettings
 from core.ht_runner import HTRunner
 from models import ArchiveResult
 from core.utils import sanitize_filename
+
+logger = logging.getLogger(__name__)
 
 
 class MonolithArchiver(BaseArchiver, ChromiumArchiverMixin):
@@ -21,7 +24,7 @@ class MonolithArchiver(BaseArchiver, ChromiumArchiverMixin):
         self.chromium_builder = ChromiumCommandBuilder(settings)
 
     def archive(self, *, url: str, item_id: str) -> ArchiveResult:
-        print(f"MonolithArchiver: archiving {url} as {item_id}")
+        logger.info(f"Archiving {url}", extra={"item_id": item_id, "archiver": "monolith"})
         out_dir, out_path = self.get_output_path(item_id)
 
 
