@@ -5,19 +5,21 @@ from pathlib import Path
 import shlex
 
 from archivers.base import BaseArchiver
+from core.chromium_utils import ChromiumArchiverMixin, ChromiumCommandBuilder
 from core.config import AppSettings
 from core.ht_runner import HTRunner
-from core.utils import cleanup_chromium_singleton_locks, sanitize_filename
+from core.utils import sanitize_filename
 from models import ArchiveResult
 
 
-class SingleFileCLIArchiver(BaseArchiver):
+class SingleFileCLIArchiver(BaseArchiver, ChromiumArchiverMixin):
     # Folder name to write under each item_id
     name = "singlefile"
 
     def __init__(self, ht_runner: HTRunner, settings: AppSettings):
         super().__init__(settings)
         self.ht_runner = ht_runner
+        self.chromium_builder = ChromiumCommandBuilder(settings)
 
     def archive(self, *, url: str, item_id: str) -> ArchiveResult:
         # Output path is fixed to output.html in <DATA_DIR>/<item_id>/singlefile/
@@ -28,15 +30,13 @@ class SingleFileCLIArchiver(BaseArchiver):
 
         print(f"SingleFileCLIArchiver: archiving {url} as {item_id}")
 
+        # Setup Chromium (create user data dir and clean locks)
+        self.setup_chromium()
+
         # Compose command to run via ht
         url_q = shlex.quote(url)
         out_q = shlex.quote(str(out_path))
         user_data_dir = self.settings.resolved_chromium_user_data_dir
-        user_data_dir.mkdir(parents=True, exist_ok=True)
-
-        # Clean up stale Chromium singleton locks before launching
-        # This prevents exit code 21 while allowing login state to persist
-        cleanup_chromium_singleton_locks(user_data_dir)
 
         chromium_bin = getattr(self.settings, "chromium_bin", "")
         chromium_bin = chromium_bin.strip() if isinstance(chromium_bin, str) else str(chromium_bin)
@@ -118,6 +118,10 @@ class SingleFileCLIArchiver(BaseArchiver):
             return ArchiveResult(success=False, exit_code=None, saved_path=None)
 
         success = code == 0 and out_path.exists() and out_path.stat().st_size > 0
+
+        # Clean up Chromium singleton locks after archiving
+        self.cleanup_chromium()
+
         return ArchiveResult(
             success=success,
             exit_code=code,
