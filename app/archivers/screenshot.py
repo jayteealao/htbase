@@ -4,18 +4,20 @@ from pathlib import Path
 import shlex
 
 from archivers.base import BaseArchiver
+from core.chromium_utils import ChromiumArchiverMixin, ChromiumCommandBuilder
 from core.config import AppSettings
 from core.ht_runner import HTRunner
-from core.utils import cleanup_chromium_singleton_locks, sanitize_filename
+from core.utils import sanitize_filename
 from models import ArchiveResult
 
 
-class ScreenshotArchiver(BaseArchiver):
+class ScreenshotArchiver(BaseArchiver, ChromiumArchiverMixin):
     name = "screenshot"
 
     def __init__(self, ht_runner: HTRunner, settings: AppSettings):
         super().__init__(settings)
         self.ht_runner = ht_runner
+        self.chromium_builder = ChromiumCommandBuilder(settings)
 
         # Default viewport to attempt near-full-page captures for common pages
         self.viewport_width = 1920
@@ -30,44 +32,23 @@ class ScreenshotArchiver(BaseArchiver):
 
         print(f"ScreenshotArchiver: archiving {url} as {item_id}")
 
-        url_q = shlex.quote(url)
-        out_q = shlex.quote(str(out_path))
-        user_data_dir = self.settings.resolved_chromium_user_data_dir
-        user_data_dir.mkdir(parents=True, exist_ok=True)
+        # Setup Chromium (create user data dir and clean locks)
+        self.setup_chromium()
 
-        # Clean up stale Chromium singleton locks before launching
-        cleanup_chromium_singleton_locks(user_data_dir)
-
-        user_data_q = shlex.quote(str(user_data_dir))
-        profile_raw = getattr(self.settings, "chromium_profile_directory", "")
-        profile_name = str(profile_raw).strip() if profile_raw is not None else ""
-        profile_flag = (
-            f"--profile-directory={shlex.quote(profile_name)} " if profile_name else ""
+        # Build Chromium command using builder
+        chromium_args = self.chromium_builder.build_screenshot_args(
+            url,
+            out_path,
+            viewport_width=self.viewport_width,
+            viewport_height=self.viewport_height,
         )
-
-        # Compose Chromium headless screenshot command
-        # Note: Chromium's --screenshot captures the viewport only; we use a tall viewport
-        # and compositor/virtual-time flags to improve render completeness.
-        cmd = (
-            f"{self.settings.chromium_bin} --headless=new "
-            f"--user-data-dir={user_data_q} "
-            f"{profile_flag}"
-            f"--screenshot={out_q} --window-size={self.viewport_width},{self.viewport_height} "
-            "--run-all-compositor-stages-before-draw --virtual-time-budget=9000 "
-            "--hide-scrollbars --no-sandbox --disable-gpu --disable-software-rasterizer "
-            "--disable-dev-shm-usage --disable-setuid-sandbox "
-            "--disable-features=NetworkService,NetworkServiceInProcess "
-            f"--remote-debugging-address=0.0.0.0 "
-            f"--remote-debugging-port=9222 "
-            
-            f"{url_q}; echo __DONE__:$?"
-        )
+        cmd = " ".join(shlex.quote(arg) for arg in chromium_args) + "; echo __DONE__:$?"
 
         with self.ht_runner.lock:
             self.ht_runner.send_input(cmd + "\r")
             code = self.ht_runner.wait_for_done_marker("__DONE__", timeout=300.0)
             if code is None:
-                self._cleanup_after_timeout()
+                self.cleanup_after_timeout()
                 return ArchiveResult(success=False, exit_code=None, saved_path=None)
 
         if code is None:
@@ -76,20 +57,10 @@ class ScreenshotArchiver(BaseArchiver):
         success = code == 0 and out_path.exists() and out_path.stat().st_size > 0
 
         # Clean up Chromium singleton locks after archiving
-        cleanup_chromium_singleton_locks(user_data_dir)
+        self.cleanup_chromium()
 
         return ArchiveResult(
             success=success,
             exit_code=code,
             saved_path=str(out_path) if success else None,
         )
-
-    def _cleanup_after_timeout(self) -> None:
-        self.ht_runner.interrupt()
-        cleanup_cmd = (
-            "pkill -f 'chromium' >/dev/null 2>&1 || true; "
-            "pkill -f 'chrome' >/dev/null 2>&1 || true; "
-            "echo __CLEANUP__:0"
-        )
-        self.ht_runner.send_input(cleanup_cmd + "\r")
-        self.ht_runner.wait_for_done_marker("__CLEANUP__", timeout=15.0)
