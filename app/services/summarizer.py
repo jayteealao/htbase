@@ -1,41 +1,17 @@
 from __future__ import annotations
 
+import asyncio
+from copy import deepcopy
 import re
 import traceback
 from dataclasses import dataclass
-import asyncio
 from textwrap import dedent
-from typing import TYPE_CHECKING, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from chonkie import TokenChunker
+from huggingface_hub import AsyncInferenceClient
+from huggingface_hub.errors import GenerationError
 from pydantic import BaseModel, Field, ValidationError
-
-try:
-    from chonkie import TokenChunker
-except Exception as exc:
-    print(f'Failed to import chonkie: {exc}')
-    traceback.print_exc()
-    TokenChunker = None  # type: ignore[assignment]
-
-if TYPE_CHECKING:
-    from huggingface_hub import InferenceClient, AsyncInferenceClient
-    from huggingface_hub.errors import GenerationError
-else:
-    try:
-        from huggingface_hub import InferenceClient, AsyncInferenceClient
-        from huggingface_hub.errors import GenerationError
-    except Exception as exc:
-        print(f'Failed to import huggingface_hub clients: {exc}')
-        traceback.print_exc()
-        InferenceClient = None  # type: ignore[assignment]
-        AsyncInferenceClient = None  # type: ignore[assignment]
-        GenerationError = Exception  # type: ignore[assignment]
-
-try:
-    import outlines
-except Exception as exc:
-    print(f'Failed to import outlines: {exc}')
-    traceback.print_exc()
-    outlines = None  # type: ignore[assignment]
 
 from core.config import AppSettings
 from db.repository import (
@@ -59,141 +35,119 @@ class SummaryService:
 
     def __init__(self, settings: AppSettings):
         self.settings = settings
-        missing: list[str] = []
-        if not settings.enable_summarization:
-            missing.append("feature flag disabled")
-        if not (settings.openrouter_api_key or settings.summarization_api_base):
-            missing.append("No summarization provider configured (set OPENROUTER_API_KEY or SUMMARIZATION_API_BASE)")
-        if TokenChunker is None:
-            missing.append("chonkie not installed")
-        # We only require at least one client implementation from huggingface_hub.
-        if InferenceClient is None and AsyncInferenceClient is None:
-            missing.append("huggingface_hub unavailable")
-
-        self._enabled = not missing
+        self._enabled = False
         self._chunker: Optional[TokenChunker] = None  # type: ignore[type-arg]
-        self._hf_client: Optional[InferenceClient] = None  # type: ignore[type-arg]
-        self._outlines_model = None
         self._hf_base_url: Optional[str] = None
         self._hf_token: Optional[str] = None
-        self._whitelist_entries: List[Tuple[str, re.Pattern[str]]] = []
+        self._hf_grammar: Optional[Dict[str, Any]] = None
+        self._instructions: str = ""
+        self._whitelist_entries: List[Tuple[str, re.Pattern[str]]] = (
+            self._build_whitelist(settings.summary_tag_whitelist)
+        )
 
-        for raw_tag in self.settings.summary_tag_whitelist:
+        if not self.settings.enable_summarization:
+            print("SummaryService disabled: feature flag disabled")
+            return
+
+        if not self._init_chunker():
+            return
+
+        if not self._configure_hf_clients():
+            return
+
+        self._instructions = self._build_instructions()
+        self._enabled = True
+
+    # ------------------------------------------------------------------
+    # Setup helpers
+    # ------------------------------------------------------------------
+    def _build_whitelist(
+        self, raw_tags: Sequence[str]
+    ) -> List[Tuple[str, re.Pattern[str]]]:
+        entries: List[Tuple[str, re.Pattern[str]]] = []
+        for raw_tag in raw_tags:
             tag = raw_tag.strip()
             if not tag:
                 continue
             pattern = re.compile(rf"(?<!\w){re.escape(tag)}(?!\w)", re.IGNORECASE)
-            self._whitelist_entries.append((tag, pattern))
+            entries.append((tag, pattern))
+        return entries
 
-        if not self._enabled:
-            print(
-                "SummaryService disabled: "
-                + (", ".join(missing) if missing else "unknown reason")
-
-            )
-            return
-
+    def _init_chunker(self) -> bool:
         try:
             self._chunker = TokenChunker(  # type: ignore[call-arg]
                 chunk_size=self.settings.summary_chunk_size
             )
         except Exception:
-
             print("Failed to initialise TokenChunker; disabling summarization")
             traceback.print_exc()
+            return False
+        return True
 
-            self._enabled = False
-
-            return
-
+    def _configure_hf_clients(self) -> bool:
         try:
-            # Build TokenChunker
-            if self._chunker is None:
-                pass  # already built above
-
-            # Configure TGI URL from settings; strip trailing '/v1' if provided
-            base = (self.settings.summarization_api_base or '').strip()
-            if base.endswith('/v1'):
+            base = (self.settings.summarization_api_base or "").strip()
+            if base.endswith("/v1"):
                 base = base[:-3]
-            tgi_url = base or 'http://text-generation'
-            token = None if not self.settings.summarization_api_key or self.settings.summarization_api_key == '-' else self.settings.summarization_api_key
+            tgi_url = base or "http://text-generation"
+            token = self.settings.summarization_api_key
+            if not token or token == "-":
+                token = None
             self._hf_base_url = tgi_url
             self._hf_token = token
 
-            # Prefer Outlines if available for single-shot JSON typing, but it's optional.
-            if outlines is not None and InferenceClient is not None:
-                self._hf_client = InferenceClient(tgi_url, token=token)
-                try:
-                    self._outlines_model = outlines.from_tgi(self._hf_client)
-                except Exception:
-                    # Outlines is optional; continue without it
-                    self._outlines_model = None
-
-            self._instructions = dedent(
-                """
-                You are a senior editorial assistant with many years of experience crafting beautiful ledes and concise summaries for busy readers. Adopt an authoritative, polished editorial voice: selective, economical, and graceful. Prioritize the single most important takeaway and render it with clarity and craft.
-
-                Hard rules:
-                - Always respond in valid JSON only. Do not include any text outside the JSON.
-                - Output must contain exactly two fields: "lede" and "summary".
-                - "lede": one sentence, ≤30 words, capturing the article’s core takeaway. Must NOT start with "The" or "the".
-                - "summary": one flowing paragraph, ≤150 words, expanding on the lede and providing the essential context and significance.
-                - No sentence in either field may start with "The" or "the".
-                - Do not hallucinate or invent facts. If source lacks details, summarise what is present without fabricating.
-                - Keep language elegant, plain, and precise. Prefer active voice and concrete nouns.
-
-                Quality checks (apply before returning output):
-                1. Confirm lede is a single sentence and avoid begin with "The"/"the".
-                2. Confirm summary is one paragraph, ≤150 words, and no sentence begins with "The"/"the".
-                3. Ensure lede states the core takeaway first (inverted-pyramid).
-                4. Remove any stray commentary, system text, or markdown — output must be pure JSON.
-
-                Strict output shape:
-                {
-                  "lede": "<one sentence ≤30 words, avoid start with 'The' or 'the'>",
-                  "summary": "<one paragraph ≤150 words, avoid sentence starts with 'The' or 'the'>"
-                }
-                """
-            ).strip()
+            self._hf_grammar = self._build_summary_json_grammar()
+            return True
         except Exception:
-            print("Failed to initialise TGI/Outlines; disabling summarization")
+            print("Failed to initialise Hugging Face clients; disabling summarization")
             traceback.print_exc()
-            self._enabled = False
+            return False
+
+    def _build_instructions(self) -> str:
+        return dedent(
+            """
+            You are a senior editorial assistant with many years of experience crafting beautiful ledes and concise summaries for busy readers. Adopt an authoritative, polished editorial voice: selective, economical, and graceful. Prioritize the single most important takeaway and render it with clarity and craft.
+
+            Hard rules:
+            - Always respond in valid JSON only. Do not include any text outside the JSON.
+            - Output must contain exactly two fields: "lede" and "summary".
+            - "lede": one sentence, ≤30 words, capturing the article’s core takeaway. Must NOT start with "The" or "the".
+            - "summary": one flowing paragraph, ≤150 words, expanding on the lede and providing the essential context and significance.
+            - No sentence in either field may start with "The" or "the".
+            - Do not hallucinate or invent facts. If source lacks details, summarise what is present without fabricating.
+            - Keep language elegant, plain, and precise. Prefer active voice and concrete nouns.
+
+            Quality checks (apply before returning output):
+            1. Confirm lede is a single sentence and avoid begin with "The"/"the".
+            2. Confirm summary is one paragraph, ≤150 words, and no sentence begins with "The"/"the".
+            3. Ensure lede states the core takeaway first (inverted-pyramid).
+            4. Remove any stray commentary, system text, or markdown — output must be pure JSON.
+
+            Strict output shape:
+            {
+              "lede": "<one sentence ≤30 words, avoid start with 'The' or 'the'>",
+              "summary": "<one paragraph ≤150 words, avoid sentence starts with 'The' or 'the'>"
+            }
+            """
+        ).strip()
 
     @property
     def is_enabled(self) -> bool:
         # Enabled if config + chunker are ready and we have at least one client path
-        has_provider = bool(self._outlines_model) or bool(AsyncInferenceClient) or bool(self._hf_client)
-        return bool(self._enabled and self._chunker and has_provider)
+        has_async = bool(self._hf_base_url)
+        return bool(self._enabled and self._chunker and has_async)
 
     def generate_for_archived_url(self, archived_url_id: int) -> bool:
         if not self.is_enabled:
             return False
 
         print(f"Starting summarization run | archived_url_id={archived_url_id}")
-        metadata = get_metadata_for_archived_url(
-            self.settings.resolved_db_path, archived_url_id
-        )
-        if metadata is None or not (metadata.text and metadata.text.strip()):
-            print(
-                f"Skipping summarization: no metadata text | archived_url_id={archived_url_id}"
-
-            )
+        prepared = self._prepare_summary_context(archived_url_id)
+        if not prepared:
             return False
 
-        article = get_archived_url_by_id(
-            self.settings.resolved_db_path, archived_url_id
-        )
-        summary_inputs = SummaryInputs(
-            title=getattr(metadata, "title", None) or getattr(article, "name", None),
-            url=getattr(article, "url", None),
-            published=getattr(metadata, "published", None),
-        )
-
-        base_text = metadata.text.strip()
-        chunk_texts = self._segment_article(base_text)
-        if not chunk_texts:
-            chunk_texts = [base_text]
+        summary_inputs, base_text = prepared
+        chunk_texts = self._segment_article(base_text) or [base_text]
 
         print(
             "Prepared article text | "
@@ -203,69 +157,15 @@ class SummaryService:
 
         )
 
-        chunk_outputs: List[SummaryLLMOutput] = []
-        # Use async HF client for multi-chunk; optionally fall back to it even for single-chunk
-        if len(chunk_texts) == 1 and self._outlines_model is not None:
-            prompt = self._build_single_prompt(chunk_texts[0], summary_inputs)
-            result = self._invoke_model(prompt)
-            if result is None and AsyncInferenceClient is not None and self._hf_base_url:
-                # Fallback to async client for single-chunk
-                async def _single_async() -> Optional[SummaryLLMOutput]:
-                    async with AsyncInferenceClient(self._hf_base_url, token=self._hf_token) as aclient:
-                        return await self._invoke_model_async(aclient, prompt)
+        generated = self._generate_outputs(
+            archived_url_id=archived_url_id,
+            chunk_texts=chunk_texts,
+            summary_inputs=summary_inputs,
+        )
+        if not generated:
+            return False
 
-                try:
-                    result = asyncio.run(_single_async())
-                except Exception:
-                    result = None
-            if result is None:
-                print(
-                    f"WARNING: Summarization aborted: LLM call failed | archived_url_id={archived_url_id}"
-                )
-                return False
-            chunk_outputs.append(result)
-            final_output = result
-        else:
-            # Run chunk prompts concurrently via AsyncInferenceClient
-            prompts = [
-                self._build_chunk_prompt(txt, summary_inputs, idx + 1, len(chunk_texts))
-                for idx, txt in enumerate(chunk_texts)
-            ]
-
-            async def _run_chunks_and_reduce() -> Optional[Tuple[List[SummaryLLMOutput], SummaryLLMOutput]]:
-                if AsyncInferenceClient is None or not self._hf_base_url:
-                    return None
-                # Reuse one async client for all concurrent requests
-                async with AsyncInferenceClient(self._hf_base_url, token=self._hf_token) as aclient:
-                    # Fire off chunk generations concurrently, respecting max concurrency
-                    raw_limit = getattr(self.settings, "summary_max_concurrency", 0) or 0
-                    limit = max(1, min(int(raw_limit) if isinstance(raw_limit, int) else 0, len(prompts))) if raw_limit else len(prompts)
-                    sem = asyncio.Semaphore(limit)
-
-                    async def run_one(prompt: str):
-                        async with sem:
-                            return await self._invoke_model_async(aclient, prompt)
-
-                    tasks = [run_one(p) for p in prompts]
-                    results = await asyncio.gather(*tasks, return_exceptions=False)
-                    # Abort if any failed
-                    if any(r is None for r in results):
-                        return None
-                    chunk_outs = [r for r in results if r is not None]  # type: ignore[list-item]
-                    # Reduce step
-                    reduce_prompt = self._build_reduce_prompt(chunk_outs, summary_inputs)
-                    reduced = await self._invoke_model_async(aclient, reduce_prompt)
-                    if reduced is None:
-                        return None
-                    return chunk_outs, reduced
-
-            done = asyncio.run(_run_chunks_and_reduce())
-            if not done:
-                print(
-                    f"WARNING: Summarization aborted: async chunk or reduce step failed | archived_url_id={archived_url_id}"
-                )
-                return False
-            chunk_outputs, final_output = done
+        chunk_outputs, final_output = generated
 
         return self._persist_outputs(
             archived_url_id=archived_url_id,
@@ -273,6 +173,130 @@ class SummaryService:
             chunk_outputs=chunk_outputs,
             source_text=base_text,
         )
+
+    def _prepare_summary_context(
+        self, archived_url_id: int
+    ) -> Optional[Tuple[SummaryInputs, str]]:
+        metadata = get_metadata_for_archived_url(
+            self.settings.resolved_db_path, archived_url_id
+        )
+        if metadata is None or not (metadata.text and metadata.text.strip()):
+            print(
+                f"Skipping summarization: no metadata text | archived_url_id={archived_url_id}"
+            )
+            return None
+
+        article = get_archived_url_by_id(
+            self.settings.resolved_db_path, archived_url_id
+        )
+        summary_inputs = SummaryInputs(
+            title=getattr(metadata, "title", None)
+            or getattr(article, "name", None),
+            url=getattr(article, "url", None),
+            published=getattr(metadata, "published", None),
+        )
+        base_text = metadata.text.strip()
+        return summary_inputs, base_text
+
+    def _generate_outputs(
+        self,
+        *,
+        archived_url_id: int,
+        chunk_texts: Sequence[str],
+        summary_inputs: SummaryInputs,
+    ) -> Optional[Tuple[List[SummaryLLMOutput], SummaryLLMOutput]]:
+        if len(chunk_texts) == 1:
+            result = self._run_single_chunk(chunk_texts[0], summary_inputs)
+            if result is None:
+                print(
+                    "WARNING: Summarization aborted: LLM call failed | "
+                    f"archived_url_id={archived_url_id}"
+                )
+                return None
+            return [result], result
+
+        done = self._run_multi_chunk(chunk_texts, summary_inputs)
+        if not done:
+            print(
+                "WARNING: Summarization aborted: async chunk or reduce step failed | "
+                f"archived_url_id={archived_url_id}"
+            )
+            return None
+        return done
+
+    def _run_single_chunk(
+        self, chunk: str, summary_inputs: SummaryInputs
+    ) -> Optional[SummaryLLMOutput]:
+        prompt = self._build_single_prompt(chunk, summary_inputs)
+        return self._run_async_prompt(prompt)
+
+    def _run_multi_chunk(
+        self, chunk_texts: Sequence[str], summary_inputs: SummaryInputs
+    ) -> Optional[Tuple[List[SummaryLLMOutput], SummaryLLMOutput]]:
+        if not self._hf_base_url:
+            return None
+
+        prompts = [
+            self._build_chunk_prompt(txt, summary_inputs, idx + 1, len(chunk_texts))
+            for idx, txt in enumerate(chunk_texts)
+        ]
+
+        try:
+            return asyncio.run(
+                self._run_async_chunks(prompts, summary_inputs)
+            )
+        except Exception:
+            return None
+
+    def _run_async_prompt(self, prompt: str) -> Optional[SummaryLLMOutput]:
+        if not self._hf_base_url:
+            return None
+
+        async def _single_async() -> Optional[SummaryLLMOutput]:
+            async with AsyncInferenceClient(self._hf_base_url, token=self._hf_token) as aclient:
+                return await self._invoke_model_async(aclient, prompt)
+
+        try:
+            return asyncio.run(_single_async())
+        except Exception:
+            return None
+
+    async def _run_async_chunks(
+        self,
+        prompts: Sequence[str],
+        summary_inputs: SummaryInputs,
+    ) -> Optional[Tuple[List[SummaryLLMOutput], SummaryLLMOutput]]:
+        if not self._hf_base_url:
+            return None
+
+        async with AsyncInferenceClient(self._hf_base_url, token=self._hf_token) as aclient:
+            limit = self._resolve_concurrency_limit(len(prompts))
+            sem = asyncio.Semaphore(limit)
+
+            async def run_one(prompt: str) -> Optional[SummaryLLMOutput]:
+                async with sem:
+                    return await self._invoke_model_async(aclient, prompt)
+
+            results = await asyncio.gather(*[run_one(p) for p in prompts])
+            if any(r is None for r in results):
+                return None
+
+            chunk_outputs = [r for r in results if r is not None]
+            reduce_prompt = self._build_reduce_prompt(chunk_outputs, summary_inputs)
+            reduced = await self._invoke_model_async(aclient, reduce_prompt)
+            if reduced is None:
+                return None
+            return chunk_outputs, reduced
+
+    def _resolve_concurrency_limit(self, total: int) -> int:
+        raw_limit = getattr(self.settings, "summary_max_concurrency", 0) or 0
+        if not raw_limit:
+            return total
+        try:
+            limit = int(raw_limit)
+        except (TypeError, ValueError):
+            return total
+        return max(1, min(limit, total))
 
     # ------------------------------------------------------------------
     # Prompt helpers
@@ -362,116 +386,98 @@ class SummaryService:
         print(f"Segmented article into {len(out)} chunks")
         return out
 
-    def _invoke_model(self, prompt: str) -> Optional[SummaryLLMOutput]:
-        if not self._outlines_model:
-            return None
-        try:
-            instructions = getattr(self, "_instructions", "") or ""
-            full_prompt = f"{instructions}\n\n{prompt}" if instructions else prompt
-            try:
-                raw = self._outlines_model(
-                    full_prompt,
-                    output_type=SummaryLLMOutput,
-                    max_new_tokens=400,
-                    temperature=0.2,
-                    top_p=0.95,
-                    return_full_text=False,
-                )
-            except TypeError:
-                # Some Outlines/TGI versions may not accept return_full_text; retry without it
-                raw = self._outlines_model(
-                    full_prompt,
-                    output_type=SummaryLLMOutput,
-                    max_new_tokens=400,
-                    temperature=0.2,
-                    top_p=0.95,
-                )
-            try:
-                print(f"Raw model output: {raw}")
-                return SummaryLLMOutput.model_validate_json(raw)
-            except ValidationError:
-                print("Model output failed schema validation; attempting extraction")
-                text = str(raw)
-                parsed = self._extract_summary_from_text(text)
-                if parsed is not None:
-                    return parsed
-                # Final fallback: synthesize lede from first sentence, use text as summary
-                text = (text or "").strip()
-                if not text:
-                    return None
-                lede_guess = self._first_sentence(text)
-                return SummaryLLMOutput(lede=lede_guess, summary=text)
-        except Exception:
-            print("Summarization model call failed")
-            traceback.print_exc()
-            return None
-
     async def _invoke_model_async(
         self, aclient: AsyncInferenceClient, prompt: str
     ) -> Optional[SummaryLLMOutput]:
         try:
-            instructions = getattr(self, "_instructions", "") or ""
-            full_prompt = f"{instructions}\n\n{prompt}" if instructions else prompt
-            # Try parameter variants to avoid backend compatibility issues
-            variants = [
-                {"temperature": 0.2, "top_p": 0.95, "do_sample": True, "max_new_tokens": 400, "return_full_text": False},
-                {"temperature": 0.0, "top_p": 1.0, "do_sample": False, "max_new_tokens": 300, "return_full_text": False},
-                {"temperature": 0.2, "top_p": 0.90, "do_sample": True, "max_new_tokens": 280, "return_full_text": False},
-            ]
-            last_err: Exception | None = None
-            raw = None
-            for params in variants:
-                try:
-                    raw = await aclient.text_generation(
-                        full_prompt,
-                        **params,
-                    )
-                    last_err = None
-                    break
-                except TypeError:
-                    # Some client versions may not support return_full_text or do_sample; retry without them
-                    try:
-                        simplified = dict(params)
-                        simplified.pop("return_full_text", None)
-                        raw = await aclient.text_generation(
-                            full_prompt,
-                            **simplified,
-                        )
-                        last_err = None
-                        break
-                    except Exception as e2:
-                        last_err = e2
-                        await asyncio.sleep(0.25)
-                        continue
-                except GenerationError as e:
-                    last_err = e
-                    await asyncio.sleep(0.25)
-                    continue
-                except Exception as e:
-                    last_err = e
-                    await asyncio.sleep(0.25)
-                    continue
+            full_prompt = self._apply_instructions(prompt)
+            raw, last_err = await self._generate_async(aclient, full_prompt)
             if raw is None:
                 if last_err:
                     print(f"Async generation failed after variants: {last_err}")
                 return None
-            try:
-                print(f"Raw async model output: {raw}")
-                return SummaryLLMOutput.model_validate_json(str(raw))
-            except ValidationError:
-                text = str(raw)
-                parsed = self._extract_summary_from_text(text)
-                if parsed is not None:
-                    return parsed
-                text = (text or "").strip()
-                if not text:
-                    return None
-                lede_guess = self._first_sentence(text)
-                return SummaryLLMOutput(lede=lede_guess, summary=text)
+            return self._parse_llm_response(raw, label="Raw async")
         except Exception:
             print("Async summarization model call failed")
             traceback.print_exc()
             return None
+
+    def _apply_instructions(self, prompt: str) -> str:
+        instructions = self._instructions.strip()
+        return f"{instructions}\n\n{prompt}" if instructions else prompt
+
+    async def _generate_async(
+        self, aclient: "AsyncInferenceClient", full_prompt: str
+    ) -> Tuple[Any | None, Exception | None]:
+        last_err: Exception | None = None
+        for params in self._build_text_generation_variants():
+            result, err = await self._try_single_variant_async(
+                aclient, full_prompt, params
+            )
+            if result is not None:
+                return result, None
+            if err is not None:
+                last_err = err
+        return None, last_err
+
+    async def _try_single_variant_async(
+        self,
+        aclient: "AsyncInferenceClient",
+        full_prompt: str,
+        params: Dict[str, Any],
+    ) -> Tuple[Any | None, Exception | None]:
+        current = dict(params)
+        removed_return_full = False
+        removed_grammar = False
+        last_err: Exception | None = None
+
+        while True:
+            try:
+                return await aclient.text_generation(full_prompt, **current), None
+            except TypeError as exc:
+                last_err = exc
+                if not removed_return_full and "return_full_text" in current:
+                    current = dict(current)
+                    current.pop("return_full_text", None)
+                    removed_return_full = True
+                    continue
+                if (
+                    not removed_grammar
+                    and "grammar" in current
+                    and "grammar" in str(exc)
+                ):
+                    current = dict(current)
+                    current.pop("grammar", None)
+                    removed_grammar = True
+                    continue
+                await asyncio.sleep(0.25)
+                return None, last_err
+            except GenerationError as exc:
+                last_err = exc
+                await asyncio.sleep(0.25)
+                return None, last_err
+            except Exception as exc:
+                last_err = exc
+                await asyncio.sleep(0.25)
+                return None, last_err
+
+    def _parse_llm_response(
+        self, raw: Any, *, label: str
+    ) -> Optional[SummaryLLMOutput]:
+        text = self._coerce_generated_text(raw)
+        try:
+            print(f"{label} model output: {text}")
+            return SummaryLLMOutput.model_validate_json(text)
+        except ValidationError:
+            print("Model output failed schema validation; attempting extraction")
+            parsed = self._extract_summary_from_text(text)
+            if parsed is not None:
+                return parsed
+            text = (text or "").strip()
+            if not text:
+                return None
+            lede_guess = self._first_sentence(text)
+            return SummaryLLMOutput(lede=lede_guess, summary=text)
 
     def _extract_summary_from_text(self, text: str) -> Optional[SummaryLLMOutput]:
         """Extract a JSON object containing a 'summary' field from messy output.
@@ -566,6 +572,60 @@ class SummaryService:
                 pass
 
         return None
+
+    def _build_summary_json_grammar(self) -> Optional[Dict[str, Any]]:
+        try:
+            schema = deepcopy(SummaryLLMOutput.model_json_schema())
+        except Exception:
+            return None
+
+        # Ensure schema is explicit about required fields and shape
+        required = list(dict.fromkeys([*(schema.get("required") or []), "lede", "summary"]))
+        schema["required"] = required
+        schema["additionalProperties"] = False
+
+        properties = schema.setdefault("properties", {})
+        if isinstance(properties, dict):
+            for field in ("lede", "summary"):
+                field_schema = properties.get(field) or {}
+                if not isinstance(field_schema, dict):
+                    field_schema = {}
+                field_schema.setdefault("type", "string")
+                field_schema.setdefault("minLength", 1)
+                properties[field] = field_schema
+
+        return {"type": "json_schema", "value": schema}
+
+    def _build_text_generation_variants(self) -> List[Dict[str, Any]]:
+        base_variants: List[Dict[str, Any]] = [
+            {"temperature": 0.2, "top_p": 0.95, "do_sample": True, "max_new_tokens": 400, "return_full_text": False},
+            {"temperature": 0.0, "top_p": 1.0, "do_sample": False, "max_new_tokens": 300, "return_full_text": False},
+            {"temperature": 0.2, "top_p": 0.90, "do_sample": True, "max_new_tokens": 280, "return_full_text": False},
+        ]
+
+        grammar = getattr(self, "_hf_grammar", None)
+        variants: List[Dict[str, Any]] = []
+        for params in base_variants:
+            variant = dict(params)
+            if grammar:
+                variant["grammar"] = grammar
+            variants.append(variant)
+        return variants
+
+    def _coerce_generated_text(self, raw: Any) -> str:
+        if raw is None:
+            return ""
+        if isinstance(raw, str):
+            return raw
+        text = getattr(raw, "generated_text", None)
+        if isinstance(text, str):
+            return text
+        if isinstance(raw, dict):
+            for key in ("generated_text", "text", "content"):
+                value = raw.get(key)
+                if isinstance(value, str):
+                    return value
+        return str(raw)
 
     def _persist_outputs(
         self,
