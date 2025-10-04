@@ -7,7 +7,7 @@ import shlex
 from archivers.base import BaseArchiver
 from core.config import AppSettings
 from core.ht_runner import HTRunner
-from core.utils import sanitize_filename
+from core.utils import cleanup_chromium_singleton_locks, sanitize_filename
 from models import ArchiveResult
 
 
@@ -33,8 +33,11 @@ class SingleFileCLIArchiver(BaseArchiver):
         out_q = shlex.quote(str(out_path))
         user_data_dir = self.settings.resolved_chromium_user_data_dir
         user_data_dir.mkdir(parents=True, exist_ok=True)
-        profile_raw = getattr(self.settings, "chromium_profile_directory", "")
-        profile_name = str(profile_raw).strip() if profile_raw is not None else ""
+
+        # Clean up stale Chromium singleton locks before launching
+        # This prevents exit code 21 while allowing login state to persist
+        cleanup_chromium_singleton_locks(user_data_dir)
+
         chromium_bin = getattr(self.settings, "chromium_bin", "")
         chromium_bin = chromium_bin.strip() if isinstance(chromium_bin, str) else str(chromium_bin)
 
@@ -62,24 +65,34 @@ class SingleFileCLIArchiver(BaseArchiver):
         for idx, token in enumerate(tokens):
             if token.startswith("--browser-args="):
                 existing_browser_args_idx = idx
-                # Extract existing args JSON
+                # Extract existing args JSON (handle both quoted and unquoted JSON)
                 try:
                     existing_args_json = token.split("=", 1)[1]
+                    # Remove any surrounding quotes that might have survived shlex
+                    existing_args_json = existing_args_json.strip("'\"")
                     browser_args = json.loads(existing_args_json)
-                except (json.JSONDecodeError, IndexError):
+                    if not isinstance(browser_args, list):
+                        browser_args = []
+                except (json.JSONDecodeError, IndexError, ValueError) as e:
+                    print(f"Warning: Failed to parse existing browser-args: {e}")
                     browser_args = []
                 break
 
         # Add user-data-dir if not already present
+        # Using default profile (no --profile-directory) to share login state across all archiving runs
         user_data_arg = f"--user-data-dir={str(user_data_dir)}"
         if not any(arg.startswith("--user-data-dir=") for arg in browser_args):
             browser_args.append(user_data_arg)
 
-        # Add profile-directory if profile_name is set and not already present
-        if profile_name:
-            profile_arg = f"--profile-directory={profile_name}"
-            if not any(arg.startswith("--profile-directory=") for arg in browser_args):
-                browser_args.append(profile_arg)
+        # Add critical flags to prevent exit code 21 (profile lock conflicts)
+        critical_flags = [
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-features=LockProfileCookieDatabase",
+        ]
+        for flag in critical_flags:
+            if flag not in browser_args and not any(arg.startswith(flag.split("=")[0]) for arg in browser_args):
+                browser_args.append(flag)
 
         # Update or add --browser-args token
         browser_args_json = json.dumps(browser_args)

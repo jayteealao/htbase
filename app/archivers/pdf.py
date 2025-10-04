@@ -6,7 +6,7 @@ import shlex
 from archivers.base import BaseArchiver
 from core.config import AppSettings
 from core.ht_runner import HTRunner
-from core.utils import sanitize_filename
+from core.utils import cleanup_chromium_singleton_locks, sanitize_filename
 from models import ArchiveResult
 
 
@@ -25,11 +25,14 @@ class PDFArchiver(BaseArchiver):
 
         print(f"PDFArchiver: archiving {url} as {item_id}")
 
-
         url_q = shlex.quote(url)
         out_q = shlex.quote(str(out_path))
         user_data_dir = self.settings.resolved_chromium_user_data_dir
         user_data_dir.mkdir(parents=True, exist_ok=True)
+
+        # Clean up stale Chromium singleton locks before launching
+        cleanup_chromium_singleton_locks(user_data_dir)
+
         user_data_q = shlex.quote(str(user_data_dir))
         profile_raw = getattr(self.settings, "chromium_profile_directory", "")
         profile_name = str(profile_raw).strip() if profile_raw is not None else ""
@@ -61,6 +64,10 @@ class PDFArchiver(BaseArchiver):
             return ArchiveResult(success=False, exit_code=None, saved_path=None)
 
         success = code == 0 and out_path.exists() and out_path.stat().st_size > 0
+
+        # Clean up Chromium singleton locks after archiving
+        cleanup_chromium_singleton_locks(user_data_dir)
+
         return ArchiveResult(
             success=success,
             exit_code=code,

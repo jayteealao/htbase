@@ -13,6 +13,7 @@ from archivers.screenshot import ScreenshotArchiver
 from archivers.pdf import PDFArchiver
 from archivers.readability import ReadabilityArchiver
 from core.config import get_settings
+from core.utils import cleanup_chromium_singleton_locks
 from db.repository import init_db
 from core.ht_runner import HTRunner
 from services.summarizer import SummaryService
@@ -33,6 +34,12 @@ async def lifespan_context(app: FastAPI):
     # Startup
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     init_db(settings.resolved_db_path)
+
+    # Clean up Chromium singleton locks at startup to prevent exit code 21
+    user_data_dir = settings.resolved_chromium_user_data_dir
+    user_data_dir.mkdir(parents=True, exist_ok=True)
+    cleanup_chromium_singleton_locks(user_data_dir)
+
     # Log chromium and monolith versions (best-effort)
     try:
         out = subprocess.check_output([settings.chromium_bin, "--version"], text=True).strip()
@@ -97,17 +104,23 @@ async def lifespan_context(app: FastAPI):
     )
     try:
         print("Resuming any pending artifacts...")
-        resumed_tasks = app.state.task_manager.resume_pending_artifacts()
-        if resumed_tasks:
-            print(
-                f"Recovered pending artifacts across {len(resumed_tasks)} task(s)."
-            )
+        # resumed_tasks = app.state.task_manager.resume_pending_artifacts()
+        # if resumed_tasks:
+        #     print(
+        #         f"Recovered pending artifacts across {len(resumed_tasks)} task(s)."
+        #     )
     except Exception as exc:
         print(f"Failed to resume pending artifacts: {exc}")
     try:
         yield
     finally:
         # Shutdown
+        # Clean up Chromium singleton locks at shutdown to ensure clean state for next startup
+        try:
+            cleanup_chromium_singleton_locks(user_data_dir)
+        except Exception:
+            pass
+
         if settings.start_ht:
             try:
                 ht_runner.stop()

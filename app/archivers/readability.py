@@ -7,7 +7,7 @@ import subprocess
 
 from archivers.base import BaseArchiver
 from core.config import AppSettings
-from core.utils import sanitize_filename
+from core.utils import cleanup_chromium_singleton_locks, sanitize_filename
 from models import ArchiveResult
 
 
@@ -28,6 +28,11 @@ class ReadabilityArchiver(BaseArchiver):
         # Try Chromium first if enabled
         try:
             if getattr(self.settings, "use_chromium", True):
+                # Clean up stale Chromium singleton locks before launching
+                user_data_dir = self.settings.resolved_chromium_user_data_dir
+                user_data_dir.mkdir(parents=True, exist_ok=True)
+                cleanup_chromium_singleton_locks(user_data_dir)
+
                 args = [
                     self.settings.chromium_bin,
                     "--headless=new",
@@ -51,6 +56,8 @@ class ReadabilityArchiver(BaseArchiver):
                     timeout=120,
                 )
                 if proc.returncode == 0 and proc.stdout.strip():
+                    # Clean up after Chromium completes
+                    cleanup_chromium_singleton_locks(user_data_dir)
                     return proc.stdout
         except Exception:
             # Fall through to requests
