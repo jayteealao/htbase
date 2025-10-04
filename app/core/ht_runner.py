@@ -94,6 +94,13 @@ class HTRunner:
         self.proc.stdin.write(msg)
         self.proc.stdin.flush()
 
+    def interrupt(self):
+        """Send a CTRL+C (SIGINT) to the wrapped shell."""
+        try:
+            self.send_input("\u0003")
+        except Exception:
+            pass
+
     def wait_for_done_marker(self, marker: str, timeout: float = 120.0) -> Optional[int]:
         deadline = time.time() + timeout
         pattern = re.compile(re.escape(marker) + r":(?P<code>\d+)")
@@ -168,4 +175,3 @@ class HTRunner:
             finally:
                 self._log_fp = None
         self.proc = None
-

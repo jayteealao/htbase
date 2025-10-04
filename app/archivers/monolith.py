@@ -20,14 +20,25 @@ class MonolithArchiver(BaseArchiver):
 
     def archive(self, *, url: str, item_id: str) -> ArchiveResult:
         # Build output path: <DATA_DIR>/<item_id>/monolith/output.html
+        print(f"MonolithArchiver: archiving {url} as {item_id}")
         safe_item = sanitize_filename(item_id)
         out_dir = Path(self.settings.data_dir) / safe_item / self.name
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / "output.html"
 
+
         # Compose monolith command to run via ht
         url_q = shlex.quote(url)
         out_q = shlex.quote(str(out_path))
+
+        user_data_dir = self.settings.resolved_chromium_user_data_dir
+        user_data_dir.mkdir(parents=True, exist_ok=True)
+        user_data_q = shlex.quote(str(user_data_dir))
+        profile_raw = getattr(self.settings, "chromium_profile_directory", "")
+        profile_name = str(profile_raw).strip() if profile_raw is not None else ""
+        profile_flag = (
+            f"--profile-directory={shlex.quote(profile_name)} " if profile_name else ""
+        )
         # Parse and safely quote any extra monolith flags from config
         extra_flags = self.settings.monolith_flags.strip()
         if extra_flags:
@@ -46,6 +57,8 @@ class MonolithArchiver(BaseArchiver):
             # Fresh Chromium dump piped directly into monolith (no raw reuse)
             chromium_cmd = (
                 f"{self.settings.chromium_bin} --headless=new "
+                f"--user-data-dir={user_data_q} "
+                f"{profile_flag}"
                 "--window-size=1920,1080 "
                 "--run-all-compositor-stages-before-draw --virtual-time-budget=9000 "
                 "--incognito --dump-dom "
@@ -67,6 +80,9 @@ class MonolithArchiver(BaseArchiver):
         with self.ht_runner.lock:
             self.ht_runner.send_input(cmd + "\r")
             code = self.ht_runner.wait_for_done_marker("__DONE__", timeout=300.0)
+            if code is None:
+                self._cleanup_after_timeout()
+                return ArchiveResult(success=False, exit_code=None, saved_path=None)
 
         if code is None:
             return ArchiveResult(success=False, exit_code=None, saved_path=None)
@@ -77,3 +93,15 @@ class MonolithArchiver(BaseArchiver):
             exit_code=code,
             saved_path=str(out_path) if success else None,
         )
+
+    def _cleanup_after_timeout(self) -> None:
+        # Send SIGINT to the running shell and ensure stray Chromium processes exit.
+        self.ht_runner.interrupt()
+        cleanup_cmd = (
+            "pkill -f 'chromium' >/dev/null 2>&1 || true; "
+            "pkill -f 'chrome' >/dev/null 2>&1 || true; "
+            "echo __CLEANUP__:0"
+        )
+        self.ht_runner.send_input(cleanup_cmd + "\r")
+        # Best-effort wait; ignore result to avoid hanging indefinitely.
+        self.ht_runner.wait_for_done_marker("__CLEANUP__", timeout=15.0)

@@ -1,5 +1,6 @@
+from datetime import datetime
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Sequence
+from typing import Optional, List, Dict, Any, Sequence, Iterable
 
 from sqlalchemy import select, or_, desc, update, delete
 
@@ -120,7 +121,71 @@ def insert_pending_save(
             archiver=archiver_name or "unknown",
             task_id=task_id,
         )
+        art.success = False
+        art.exit_code = None
+        art.saved_path = None
+        art.status = "pending"
+        art.updated_at = datetime.utcnow()
         return int(art.id)
+
+
+def _artifact_rows_to_dict(rows: Iterable[tuple[ArchiveArtifact, ArchivedUrl]]) -> List[Dict[str, Any]]:
+    result: List[Dict[str, Any]] = []
+    for artifact, archived_url in rows:
+        result.append(
+            {
+                "artifact_id": int(artifact.id),
+                "archiver": artifact.archiver,
+                "status": artifact.status,
+                "task_id": artifact.task_id,
+                "item_id": archived_url.item_id,
+                "url": archived_url.url,
+                "archived_url_id": int(archived_url.id),
+            }
+        )
+    return result
+
+
+def get_artifacts_by_ids(
+    db_path: Path | None,
+    artifact_ids: Sequence[int],
+) -> List[Dict[str, Any]]:
+    if not artifact_ids:
+        return []
+    init_db(db_path)
+    with get_session(db_path) as session:
+        stmt = (
+            select(ArchiveArtifact, ArchivedUrl)
+            .join(ArchivedUrl, ArchivedUrl.id == ArchiveArtifact.archived_url_id)
+            .where(ArchiveArtifact.id.in_(artifact_ids))
+        )
+        rows = session.execute(stmt).all()
+        return _artifact_rows_to_dict(rows)
+
+
+def list_artifacts_by_status(
+    db_path: Path | None,
+    statuses: Sequence[str],
+    *,
+    limit: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    if not statuses:
+        return []
+    init_db(db_path)
+    with get_session(db_path) as session:
+        stmt = (
+            select(ArchiveArtifact, ArchivedUrl)
+            .join(ArchivedUrl, ArchivedUrl.id == ArchiveArtifact.archived_url_id)
+            .where(ArchiveArtifact.status.in_(list(statuses)))
+            .order_by(
+                ArchiveArtifact.updated_at.desc().nullslast(),
+                ArchiveArtifact.created_at.desc(),
+            )
+        )
+        if limit:
+            stmt = stmt.limit(limit)
+        rows = session.execute(stmt).all()
+        return _artifact_rows_to_dict(rows)
 
 
 def finalize_save_result(

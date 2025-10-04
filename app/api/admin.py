@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -11,12 +11,42 @@ from db.repository import (
     get_saves_by_item_id,
     get_saves_by_url,
     delete_saves_by_rowids,
+    get_artifacts_by_ids,
+    list_artifacts_by_status,
 )
 from models import DeleteResponse, SummarizeRequest, SummarizeResponse
 from core.utils import sanitize_filename
+from pydantic import BaseModel, Field
+from task_manager.archiver import (
+    DEFAULT_REQUEUE_CHUNK_SIZE,
+    DEFAULT_REQUEUE_PRIORITIES,
+)
 
 
 router = APIRouter()
+
+ARCHIVER_REQUEUE_PRIORITY = list(DEFAULT_REQUEUE_PRIORITIES)
+REQUEUE_CHUNK_SIZE = DEFAULT_REQUEUE_CHUNK_SIZE
+
+
+class RequeueRequest(BaseModel):
+    artifact_ids: Optional[List[int]] = Field(
+        default=None,
+        description="Specific artifact IDs to requeue.",
+    )
+    status: Optional[Literal["failed", "pending"]] = Field(
+        default=None,
+        description="Filter artifacts by status when requeueing.",
+    )
+    include_all: bool = Field(
+        default=False,
+        description="Requeue all artifacts matching the provided status.",
+    )
+
+
+class RequeueResponse(BaseModel):
+    requeued_count: int
+    task_ids: List[str]
 
 
 @router.get("/saves", response_model=List[Dict[str, object]])
@@ -76,6 +106,80 @@ def list_saves_endpoint(
 def list_archivers(request: Request):
     registry: Dict[str, object] = getattr(request.app.state, "archivers", {})
     return sorted(registry.keys())
+
+
+@router.post("/saves/requeue", response_model=RequeueResponse)
+def requeue_saves(
+    payload: RequeueRequest,
+    request: Request,
+    settings: AppSettings = Depends(get_settings),
+):
+    task_manager = getattr(request.app.state, "task_manager", None)
+    if task_manager is None:
+        raise HTTPException(status_code=500, detail="task manager not initialized")
+
+    try:
+        payload_snapshot = payload.model_dump()  # type: ignore[attr-defined]
+    except AttributeError:
+        payload_snapshot = payload.dict()  # type: ignore[attr-defined]
+    print(f'[AdminAPI] Requeue requested | payload={payload_snapshot}')
+
+    artifacts: List[Dict[str, Any]] = []
+    statuses_lower = set()
+    if payload.status:
+        statuses_lower.add(payload.status.lower())
+
+    pull_all = payload.include_all or (payload.status is not None and not payload.artifact_ids)
+
+    if payload.artifact_ids:
+        fetched_by_id = get_artifacts_by_ids(settings.resolved_db_path, payload.artifact_ids)
+        print(f'[AdminAPI] Loaded artifacts by id | requested={len(payload.artifact_ids)} found={len(fetched_by_id)}')
+        artifacts.extend(fetched_by_id)
+
+    if pull_all and payload.status:
+        fetched_by_status = list_artifacts_by_status(settings.resolved_db_path, [payload.status])
+        print(f'[AdminAPI] Loaded artifacts by status | status={payload.status} count={len(fetched_by_status)}')
+        artifacts.extend(fetched_by_status)
+
+    if not payload.artifact_ids and not pull_all:
+        print('[AdminAPI] Requeue rejected | reason=no-selection')
+        raise HTTPException(
+            status_code=400,
+            detail="Provide artifact_ids or set include_all with a status to requeue.",
+        )
+
+    seen: set[int] = set()
+    filtered: List[Dict[str, Any]] = []
+    for record in artifacts:
+        artifact_id = int(record.get("artifact_id"))
+        if artifact_id in seen:
+            print(f'[AdminAPI] Skipping duplicate artifact | artifact_id={artifact_id}')
+            continue
+        seen.add(artifact_id)
+        status = (record.get("status") or "").lower()
+        if status not in {"failed", "pending"}:
+            print(f'[AdminAPI] Skipping artifact due to status | artifact_id={artifact_id} status={status}')
+            continue
+        if statuses_lower and status not in statuses_lower:
+            print(f'[AdminAPI] Skipping artifact due to filter | artifact_id={artifact_id} status={status} allowed={sorted(statuses_lower)}')
+            continue
+        filtered.append(record)
+        print(f'[AdminAPI] Artifact ready for requeue | artifact_id={artifact_id} status={status}')
+
+    if not filtered:
+        print('[AdminAPI] No artifacts matched filters; nothing to requeue')
+        return RequeueResponse(requeued_count=0, task_ids=[])
+
+    print(
+        f'[AdminAPI] Dispatching {len(filtered)} artifact(s) | chunk_size={REQUEUE_CHUNK_SIZE} priority={ARCHIVER_REQUEUE_PRIORITY}'
+    )
+    task_ids = task_manager.enqueue_artifacts_and_wait(
+        filtered,
+        chunk_size=REQUEUE_CHUNK_SIZE,
+        priorities=ARCHIVER_REQUEUE_PRIORITY,
+    )
+    print(f'[AdminAPI] Requeue completed | requeued={len(filtered)} tasks={task_ids}')
+    return RequeueResponse(requeued_count=len(filtered), task_ids=task_ids)
 
 
 @router.post("/summarize", response_model=SummarizeResponse)

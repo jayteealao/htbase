@@ -28,25 +28,43 @@ class ScreenshotArchiver(BaseArchiver):
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / "output.png"
 
+        print(f"ScreenshotArchiver: archiving {url} as {item_id}")
+
         url_q = shlex.quote(url)
         out_q = shlex.quote(str(out_path))
+        user_data_dir = self.settings.resolved_chromium_user_data_dir
+        user_data_dir.mkdir(parents=True, exist_ok=True)
+        user_data_q = shlex.quote(str(user_data_dir))
+        profile_raw = getattr(self.settings, "chromium_profile_directory", "")
+        profile_name = str(profile_raw).strip() if profile_raw is not None else ""
+        profile_flag = (
+            f"--profile-directory={shlex.quote(profile_name)} " if profile_name else ""
+        )
 
         # Compose Chromium headless screenshot command
         # Note: Chromium's --screenshot captures the viewport only; we use a tall viewport
         # and compositor/virtual-time flags to improve render completeness.
         cmd = (
             f"{self.settings.chromium_bin} --headless=new "
+            f"--user-data-dir={user_data_q} "
+            f"{profile_flag}"
             f"--screenshot={out_q} --window-size={self.viewport_width},{self.viewport_height} "
             "--run-all-compositor-stages-before-draw --virtual-time-budget=9000 "
             "--hide-scrollbars --no-sandbox --disable-gpu --disable-software-rasterizer "
             "--disable-dev-shm-usage --disable-setuid-sandbox "
             "--disable-features=NetworkService,NetworkServiceInProcess "
+            f"--remote-debugging-address=0.0.0.0 "
+            f"--remote-debugging-port=9222 "
+            
             f"{url_q}; echo __DONE__:$?"
         )
 
         with self.ht_runner.lock:
             self.ht_runner.send_input(cmd + "\r")
             code = self.ht_runner.wait_for_done_marker("__DONE__", timeout=300.0)
+            if code is None:
+                self._cleanup_after_timeout()
+                return ArchiveResult(success=False, exit_code=None, saved_path=None)
 
         if code is None:
             return ArchiveResult(success=False, exit_code=None, saved_path=None)
@@ -57,3 +75,13 @@ class ScreenshotArchiver(BaseArchiver):
             exit_code=code,
             saved_path=str(out_path) if success else None,
         )
+
+    def _cleanup_after_timeout(self) -> None:
+        self.ht_runner.interrupt()
+        cleanup_cmd = (
+            "pkill -f 'chromium' >/dev/null 2>&1 || true; "
+            "pkill -f 'chrome' >/dev/null 2>&1 || true; "
+            "echo __CLEANUP__:0"
+        )
+        self.ht_runner.send_input(cleanup_cmd + "\r")
+        self.ht_runner.wait_for_done_marker("__CLEANUP__", timeout=15.0)

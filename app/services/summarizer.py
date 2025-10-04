@@ -387,7 +387,7 @@ class SummaryService:
         return out
 
     async def _invoke_model_async(
-        self, aclient: "AsyncInferenceClient", prompt: str
+        self, aclient: AsyncInferenceClient, prompt: str
     ) -> Optional[SummaryLLMOutput]:
         try:
             full_prompt = self._apply_instructions(prompt)
