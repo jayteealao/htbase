@@ -1,0 +1,103 @@
+"""Factory for creating and registering archivers."""
+
+from __future__ import annotations
+
+import logging
+from typing import TYPE_CHECKING, Dict, Type
+
+if TYPE_CHECKING:
+    from core.config import AppSettings
+    from core.ht_runner import HTRunner
+    from archivers.base import BaseArchiver
+
+logger = logging.getLogger(__name__)
+
+
+class ArchiverFactory:
+    """Factory for creating and registering archivers.
+
+    Provides a centralized registry for archiver classes and handles
+    their instantiation with proper dependency injection.
+    """
+
+    def __init__(self, settings: "AppSettings", ht_runner: "HTRunner"):
+        """Initialize the factory with required dependencies.
+
+        Args:
+            settings: Application settings
+            ht_runner: HTRunner instance for command execution
+        """
+        self.settings = settings
+        self.ht_runner = ht_runner
+        self._registry: Dict[str, Type["BaseArchiver"]] = {}
+
+    def register(self, name: str, archiver_class: Type["BaseArchiver"]) -> None:
+        """Register an archiver class.
+
+        Args:
+            name: Unique name for the archiver (e.g., "monolith", "pdf")
+            archiver_class: The archiver class to register
+
+        Raises:
+            ValueError: If an archiver with this name is already registered
+        """
+        if name in self._registry:
+            logger.warning(
+                "Overwriting existing archiver registration",
+                extra={"archiver_name": name, "class": archiver_class.__name__}
+            )
+        self._registry[name] = archiver_class
+        logger.debug("Registered archiver", extra={"name": name, "class": archiver_class.__name__})
+
+    def create(self, name: str) -> "BaseArchiver":
+        """Create an archiver instance by name.
+
+        Args:
+            name: Name of the archiver to create
+
+        Returns:
+            Instantiated archiver
+
+        Raises:
+            ValueError: If no archiver with this name is registered
+        """
+        archiver_class = self._registry.get(name)
+        if not archiver_class:
+            raise ValueError(
+                f"Unknown archiver: {name}. "
+                f"Available archivers: {', '.join(self._registry.keys())}"
+            )
+
+        logger.debug("Creating archiver instance", extra={"name": name})
+        return archiver_class(ht_runner=self.ht_runner, settings=self.settings)
+
+    def create_all(self) -> Dict[str, "BaseArchiver"]:
+        """Create instances of all registered archivers.
+
+        Returns:
+            Dictionary mapping archiver names to instances
+        """
+        logger.info(
+            "Creating all registered archivers",
+            extra={"archiver_count": len(self._registry)}
+        )
+        return {name: self.create(name) for name in self._registry}
+
+    def list_registered(self) -> list[str]:
+        """Get list of all registered archiver names.
+
+        Returns:
+            List of archiver names in registration order
+        """
+        return list(self._registry.keys())
+
+    def is_registered(self, name: str) -> bool:
+        """Check if an archiver is registered.
+
+        Args:
+            name: Archiver name to check
+
+        Returns:
+            True if registered, False otherwise
+        """
+        return name in self._registry

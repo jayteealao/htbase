@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from api import router as api_router
 from web import router as web_router
+from archivers.factory import ArchiverFactory
 from archivers.monolith import MonolithArchiver
 from archivers.singlefile_cli import SingleFileCLIArchiver
 from archivers.screenshot import ScreenshotArchiver
@@ -70,17 +71,20 @@ async def lifespan_context(app: FastAPI):
     logger.info(f"Summarization enabled: {settings.enable_summarization}")
     if settings.start_ht:
         ht_runner.start()
-    # Register archivers on app state
-    app.state.archivers = {
-        # Registration order matters when using the "all" pipeline
-        # Run readability first so its DOM dump can be reused by monolith.
-        "readability": ReadabilityArchiver(ht_runner=ht_runner, settings=settings),
-        "monolith": MonolithArchiver(ht_runner=ht_runner, settings=settings),
-        "singlefile-cli": SingleFileCLIArchiver(ht_runner=ht_runner, settings=settings),
-        # Run Chromium-derived captures last
-        "screenshot": ScreenshotArchiver(ht_runner=ht_runner, settings=settings),
-        "pdf": PDFArchiver(ht_runner=ht_runner, settings=settings),
-    }
+
+    # Register archivers using factory
+    # Registration order matters when using the "all" pipeline
+    # Run readability first so its DOM dump can be reused by monolith.
+    factory = ArchiverFactory(settings, ht_runner)
+    factory.register("readability", ReadabilityArchiver)
+    factory.register("monolith", MonolithArchiver)
+    factory.register("singlefile-cli", SingleFileCLIArchiver)
+    # Run Chromium-derived captures last
+    factory.register("screenshot", ScreenshotArchiver)
+    factory.register("pdf", PDFArchiver)
+
+    app.state.archivers = factory.create_all()
+    app.state.archiver_factory = factory  # Store factory for potential dynamic registration
     summarization_queue: "queue.Queue[SummarizeTask]" = queue.Queue()
     
     # Expose ht runner on app state for APIs
@@ -109,11 +113,11 @@ async def lifespan_context(app: FastAPI):
     )
     try:
         logger.info("Resuming any pending artifacts...")
-        # resumed_tasks = app.state.task_manager.resume_pending_artifacts()
-        # if resumed_tasks:
-        #     logger.info(
-        #         f"Recovered pending artifacts across {len(resumed_tasks)} task(s)."
-        #     )
+        resumed_tasks = app.state.task_manager.resume_pending_artifacts()
+        if resumed_tasks:
+            logger.info(
+                f"Recovered pending artifacts across {len(resumed_tasks)} task(s)."
+            )
     except Exception as exc:
         logger.error(f"Failed to resume pending artifacts: {exc}")
     try:
