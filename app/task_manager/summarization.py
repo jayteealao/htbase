@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import logging
 import queue
-import traceback
 from dataclasses import dataclass
 from typing import Optional
 
@@ -13,6 +13,8 @@ from db.repository import (
 from services.summarizer import SummaryService
 
 from .base import BackgroundTaskManager
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -37,27 +39,36 @@ class SummarizationTaskManager(BackgroundTaskManager[SummarizeTask]):
     def process(self, task: SummarizeTask) -> None:  # type: ignore[override]
         summarizer = self._summarizer
         if summarizer is None or not summarizer.is_enabled:
-            print(
-                "Summarization worker disabled; dropping task | "
-                f"archived_url_id={task.archived_url_id} "
-                f"rowid={task.rowid} reason={task.reason}"
+            logger.warning(
+                "Summarization worker disabled; dropping task",
+                extra={
+                    "archived_url_id": task.archived_url_id,
+                    "rowid": task.rowid,
+                    "reason": task.reason
+                }
             )
             return
 
         try:
-            print(
-                "Executing background summarization | "
-                f"archived_url_id={task.archived_url_id} "
-                f"rowid={task.rowid} reason={task.reason}"
+            logger.info(
+                "Executing background summarization",
+                extra={
+                    "archived_url_id": task.archived_url_id,
+                    "rowid": task.rowid,
+                    "reason": task.reason
+                }
             )
             summarizer.generate_for_archived_url(task.archived_url_id)
         except Exception:
-            print(
-                "Failed to run background summarization | "
-                f"archived_url_id={task.archived_url_id} "
-                f"rowid={task.rowid} reason={task.reason}"
+            logger.error(
+                "Failed to run background summarization",
+                extra={
+                    "archived_url_id": task.archived_url_id,
+                    "rowid": task.rowid,
+                    "reason": task.reason
+                },
+                exc_info=True
             )
-            traceback.print_exc()
 
 
 class SummarizationCoordinator:
@@ -103,17 +114,17 @@ class SummarizationCoordinator:
             if target_id is None and rowid is not None:
                 artifact = get_save_by_rowid(self.settings.resolved_db_path, rowid)
                 if artifact is None:
-                    print(
-                        "Skipping summarization: artifact missing | "
-                        f"rowid={rowid} reason={resolved_reason}"
+                    logger.warning(
+                        "Skipping summarization: artifact missing",
+                        extra={"rowid": rowid, "reason": resolved_reason}
                     )
                     return False
                 target_id = artifact.archived_url_id
 
             if target_id is None:
-                print(
-                    "Skipping summarization: archived_url unresolved | "
-                    f"rowid={rowid} reason={resolved_reason}"
+                logger.warning(
+                    "Skipping summarization: archived_url unresolved",
+                    extra={"rowid": rowid, "reason": resolved_reason}
                 )
                 return False
 
@@ -122,18 +133,25 @@ class SummarizationCoordinator:
             )
             text = getattr(metadata, "text", None)
             if metadata is None or not text or not str(text).strip():
-                print(
-                    "Skipping summarization: metadata unavailable | "
-                    f"archived_url_id={target_id} rowid={rowid} "
-                    f"reason={resolved_reason}"
+                logger.warning(
+                    "Skipping summarization: metadata unavailable",
+                    extra={
+                        "archived_url_id": target_id,
+                        "rowid": rowid,
+                        "reason": resolved_reason
+                    }
                 )
                 return False
 
             inline = not self._use_background if force_inline is None else force_inline
             if inline:
-                print(
-                    "Triggering summarization inline | "
-                    f"archived_url_id={target_id} rowid={rowid} reason={resolved_reason}"
+                logger.info(
+                    "Triggering summarization inline",
+                    extra={
+                        "archived_url_id": target_id,
+                        "rowid": rowid,
+                        "reason": resolved_reason
+                    }
                 )
                 summarizer.generate_for_archived_url(target_id)
                 return True
@@ -144,16 +162,23 @@ class SummarizationCoordinator:
                 reason=resolved_reason,
             )
             self._queue.put(task)
-            print(
-                "Enqueued summarization | "
-                f"archived_url_id={target_id} rowid={rowid} reason={resolved_reason}"
+            logger.info(
+                "Enqueued summarization",
+                extra={
+                    "archived_url_id": target_id,
+                    "rowid": rowid,
+                    "reason": resolved_reason
+                }
             )
             return True
         except Exception:
-            print(
-                "Failed to schedule summarization | "
-                f"archived_url_id={archived_url_id} rowid={rowid} "
-                f"reason={resolved_reason}"
+            logger.error(
+                "Failed to schedule summarization",
+                extra={
+                    "archived_url_id": archived_url_id,
+                    "rowid": rowid,
+                    "reason": resolved_reason
+                },
+                exc_info=True
             )
-            traceback.print_exc()
             return False

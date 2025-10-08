@@ -1,6 +1,38 @@
 import glob
 import re
 from pathlib import Path
+from urllib.parse import urlparse
+
+
+PAYWALL_BYPASS_SUFFIXES: tuple[str, ...] = (
+    "medium.com",
+    "proandroiddev.com",
+)
+
+
+def rewrite_paywalled_url(url: str) -> str:
+    """Rewrite Medium-like URLs to their freedium mirror when applicable."""
+    raw_url = (url or "").strip()
+    if not raw_url:
+        return raw_url
+
+    try:
+        parsed = urlparse(raw_url)
+    except ValueError:
+        return raw_url
+
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return raw_url
+
+    if host == "freedium.cfd":
+        return raw_url
+
+    for suffix in PAYWALL_BYPASS_SUFFIXES:
+        if host == suffix or host.endswith(f'.{suffix}'):
+            return f"https://freedium.cfd/{raw_url}"
+
+    return raw_url
 
 
 def sanitize_filename(name: str) -> str:

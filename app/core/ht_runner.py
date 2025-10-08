@@ -1,4 +1,5 @@
 import json
+import logging
 import queue
 import re
 import subprocess
@@ -8,6 +9,8 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, TextIO, Union
+
+logger = logging.getLogger(__name__)
 
 
 class HTRunner:
@@ -141,10 +144,15 @@ class HTRunner:
             Exit code as integer, or None if timed out
         """
         with self.lock:
+            logger.info("Executing command via ht", extra={"command": cmd, "timeout": timeout})
             self.send_input(cmd + "\r")
             code = self.wait_for_done_marker(marker, timeout=timeout)
-            if code is None and cleanup_on_timeout:
-                cleanup_on_timeout()
+            if code is None:
+                logger.warning("Command timed out", extra={"command": cmd, "timeout": timeout})
+                if cleanup_on_timeout:
+                    cleanup_on_timeout()
+            else:
+                logger.info("Command completed", extra={"command": cmd, "exit_code": code})
             return code
 
     def stop(self, timeout: float = 5.0):

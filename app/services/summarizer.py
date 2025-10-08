@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
+import logging
 import re
-import traceback
 from dataclasses import dataclass
 from textwrap import dedent
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -19,6 +19,8 @@ from db.repository import (
     get_metadata_for_archived_url,
     upsert_article_summary,
 )
+
+logger = logging.getLogger(__name__)
 
 class SummaryLLMOutput(BaseModel):
     lede: str = Field(..., min_length=1)
@@ -46,7 +48,7 @@ class SummaryService:
         )
 
         if not self.settings.enable_summarization:
-            print("SummaryService disabled: feature flag disabled")
+            logger.info("SummaryService disabled: feature flag disabled")
             return
 
         if not self._init_chunker():
@@ -78,9 +80,8 @@ class SummaryService:
             self._chunker = TokenChunker(  # type: ignore[call-arg]
                 chunk_size=self.settings.summary_chunk_size
             )
-        except Exception:
-            print("Failed to initialise TokenChunker; disabling summarization")
-            traceback.print_exc()
+        except Exception as exc:
+            logger.error("Failed to initialise TokenChunker; disabling summarization", exc_info=True)
             return False
         return True
 
@@ -98,9 +99,8 @@ class SummaryService:
 
             self._hf_grammar = self._build_summary_json_grammar()
             return True
-        except Exception:
-            print("Failed to initialise Hugging Face clients; disabling summarization")
-            traceback.print_exc()
+        except Exception as exc:
+            logger.error("Failed to initialise Hugging Face clients; disabling summarization", exc_info=True)
             return False
 
     def _build_instructions(self) -> str:
@@ -141,7 +141,7 @@ class SummaryService:
         if not self.is_enabled:
             return False
 
-        print(f"Starting summarization run | archived_url_id={archived_url_id}")
+        logger.info("Starting summarization run", extra={"archived_url_id": archived_url_id})
         prepared = self._prepare_summary_context(archived_url_id)
         if not prepared:
             return False
@@ -149,12 +149,13 @@ class SummaryService:
         summary_inputs, base_text = prepared
         chunk_texts = self._segment_article(base_text) or [base_text]
 
-        print(
-            "Prepared article text | "
-            f"archived_url_id={archived_url_id} "
-            f"chunk_count={len(chunk_texts)} "
-            f"chunk_size={self.settings.summary_chunk_size}"
-
+        logger.info(
+            "Prepared article text",
+            extra={
+                "archived_url_id": archived_url_id,
+                "chunk_count": len(chunk_texts),
+                "chunk_size": self.settings.summary_chunk_size
+            }
         )
 
         generated = self._generate_outputs(
@@ -181,8 +182,9 @@ class SummaryService:
             self.settings.resolved_db_path, archived_url_id
         )
         if metadata is None or not (metadata.text and metadata.text.strip()):
-            print(
-                f"Skipping summarization: no metadata text | archived_url_id={archived_url_id}"
+            logger.warning(
+                "Skipping summarization: no metadata text",
+                extra={"archived_url_id": archived_url_id}
             )
             return None
 
@@ -208,18 +210,18 @@ class SummaryService:
         if len(chunk_texts) == 1:
             result = self._run_single_chunk(chunk_texts[0], summary_inputs)
             if result is None:
-                print(
-                    "WARNING: Summarization aborted: LLM call failed | "
-                    f"archived_url_id={archived_url_id}"
+                logger.warning(
+                    "Summarization aborted: LLM call failed",
+                    extra={"archived_url_id": archived_url_id}
                 )
                 return None
             return [result], result
 
         done = self._run_multi_chunk(chunk_texts, summary_inputs)
         if not done:
-            print(
-                "WARNING: Summarization aborted: async chunk or reduce step failed | "
-                f"archived_url_id={archived_url_id}"
+            logger.warning(
+                "Summarization aborted: async chunk or reduce step failed",
+                extra={"archived_url_id": archived_url_id}
             )
             return None
         return done
@@ -303,7 +305,7 @@ class SummaryService:
     # ------------------------------------------------------------------
     def _build_single_prompt(self, chunk: str, info: SummaryInputs) -> str:
         header = self._format_header(info, position="complete article")
-        print(f"Single prompt header: {header}")
+        logger.debug("Single prompt header", extra={"header": header})
         return dedent(
             f"""
             {header}
@@ -320,7 +322,7 @@ class SummaryService:
         self, chunk: str, info: SummaryInputs, index: int, total: int
     ) -> str:
         header = self._format_header(info, position=f"chunk {index} of {total}")
-        print(f"Chunk prompt header: {header}")
+        logger.debug("Chunk prompt header", extra={"header": header, "index": index, "total": total})
         return dedent(
             f"""
             {header}
@@ -338,7 +340,7 @@ class SummaryService:
     ) -> str:
         header = self._format_header(info, position="chunk analyses")
         pieces = []
-        print(f"Reduce prompt header: {header}")
+        logger.debug("Reduce prompt header", extra={"header": header, "chunk_count": len(chunk_outputs)})
         for idx, output in enumerate(chunk_outputs, start=1):
             section = dedent(
                 f"""
@@ -363,8 +365,9 @@ class SummaryService:
         published = f"Published: {info.published}" if info.published else ""
         url = f"URL: {info.url}" if info.url else ""
         parts = [part for part in (f"Article title: {title}", position, url, published) if part]
-        print(f"Formatted header: {' | '.join(parts)}")
-        return " | ".join(parts)
+        header = " | ".join(parts)
+        logger.debug("Formatted header", extra={"header": header, "position": position})
+        return header
 
     # ------------------------------------------------------------------
     # Core utilities
@@ -375,15 +378,14 @@ class SummaryService:
         try:
             chunks = self._chunker(text)
         except Exception:
-            print("TokenChunker failed; falling back to raw text")
-            traceback.print_exc()
+            logger.warning("TokenChunker failed; falling back to raw text", exc_info=True)
             return [text]
         out: List[str] = []
         for chunk in chunks:
             chunk_text = getattr(chunk, "text", None)
             if chunk_text and chunk_text.strip():
                 out.append(chunk_text.strip())
-        print(f"Segmented article into {len(out)} chunks")
+        logger.debug("Segmented article", extra={"chunk_count": len(out)})
         return out
 
     async def _invoke_model_async(
@@ -394,12 +396,11 @@ class SummaryService:
             raw, last_err = await self._generate_async(aclient, full_prompt)
             if raw is None:
                 if last_err:
-                    print(f"Async generation failed after variants: {last_err}")
+                    logger.error("Async generation failed after variants", extra={"error": str(last_err)}, exc_info=last_err)
                 return None
             return self._parse_llm_response(raw, label="Raw async")
         except Exception:
-            print("Async summarization model call failed")
-            traceback.print_exc()
+            logger.error("Async summarization model call failed", exc_info=True)
             return None
 
     def _apply_instructions(self, prompt: str) -> str:
@@ -466,10 +467,10 @@ class SummaryService:
     ) -> Optional[SummaryLLMOutput]:
         text = self._coerce_generated_text(raw)
         try:
-            print(f"{label} model output: {text}")
+            logger.debug("Model output received", extra={"label": label, "output": text})
             return SummaryLLMOutput.model_validate_json(text)
         except ValidationError:
-            print("Model output failed schema validation; attempting extraction")
+            logger.warning("Model output failed schema validation; attempting extraction", extra={"label": label})
             parsed = self._extract_summary_from_text(text)
             if parsed is not None:
                 return parsed
@@ -642,7 +643,7 @@ class SummaryService:
             )
         summary_text = summary_text.strip()
         if not summary_text:
-            print(f"DEBUG: No summary generated for archived_url_id={archived_url_id}; aborting")
+            logger.warning("No summary generated; aborting", extra={"archived_url_id": archived_url_id})
             return False
 
         # Store the lede in the bullet_points column as a single-item list
@@ -657,11 +658,12 @@ class SummaryService:
             bullet_points=bullets,
             model_name=self.settings.summarization_model,
         )
-        print(
-            "Completed summarization run | "
-            f"archived_url_id={archived_url_id} "
-            f"summary_length={len(summary_text)}"
-
+        logger.info(
+            "Completed summarization run",
+            extra={
+                "archived_url_id": archived_url_id,
+                "summary_length": len(summary_text)
+            }
         )
         return True
 

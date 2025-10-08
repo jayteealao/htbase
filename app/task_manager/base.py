@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import logging
 import queue
 import threading
 from abc import ABC, abstractmethod
 from typing import Generic, Optional, TypeVar
 
+logger = logging.getLogger(__name__)
 
 TaskT = TypeVar("TaskT")
 
@@ -24,25 +26,25 @@ class BackgroundTaskManager(ABC, Generic[TaskT]):
     def start(self) -> None:
         with self._lock:
             if self._worker and self._worker.is_alive():
-                print(f'[{self.__class__.__name__}] Worker already running; skipping start')
+                logger.debug("Worker already running; skipping start", extra={"manager": self.__class__.__name__})
                 return
-            print(f'[{self.__class__.__name__}] Starting worker thread')
+            logger.info("Starting worker thread", extra={"manager": self.__class__.__name__})
             self._worker = threading.Thread(target=self._run, daemon=True)
             self._worker.start()
 
     def submit(self, task: TaskT) -> None:
-        print(f'[{self.__class__.__name__}] Submitting task: {task}')
+        logger.debug("Submitting task", extra={"manager": self.__class__.__name__, "task": str(task)})
         self._queue.put(task)
         self.start()
 
     def _run(self) -> None:
-        print(f'[{self.__class__.__name__}] Worker loop started')
+        logger.info("Worker loop started", extra={"manager": self.__class__.__name__})
         while True:
             task = self._queue.get()
             try:
-                print(f'[{self.__class__.__name__}] Processing task: {task}')
+                logger.debug("Processing task", extra={"manager": self.__class__.__name__, "task": str(task)})
                 self.process(task)
-                print(f'[{self.__class__.__name__}] Finished task: {task}')
+                logger.debug("Finished task", extra={"manager": self.__class__.__name__, "task": str(task)})
             finally:
                 self._queue.task_done()
 
