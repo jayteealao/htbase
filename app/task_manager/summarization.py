@@ -6,10 +6,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from core.config import AppSettings
-from db.repository import (
-    get_metadata_for_archived_url,
-    get_save_by_rowid,
-)
+from db import ArchiveArtifactRepository, UrlMetadataRepository
 from services.summarizer import SummaryService
 
 from .base import BackgroundTaskManager
@@ -110,9 +107,12 @@ class SummarizationCoordinator:
 
         resolved_reason = reason or "unspecified"
         try:
+            artifact_repo = ArchiveArtifactRepository(self.settings.resolved_db_path)
+            metadata_repo = UrlMetadataRepository(self.settings.resolved_db_path)
+
             target_id = archived_url_id
             if target_id is None and rowid is not None:
-                artifact = get_save_by_rowid(self.settings.resolved_db_path, rowid)
+                artifact = artifact_repo.get_by_id(rowid)
                 if artifact is None:
                     logger.warning(
                         "Skipping summarization: artifact missing",
@@ -128,9 +128,7 @@ class SummarizationCoordinator:
                 )
                 return False
 
-            metadata = get_metadata_for_archived_url(
-                self.settings.resolved_db_path, target_id
-            )
+            metadata = metadata_repo.get_by_archived_url(target_id)
             text = getattr(metadata, "text", None)
             if metadata is None or not text or not str(text).strip():
                 logger.warning(

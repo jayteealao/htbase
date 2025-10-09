@@ -8,14 +8,10 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from core.config import AppSettings
 from core.utils import check_url_archivability, rewrite_paywalled_url, sanitize_filename, get_directory_size, extract_original_url
-from db.repository import (
-    finalize_save_result,
-    find_existing_success_save,
-    insert_pending_save,
-    is_already_saved_success,
-    list_artifacts_by_status,
-    record_http_failure,
-    update_total_size_for_url,
+from db import (
+    ArchiveArtifactRepository,
+    ArchivedUrlRepository,
+    UrlMetadataRepository,
 )
 from models import ArchiveResult
 
@@ -60,6 +56,11 @@ class ArchiverTaskManager(BackgroundTaskManager[BatchTask]):
         self.settings = settings
         self.archivers = archivers
         self._summarization = summarization
+
+        # Repository instances
+        self.artifact_repo = ArchiveArtifactRepository(settings.resolved_db_path)
+        self.url_repo = ArchivedUrlRepository(settings.resolved_db_path)
+        self.metadata_repo = UrlMetadataRepository(settings.resolved_db_path)
         sources = getattr(settings, "summary_source_archivers", None) or []
         self.summary_source_archivers: set[str] = {
             str(name).strip() for name in sources if str(name).strip()
@@ -69,6 +70,26 @@ class ArchiverTaskManager(BackgroundTaskManager[BatchTask]):
             str(name).strip() for name in resolved_priorities if str(name).strip()
         ]
         self.requeue_chunk_size = max(int(requeue_chunk_size), 1)
+
+    def _insert_pending_artifact(
+        self, item_id: str, url: str, task_id: str, archiver_name: str, name: Optional[str] = None
+    ) -> int:
+        """Create or update artifact record as pending.
+
+        Handles the two-step process of creating archived_url then artifact.
+        Returns artifact ID.
+        """
+        # Get or create the URL record
+        archived_url = self.url_repo.get_or_create(url=url, item_id=item_id, name=name)
+
+        # Get or create the artifact
+        from db.schemas import ArtifactStatus
+        artifact = self.artifact_repo.get_or_create(
+            archived_url_id=archived_url.id,
+            archiver=archiver_name,
+            task_id=task_id,
+        )
+        return artifact.id
 
     def _resolve_priorities(self, priorities: Optional[Sequence[str]]) -> List[str]:
         source = priorities if priorities is not None else self.requeue_priorities
@@ -103,7 +124,7 @@ class ArchiverTaskManager(BackgroundTaskManager[BatchTask]):
             for arch_name in archiver_order:
                 # Check for existing saves against ORIGINAL URL only (what's stored in DB)
                 if self.settings.skip_existing_saves:
-                    already_saved = is_already_saved_success(
+                    already_saved = self.artifact_repo.find_successful(
                         self.settings.resolved_db_path,
                         item_id=item_id,
                         url=original_url,  # Changed: check original URL
@@ -114,7 +135,7 @@ class ArchiverTaskManager(BackgroundTaskManager[BatchTask]):
                         continue
 
                 # Store ORIGINAL URL in database, but we'll use rewritten URL for archiving
-                rowid = insert_pending_save(
+                rowid = self._insert_pending_artifact(
                     db_path=self.settings.resolved_db_path,
                     item_id=item_id,
                     url=original_url,  # Changed: store original URL
@@ -207,7 +228,7 @@ class ArchiverTaskManager(BackgroundTaskManager[BatchTask]):
             return []
 
         try:
-            pending_records = list_artifacts_by_status(
+            pending_records = self.artifact_repo.list_by_status(
                 self.settings.resolved_db_path,
                 target_statuses,
             )
@@ -260,7 +281,7 @@ class ArchiverTaskManager(BackgroundTaskManager[BatchTask]):
                     extra={"archiver": archiver_name, "artifact_id": artifact_id}
                 )
                 if artifact_id is not None:
-                    finalize_save_result(
+                    self.artifact_repo.finalize_result(
                         db_path=self.settings.resolved_db_path,
                         rowid=int(artifact_id),
                         success=False,
@@ -332,7 +353,7 @@ class ArchiverTaskManager(BackgroundTaskManager[BatchTask]):
                     )
                 else:
                     # Only create new pending save if no existing rowid
-                    rowid = insert_pending_save(
+                    rowid = self._insert_pending_artifact(
                         db_path=self.settings.resolved_db_path,
                         item_id=safe_item_id,
                         url=original_url,  # Changed: store original URL
@@ -407,7 +428,7 @@ class ArchiverTaskManager(BackgroundTaskManager[BatchTask]):
             archiver = self.archivers.get(item.archiver_name)
             if archiver is None:
                 logger.error("Archiver missing", extra={"archiver": item.archiver_name, "rowid": item.rowid})
-                finalize_save_result(
+                self.artifact_repo.finalize_result(
                     db_path=self.settings.resolved_db_path,
                     rowid=item.rowid,
                     success=False,
@@ -422,13 +443,13 @@ class ArchiverTaskManager(BackgroundTaskManager[BatchTask]):
                 if not url_check.should_archive:
                     logger.warning("URL returned 404", extra={"rowid": item.rowid, "url": fetch_url})
                     try:
-                        record_http_failure(
+                        self.artifact_repo.finalize_result(
                             db_path=self.settings.resolved_db_path,
                             rowid=item.rowid,
                             exit_code=404,
                         )
                     except Exception:
-                        finalize_save_result(
+                        self.artifact_repo.finalize_result(
                             db_path=self.settings.resolved_db_path,
                             rowid=item.rowid,
                             success=False,
@@ -441,7 +462,7 @@ class ArchiverTaskManager(BackgroundTaskManager[BatchTask]):
                     existing = None
 
                     # First check: Database lookup by ORIGINAL URL
-                    existing = find_existing_success_save(
+                    existing = self.artifact_repo.find_successful(
                         self.settings.resolved_db_path,
                         item_id=item.item_id,
                         url=item.url,  # Original URL (what's stored in DB)
@@ -487,7 +508,7 @@ class ArchiverTaskManager(BackgroundTaskManager[BatchTask]):
                                     "saved_path": existing.saved_path
                                 }
                             )
-                            finalize_save_result(
+                            self.artifact_repo.finalize_result(
                                 db_path=self.settings.resolved_db_path,
                                 rowid=item.rowid,
                                 success=True,
@@ -525,8 +546,6 @@ class ArchiverTaskManager(BackgroundTaskManager[BatchTask]):
                 archived_url_id = None
                 if result.success and result.saved_path:
                     from pathlib import Path
-                    from db.repository import get_save_by_rowid
-
                     try:
                         saved_path = Path(result.saved_path)
                         # Calculate size of the archiver output directory
@@ -544,7 +563,7 @@ class ArchiverTaskManager(BackgroundTaskManager[BatchTask]):
                             )
 
                         # Get archived_url_id for updating total size
-                        artifact = get_save_by_rowid(self.settings.resolved_db_path, item.rowid)
+                        artifact = self.artifact_repo.get_by_id( item.rowid)
                         if artifact:
                             archived_url_id = artifact.archived_url_id
                     except Exception as exc:
@@ -553,7 +572,7 @@ class ArchiverTaskManager(BackgroundTaskManager[BatchTask]):
                             extra={"rowid": item.rowid, "error": str(exc)}
                         )
 
-                finalize_save_result(
+                self.artifact_repo.finalize_result(
                     db_path=self.settings.resolved_db_path,
                     rowid=item.rowid,
                     success=result.success,
@@ -565,7 +584,7 @@ class ArchiverTaskManager(BackgroundTaskManager[BatchTask]):
                 # Update total size for the URL
                 if archived_url_id is not None:
                     try:
-                        update_total_size_for_url(
+                        self.url_repo.update_total_size(
                             self.settings.resolved_db_path,
                             archived_url_id=archived_url_id
                         )
@@ -587,13 +606,11 @@ class ArchiverTaskManager(BackgroundTaskManager[BatchTask]):
                 )
 
                 try:
-                    from db.repository import insert_save_metadata
-
                     if (
                         getattr(result, "metadata", None)
                         and item.archiver_name == "readability"
                     ):
-                        insert_save_metadata(
+                        self.metadata_repo.upsert(
                             db_path=self.settings.resolved_db_path,
                             save_rowid=item.rowid,
                             data=result.metadata,  # type: ignore[arg-type]
@@ -614,7 +631,7 @@ class ArchiverTaskManager(BackgroundTaskManager[BatchTask]):
                     extra={"rowid": item.rowid, "archiver": item.archiver_name, "error": str(exc)},
                     exc_info=True
                 )
-                finalize_save_result(
+                self.artifact_repo.finalize_result(
                     db_path=self.settings.resolved_db_path,
                     rowid=item.rowid,
                     success=False,

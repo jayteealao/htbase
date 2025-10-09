@@ -5,7 +5,7 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException
 
 from core.config import AppSettings, get_settings
-from db.repository import get_task_rows
+from db import ArchiveArtifactRepository
 from models import TaskStatusResponse, TaskItemStatus
 
 
@@ -14,7 +14,8 @@ router = APIRouter()
 
 @router.get("/tasks/{task_id}", response_model=TaskStatusResponse)
 def get_task_status(task_id: str, settings: AppSettings = Depends(get_settings)):
-    rows = get_task_rows(settings.resolved_db_path, task_id)
+    artifact_repo = ArchiveArtifactRepository(settings.resolved_db_path)
+    rows = artifact_repo.list_by_task_id(task_id)
     if not rows:
         raise HTTPException(status_code=404, detail="task not found")
     items: List[TaskItemStatus] = []

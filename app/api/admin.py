@@ -8,15 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from core.config import AppSettings, get_settings
 
 logger = logging.getLogger(__name__)
-from db.repository import (
-    list_saves,
-    get_save_by_rowid,
-    get_saves_by_item_id,
-    get_saves_by_url,
-    delete_saves_by_rowids,
-    get_artifacts_by_ids,
-    list_artifacts_by_status,
-)
+from db import ArchiveArtifactRepository
 from models import DeleteResponse, SummarizeRequest, SummarizeResponse
 from core.utils import sanitize_filename
 from pydantic import BaseModel, Field
@@ -58,7 +50,8 @@ def list_saves_endpoint(
     offset: int = 0,
     settings: AppSettings = Depends(get_settings),
 ):
-    rows = list_saves(settings.resolved_db_path, limit=limit, offset=offset)
+    artifact_repo = ArchiveArtifactRepository(settings.resolved_db_path)
+    rows = artifact_repo.list_with_pagination(limit=limit, offset=offset)
     # Serialize and enrich
     out: List[Dict[str, object]] = []
     from pathlib import Path
@@ -121,6 +114,8 @@ def requeue_saves(
     if task_manager is None:
         raise HTTPException(status_code=500, detail="task manager not initialized")
 
+    artifact_repo = ArchiveArtifactRepository(settings.resolved_db_path)
+
     try:
         payload_snapshot = payload.model_dump()  # type: ignore[attr-defined]
     except AttributeError:
@@ -135,12 +130,12 @@ def requeue_saves(
     pull_all = payload.include_all or (payload.status is not None and not payload.artifact_ids)
 
     if payload.artifact_ids:
-        fetched_by_id = get_artifacts_by_ids(settings.resolved_db_path, payload.artifact_ids)
+        fetched_by_id = artifact_repo.get_by_ids( payload.artifact_ids)
         logger.info(f"Loaded artifacts by id | requested={len(payload.artifact_ids)} found={len(fetched_by_id)}")
         artifacts.extend(fetched_by_id)
 
     if pull_all and payload.status:
-        fetched_by_status = list_artifacts_by_status(settings.resolved_db_path, [payload.status])
+        fetched_by_status = artifact_repo.list_by_status( [payload.status])
         logger.info(f"Loaded artifacts by status | status={payload.status} count={len(fetched_by_status)}")
         artifacts.extend(fetched_by_status)
 
@@ -195,25 +190,27 @@ def summarize_article(
     if summarization is None or not summarization.is_enabled:
         raise HTTPException(status_code=503, detail="summarizer unavailable")
 
+    artifact_repo = ArchiveArtifactRepository(settings.resolved_db_path)
+
     archived_url_id: Optional[int] = None
     rowid: Optional[int] = None
 
     if payload.rowid is not None:
-        row = get_save_by_rowid(settings.resolved_db_path, int(payload.rowid))
+        row = artifact_repo.get_by_id( int(payload.rowid))
         if row is None:
             raise HTTPException(status_code=404, detail="save not found")
         archived_url_id = row.archived_url_id
         rowid = int(row.id)
     elif payload.item_id:
         safe_id = sanitize_filename(payload.item_id.strip())
-        rows = get_saves_by_item_id(settings.resolved_db_path, safe_id)
+        rows = artifact_repo.list_by_item_id( safe_id)
         if not rows:
             raise HTTPException(status_code=404, detail="no saves for item_id")
         first = rows[0]
         archived_url_id = first.archived_url_id
         rowid = int(first.id)
     elif payload.url:
-        rows = get_saves_by_url(settings.resolved_db_path, str(payload.url))
+        rows = artifact_repo.list_by_url( str(payload.url))
         if not rows:
             raise HTTPException(status_code=404, detail="no saves for url")
         first = rows[0]
@@ -241,8 +238,9 @@ def delete_save(
     remove_files: bool = False,
     settings: AppSettings = Depends(get_settings),
 ):
+    artifact_repo = ArchiveArtifactRepository(settings.resolved_db_path)
     # Fetch the row to know what to delete
-    row = get_save_by_rowid(settings.resolved_db_path, rowid)
+    row = artifact_repo.get_by_id( rowid)
     if row is None:
         raise HTTPException(status_code=404, detail="save not found")
     to_delete = [int(rowid)]
@@ -250,7 +248,7 @@ def delete_save(
     errors: List[str] = []
 
     # Delete DB row first
-    deleted = delete_saves_by_rowids(settings.resolved_db_path, to_delete)
+    deleted = artifact_repo.delete_many( to_delete)
 
     # Optionally remove file from disk (best-effort)
     if remove_files and row.saved_path:
@@ -290,13 +288,14 @@ def delete_saves_by_item(
     remove_files: bool = False,
     settings: AppSettings = Depends(get_settings),
 ):
+    artifact_repo = ArchiveArtifactRepository(settings.resolved_db_path)
     item_id = sanitize_filename(item_id.strip())
-    rows = get_saves_by_item_id(settings.resolved_db_path, item_id)
+    rows = artifact_repo.list_by_item_id( item_id)
     if not rows:
         raise HTTPException(status_code=404, detail="no saves for item_id")
     rowids = [int(r.id) for r in rows]
     saved_paths = [r.saved_path for r in rows if r.saved_path]
-    deleted = delete_saves_by_rowids(settings.resolved_db_path, rowids)
+    deleted = artifact_repo.delete_many( rowids)
 
     removed_files: List[str] = []
     errors: List[str] = []
@@ -338,12 +337,13 @@ def delete_saves_by_url_endpoint(
     remove_files: bool = False,
     settings: AppSettings = Depends(get_settings),
 ):
-    rows = get_saves_by_url(settings.resolved_db_path, url)
+    artifact_repo = ArchiveArtifactRepository(settings.resolved_db_path)
+    rows = artifact_repo.list_by_url( url)
     if not rows:
         raise HTTPException(status_code=404, detail="no saves for url")
     rowids = [int(r.id) for r in rows]
     saved_paths = [r.saved_path for r in rows if r.saved_path]
-    deleted = delete_saves_by_rowids(settings.resolved_db_path, rowids)
+    deleted = artifact_repo.delete_many( rowids)
 
     removed_files: List[str] = []
     errors: List[str] = []

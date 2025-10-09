@@ -14,11 +14,7 @@ from huggingface_hub.errors import GenerationError
 from pydantic import BaseModel, Field, ValidationError
 
 from core.config import AppSettings
-from db.repository import (
-    get_archived_url_by_id,
-    get_metadata_for_archived_url,
-    upsert_article_summary,
-)
+from db import ArchivedUrlRepository, UrlMetadataRepository, ArticleSummaryRepository
 
 logger = logging.getLogger(__name__)
 
@@ -178,9 +174,10 @@ class SummaryService:
     def _prepare_summary_context(
         self, archived_url_id: int
     ) -> Optional[Tuple[SummaryInputs, str]]:
-        metadata = get_metadata_for_archived_url(
-            self.settings.resolved_db_path, archived_url_id
-        )
+        metadata_repo = UrlMetadataRepository(self.settings.resolved_db_path)
+        url_repo = ArchivedUrlRepository(self.settings.resolved_db_path)
+
+        metadata = metadata_repo.get_by_archived_url(archived_url_id)
         if metadata is None or not (metadata.text and metadata.text.strip()):
             logger.warning(
                 "Skipping summarization: no metadata text",
@@ -188,9 +185,7 @@ class SummaryService:
             )
             return None
 
-        article = get_archived_url_by_id(
-            self.settings.resolved_db_path, archived_url_id
-        )
+        article = url_repo.get_by_id(archived_url_id)
         summary_inputs = SummaryInputs(
             title=getattr(metadata, "title", None)
             or getattr(article, "name", None),
@@ -650,8 +645,8 @@ class SummaryService:
         lede_text = (final_output.lede or "").strip()
         bullets = [lede_text] if lede_text else None
 
-        upsert_article_summary(
-            self.settings.resolved_db_path,
+        summary_repo = ArticleSummaryRepository(self.settings.resolved_db_path)
+        summary_repo.upsert(
             archived_url_id=archived_url_id,
             summary_type="default",
             summary_text=summary_text,

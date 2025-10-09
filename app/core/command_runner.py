@@ -104,20 +104,19 @@ class CommandRunner:
         archiver: Optional[str],
     ) -> CommandResult:
         """Internal locked execution implementation."""
-        from db.repository import create_command_execution, append_command_output_line, finalize_command_execution
+        from db import CommandExecutionRepository
 
         start_time = datetime.now(timezone.utc)
 
         # Create execution record in database
-        with get_session() as db:
-            execution_id = create_command_execution(
-                db=db,
-                command=command,
-                start_time=start_time,
-                timeout=timeout,
-                archived_url_id=archived_url_id,
-                archiver=archiver,
-            )
+        cmd_repo = CommandExecutionRepository()
+        execution_id = cmd_repo.create_execution(
+            command=command,
+            start_time=start_time,
+            timeout=timeout,
+            archived_url_id=archived_url_id,
+            archiver=archiver,
+        )
 
         logger.info(
             f"Executing command (execution_id={execution_id})",
@@ -182,15 +181,13 @@ class CommandRunner:
                     stdout_lines.append(line)
                     combined_output.append(f"[stdout] {line}")
 
-                    with get_session() as db:
-                        append_command_output_line(
-                            db=db,
-                            execution_id=execution_id,
-                            stream="stdout",
-                            line=line,
-                            timestamp=timestamp,
-                            line_number=line_num,
-                        )
+                    cmd_repo.append_output_line(
+                        execution_id=execution_id,
+                        stream="stdout",
+                        line=line,
+                        timestamp=timestamp,
+                        line_number=line_num,
+                    )
 
                     if self.debug:
                         logger.debug(f"[stdout] {line}")
@@ -202,15 +199,13 @@ class CommandRunner:
                     stderr_lines.append(line)
                     combined_output.append(f"[stderr] {line}")
 
-                    with get_session() as db:
-                        append_command_output_line(
-                            db=db,
-                            execution_id=execution_id,
-                            stream="stderr",
-                            line=line,
-                            timestamp=timestamp,
-                            line_number=line_num,
-                        )
+                    cmd_repo.append_output_line(
+                        execution_id=execution_id,
+                        stream="stderr",
+                        line=line,
+                        timestamp=timestamp,
+                        line_number=line_num,
+                    )
 
                     if self.debug:
                         logger.debug(f"[stderr] {line}")
@@ -227,27 +222,23 @@ class CommandRunner:
             stderr_lines.append(error_msg)
             combined_output.append(f"[stderr] {error_msg}")
 
-            with get_session() as db:
-                append_command_output_line(
-                    db=db,
-                    execution_id=execution_id,
-                    stream="stderr",
-                    line=error_msg,
-                    timestamp=timestamp,
-                )
+            cmd_repo.append_output_line(
+                execution_id=execution_id,
+                stream="stderr",
+                line=error_msg,
+                timestamp=timestamp,
+            )
 
         # Finalize execution record
         end_time = datetime.now(timezone.utc)
         duration = (end_time - start_time).total_seconds()
 
-        with get_session() as db:
-            finalize_command_execution(
-                db=db,
-                execution_id=execution_id,
-                end_time=end_time,
-                exit_code=exit_code,
-                timed_out=timed_out,
-            )
+        cmd_repo.finalize_execution(
+            execution_id=execution_id,
+            end_time=end_time,
+            exit_code=exit_code,
+            timed_out=timed_out,
+        )
 
         logger.info(
             f"Command completed (execution_id={execution_id})",
@@ -287,14 +278,14 @@ class CommandRunner:
         Raises:
             ValueError: If execution_id not found
         """
-        from db.repository import get_command_execution, get_command_output_lines
+        from db import CommandExecutionRepository
 
-        with get_session() as db:
-            execution = get_command_execution(db=db, execution_id=execution_id)
-            if not execution:
-                raise ValueError(f"Command execution {execution_id} not found")
+        cmd_repo = CommandExecutionRepository()
+        execution = cmd_repo.get_by_id(execution_id)
+        if not execution:
+            raise ValueError(f"Command execution {execution_id} not found")
 
-            output_lines = get_command_output_lines(db=db, execution_id=execution_id)
+        output_lines = cmd_repo.get_output_lines(execution_id)
 
         # Reconstruct output lists
         stdout_lines = [line.line for line in output_lines if line.stream == "stdout"]

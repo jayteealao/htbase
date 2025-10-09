@@ -108,23 +108,11 @@ class SingleFileCLIArchiver(BaseArchiver, ChromiumArchiverMixin):
         if extra_q:
             sf_cmd += f" {extra_q}"
 
-        # Get archived_url_id for context linking
-        from db.session import get_session
-        from db.repository import get_archived_url_by_url
-
-        archived_url_id = None
-        try:
-            with get_session() as db:
-                archived_url = get_archived_url_by_url(db, url=url)
-                if archived_url:
-                    archived_url_id = archived_url.id
-        except Exception:
-            pass
-
+        # Execute command (archived_url_id context should be set by caller if needed)
         result = self.command_runner.execute(
             command=sf_cmd,
             timeout=300.0,
-            archived_url_id=archived_url_id,
+            archived_url_id=None,  # Could be passed from caller
             archiver=self.name,
         )
 

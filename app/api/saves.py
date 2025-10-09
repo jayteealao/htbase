@@ -11,16 +11,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 
 from core.config import AppSettings, get_settings
-from db.repository import (
-    init_db,
-    insert_save_result,
-    find_existing_success_save,
-    record_http_failure,
-    insert_save_metadata,
-    get_saves_by_item_id,
-    get_saves_by_url,
-    get_size_stats_by_archived_url_id,
-    get_archived_url_by_id,
+from db import (
+    ArchiveArtifactRepository,
+    ArchivedUrlRepository,
+    UrlMetadataRepository,
 )
 from models import (
     ArchiveResult,
@@ -72,7 +66,7 @@ def _collect_existing_artifacts(
 ) -> List[object]:
     if archiver != "all":
         try:
-            artifact = find_existing_success_save(
+            artifact = artifact_repo.find_successful(
                 settings.resolved_db_path,
                 item_id=safe_id or "",
                 url=url or "",
@@ -85,11 +79,11 @@ def _collect_existing_artifacts(
     artifacts: List[object] = []
     if safe_id:
         artifacts.extend(
-            get_saves_by_item_id(settings.resolved_db_path, item_id=safe_id)
+            artifact_repo.list_by_item_id( item_id=safe_id)
         )
     if url:
         artifacts.extend(
-            get_saves_by_url(settings.resolved_db_path, url=url)
+            artifact_repo.list_by_url( url=url)
         )
     return _latest_successful_artifacts(artifacts)
 
@@ -108,6 +102,11 @@ def _archive_with(
     except AttributeError:
         payload_snapshot = payload.dict()  # type: ignore[attr-defined]
     logger.info("Archive request received", extra={"archiver": archiver_name, "payload": payload_snapshot})
+
+    # Initialize repositories
+    artifact_repo = ArchiveArtifactRepository(settings.resolved_db_path)
+    url_repo = ArchivedUrlRepository(settings.resolved_db_path)
+    metadata_repo = UrlMetadataRepository(settings.resolved_db_path)
 
     item_id = payload.id.strip()
     if not item_id:
@@ -169,7 +168,7 @@ def _archive_with(
 
             # First check: Database lookup by URL
             try:
-                existing = find_existing_success_save(
+                existing = artifact_repo.find_successful(
                     settings.resolved_db_path,
                     item_id=safe_id,
                     url=original_url,  # Changed: check original URL
@@ -208,7 +207,7 @@ def _archive_with(
 
             if existing is not None:
                 try:
-                    init_db(settings.resolved_db_path)
+                    
                     last_row_id = insert_save_result(
                         db_path=settings.resolved_db_path,
                         item_id=safe_id,
@@ -242,7 +241,7 @@ def _archive_with(
         # Record to DB (best-effort)
         # IMPORTANT: Store original URL, not rewritten URL
         try:
-            init_db(settings.resolved_db_path)
+            
             last_row_id = insert_save_result(
                 db_path=settings.resolved_db_path,
                 item_id=safe_id,
@@ -261,7 +260,7 @@ def _archive_with(
             ):
                 try:
                     logger.info(f"Persisting readability metadata | rowid={last_row_id}")
-                    insert_save_metadata(
+                    metadata_repo.upsert(
                         db_path=settings.resolved_db_path,
                         save_rowid=last_row_id,
                         data=result.metadata,  # type: ignore[arg-type]
@@ -480,12 +479,12 @@ def get_archive_size(
     logger.info(f"/archive/{archived_url_id}/size requested")
 
     # Verify the archived URL exists
-    archived_url = get_archived_url_by_id(settings.resolved_db_path, archived_url_id)
+    archived_url = url_repo.get_by_id( archived_url_id)
     if not archived_url:
         raise HTTPException(status_code=404, detail="Archived URL not found")
 
     # Get size statistics
-    size_stats = get_size_stats_by_archived_url_id(
+    size_stats = artifact_repo.get_size_stats(
         settings.resolved_db_path,
         archived_url_id
     )

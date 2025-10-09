@@ -8,12 +8,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from core.command_runner import CommandRunner
-from db.session import get_session
-from db.repository import (
-    get_command_execution,
-    get_command_output_lines,
-    list_command_executions,
-)
+from db import CommandExecutionRepository
 
 logger = logging.getLogger(__name__)
 
@@ -59,16 +54,15 @@ def list_executions(
 
     Returns most recent executions first.
     """
-    with get_session() as db:
-        executions = list_command_executions(
-            db,
-            archived_url_id=archived_url_id,
-            archiver=archiver,
-            limit=limit,
-        )
+    cmd_repo = CommandExecutionRepository()
+    executions = cmd_repo.list_executions(
+        archived_url_id=archived_url_id,
+        archiver=archiver,
+        limit=limit,
+    )
 
-        results = []
-        for exe in executions:
+    results = []
+    for exe in executions:
             duration = None
             if exe.start_time and exe.end_time:
                 duration = (exe.end_time - exe.start_time).total_seconds()
@@ -88,7 +82,7 @@ def list_executions(
                 )
             )
 
-        return results
+    return results
 
 
 @router.get("/executions/{execution_id}", response_model=CommandExecutionDetailResponse)
@@ -99,39 +93,39 @@ def get_execution_detail(execution_id: int):
     This endpoint allows you to "replay" a past command execution to see exactly
     what happened, including all stdin/stdout/stderr with timestamps.
     """
-    with get_session() as db:
-        execution = get_command_execution(db, execution_id=execution_id)
-        if not execution:
-            raise HTTPException(status_code=404, detail=f"Command execution {execution_id} not found")
+    cmd_repo = CommandExecutionRepository()
+    execution = cmd_repo.get_by_id(execution_id)
+    if not execution:
+        raise HTTPException(status_code=404, detail=f"Command execution {execution_id} not found")
 
-        output_lines = get_command_output_lines(db, execution_id=execution_id)
+    output_lines = cmd_repo.get_output_lines(execution_id)
 
-        duration = None
-        if execution.start_time and execution.end_time:
-            duration = (execution.end_time - execution.start_time).total_seconds()
+    duration = None
+    if execution.start_time and execution.end_time:
+        duration = (execution.end_time - execution.start_time).total_seconds()
 
-        return CommandExecutionDetailResponse(
-            id=execution.id,
-            command=execution.command,
-            start_time=execution.start_time.isoformat(),
-            end_time=execution.end_time.isoformat() if execution.end_time else None,
-            exit_code=execution.exit_code,
-            timed_out=execution.timed_out or False,
-            timeout=execution.timeout,
-            duration_seconds=duration,
-            archived_url_id=execution.archived_url_id,
-            archiver=execution.archiver,
-            output_lines=[
-                CommandOutputLineResponse(
-                    id=line.id,
-                    timestamp=line.timestamp.isoformat(),
-                    stream=line.stream,
-                    line=line.line,
-                    line_number=line.line_number,
-                )
-                for line in output_lines
-            ],
-        )
+    return CommandExecutionDetailResponse(
+        id=execution.id,
+        command=execution.command,
+        start_time=execution.start_time.isoformat(),
+        end_time=execution.end_time.isoformat() if execution.end_time else None,
+        exit_code=execution.exit_code,
+        timed_out=execution.timed_out or False,
+        timeout=execution.timeout,
+        duration_seconds=duration,
+        archived_url_id=execution.archived_url_id,
+        archiver=execution.archiver,
+        output_lines=[
+            CommandOutputLineResponse(
+                id=line.id,
+                timestamp=line.timestamp.isoformat(),
+                stream=line.stream,
+                line=line.line,
+                line_number=line.line_number,
+            )
+            for line in output_lines
+        ],
+    )
 
 
 @router.get("/executions/{execution_id}/replay")

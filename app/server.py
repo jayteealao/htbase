@@ -17,7 +17,7 @@ from archivers.readability import ReadabilityArchiver
 from core.config import get_settings
 from core.logging import setup_logging
 from core.utils import cleanup_chromium_singleton_locks
-from db.repository import init_db
+# init_db is deprecated - engine initialization happens automatically
 from core.command_runner import CommandRunner
 from services.summarizer import SummaryService
 from task_manager import (
@@ -39,7 +39,7 @@ command_runner = CommandRunner(debug=settings.log_level == "DEBUG")
 async def lifespan_context(app: FastAPI):
     # Startup
     settings.data_dir.mkdir(parents=True, exist_ok=True)
-    init_db(settings.resolved_db_path)
+    # Database initialization happens automatically in get_session()
 
     # Clean up Chromium singleton locks at startup to prevent exit code 21
     user_data_dir = settings.resolved_chromium_user_data_dir
