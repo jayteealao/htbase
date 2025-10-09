@@ -1,3 +1,18 @@
+"""Legacy repository functions for backward compatibility.
+
+DEPRECATED: Use the new repository classes in repositories.py instead.
+These functions are maintained for backward compatibility but will be
+removed in a future version.
+
+New code should use:
+    from db.repositories import (
+        ArchiveArtifactRepository,
+        ArchivedUrlRepository,
+        UrlMetadataRepository,
+        etc.
+    )
+"""
+
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Sequence, Iterable
@@ -20,9 +35,10 @@ from .session import get_engine, get_session
 
 
 def init_db(db_path: Path | None = None) -> None:
-    """Schema is managed by Alembic; nothing to do here for Postgres."""
-    # Keeping this function for compatibility; Postgres schema creation is handled
-    # by Alembic migrations. This becomes a no-op at runtime.
+    """Schema is managed by Alembic; nothing to do here for Postgres.
+
+    DEPRECATED: This function is a no-op and will be removed in a future version.
+    """
     _ = get_engine(db_path)  # ensure engine is initialized
     return
 
@@ -92,7 +108,7 @@ def insert_save_result(
     saved_path: Optional[str],
     archiver_name: Optional[str] = None,
 ) -> int:
-    init_db(db_path)
+    # init_db removed - engine initialization happens in get_session()
     with get_session(db_path) as session:
         archiver = archiver_name or "unknown"
         au = _get_or_create_archived_url(session, url=url, item_id=item_id, name=None)
@@ -114,7 +130,7 @@ def insert_pending_save(
     archiver_name: Optional[str] = None,
 ) -> int:
     """Ensure an artifact row exists and mark it pending; return artifact id."""
-    init_db(db_path)
+    # init_db removed - engine initialization happens in get_session()
     with get_session(db_path) as session:
         au = _get_or_create_archived_url(session, url=url, item_id=item_id, name=name)
         art = _get_or_create_artifact(
@@ -154,7 +170,7 @@ def get_artifacts_by_ids(
 ) -> List[Dict[str, Any]]:
     if not artifact_ids:
         return []
-    init_db(db_path)
+    # init_db removed - engine initialization happens in get_session()
     with get_session(db_path) as session:
         stmt = (
             select(ArchiveArtifact, ArchivedUrl)
@@ -173,7 +189,7 @@ def list_artifacts_by_status(
 ) -> List[Dict[str, Any]]:
     if not statuses:
         return []
-    init_db(db_path)
+    # init_db removed - engine initialization happens in get_session()
     with get_session(db_path) as session:
         stmt = (
             select(ArchiveArtifact, ArchivedUrl)
@@ -199,7 +215,7 @@ def finalize_save_result(
     size_bytes: Optional[int] = None,
 ) -> None:
     """Update an existing artifact row with final result and status."""
-    init_db(db_path)
+    # init_db removed - engine initialization happens in get_session()
     with get_session(db_path) as session:
         art: ArchiveArtifact | None = session.get(ArchiveArtifact, rowid)
         if art is None:
@@ -227,7 +243,7 @@ def record_http_failure(
     `item_id`+`url`+`archiver_name` will be used to insert/update the
     artifact row. Returns the artifact id if available, else None.
     """
-    init_db(db_path)
+    # init_db removed - engine initialization happens in get_session()
     with get_session(db_path) as session:
         if rowid is not None:
             art: ArchiveArtifact | None = session.get(ArchiveArtifact, int(rowid))
@@ -262,7 +278,7 @@ def insert_save_metadata(
     The input `save_rowid` refers to the artifact id (for compatibility). We
     resolve the parent archived_url_id and upsert metadata for that URL.
     """
-    init_db(db_path)
+    # init_db removed - engine initialization happens in get_session()
     with get_session(db_path) as session:
         art: ArchiveArtifact | None = session.get(ArchiveArtifact, save_rowid)
         if art is None:
@@ -309,7 +325,7 @@ def insert_save_metadata(
 
 
 def get_task_rows(db_path: Path | None, task_id: str) -> List[Dict[str, Any]]:
-    init_db(db_path)
+    # init_db removed - engine initialization happens in get_session()
     with get_session(db_path) as session:
         stmt = (
             select(ArchiveArtifact, ArchivedUrl)
@@ -352,7 +368,7 @@ def find_existing_success_save(
     Looks up by URL first (canonical match), then falls back to item_id if URL not found.
     This ensures we skip only when the exact URL was previously archived successfully.
     """
-    init_db(db_path)
+    # init_db removed - engine initialization happens in get_session()
     with get_session(db_path) as session:
         # First try to find by URL (most specific match)
         au = (
@@ -407,7 +423,7 @@ def is_already_saved_success(
 
 
 def get_save_by_rowid(db_path: Path | None, rowid: int) -> Optional[ArchiveArtifact]:
-    init_db(db_path)
+    # init_db removed - engine initialization happens in get_session()
     with get_session(db_path) as session:
         return session.get(ArchiveArtifact, rowid)
 
@@ -415,7 +431,7 @@ def get_save_by_rowid(db_path: Path | None, rowid: int) -> Optional[ArchiveArtif
 def get_archived_url_by_id(
     db_path: Path | None, archived_url_id: int
 ) -> Optional[ArchivedUrl]:
-    init_db(db_path)
+    # init_db removed - engine initialization happens in get_session()
     with get_session(db_path) as session:
         return session.get(ArchivedUrl, archived_url_id)
 
@@ -432,14 +448,14 @@ def get_archived_url_by_url(db, *, url: str) -> Optional[ArchivedUrl]:
 def get_metadata_for_archived_url(
     db_path: Path | None, archived_url_id: int
 ) -> Optional[UrlMetadata]:
-    init_db(db_path)
+    # init_db removed - engine initialization happens in get_session()
     with get_session(db_path) as session:
         stmt = select(UrlMetadata).where(UrlMetadata.archived_url_id == archived_url_id)
         return session.execute(stmt).scalars().first()
 
 
 def get_saves_by_item_id(db_path: Path | None, item_id: str) -> List[ArchiveArtifact]:
-    init_db(db_path)
+    # init_db removed - engine initialization happens in get_session()
     with get_session(db_path) as session:
         stmt = (
             select(ArchiveArtifact)
@@ -450,7 +466,7 @@ def get_saves_by_item_id(db_path: Path | None, item_id: str) -> List[ArchiveArti
 
 
 def get_saves_by_url(db_path: Path | None, url: str) -> List[ArchiveArtifact]:
-    init_db(db_path)
+    # init_db removed - engine initialization happens in get_session()
     with get_session(db_path) as session:
         stmt = (
             select(ArchiveArtifact)
@@ -464,7 +480,7 @@ def delete_saves_by_rowids(db_path: Path | None, rowids: List[int]) -> int:
     """Delete saves with the given rowids. Returns number of rows deleted."""
     if not rowids:
         return 0
-    init_db(db_path)
+    # init_db removed - engine initialization happens in get_session()
     with get_session(db_path) as session:
         stmt = delete(ArchiveArtifact).where(ArchiveArtifact.id.in_(rowids))
         result = session.execute(stmt)
@@ -475,7 +491,7 @@ def list_saves(
     db_path: Path | None, limit: int = 200, offset: int = 0
 ) -> List[tuple[ArchiveArtifact, ArchivedUrl]]:
     """Return latest artifact rows with their URL anchor for pagination."""
-    init_db(db_path)
+    # init_db removed - engine initialization happens in get_session()
     with get_session(db_path) as session:
         stmt = (
             select(ArchiveArtifact, ArchivedUrl)
@@ -500,7 +516,7 @@ def upsert_article_summary(
 
     Returns the summary row id."""
     normalized_type = (summary_type or "default").strip() or "default"
-    init_db(db_path)
+    # init_db removed - engine initialization happens in get_session()
     with get_session(db_path) as session:
         summary = (
             session.execute(
@@ -535,7 +551,7 @@ def get_article_summary(
     archived_url_id: int,
     summary_type: str = "default",
 ) -> Optional[ArticleSummary]:
-    init_db(db_path)
+    # init_db removed - engine initialization happens in get_session()
     normalized_type = (summary_type or "default").strip() or "default"
     with get_session(db_path) as session:
         return (
@@ -555,7 +571,7 @@ def list_article_summaries(
     *,
     archived_url_id: int,
 ) -> List[ArticleSummary]:
-    init_db(db_path)
+    # init_db removed - engine initialization happens in get_session()
     with get_session(db_path) as session:
         stmt = (
             select(ArticleSummary)
@@ -583,7 +599,7 @@ def replace_article_tags(
     tags: Sequence[Dict[str, Any]],
 ) -> int:
     """Replace all tag rows for an archived URL; returns number of rows inserted."""
-    init_db(db_path)
+    # init_db removed - engine initialization happens in get_session()
     normalized: list[ArticleTag] = []
     seen: set[tuple[str, str]] = set()
     for payload in tags:
@@ -622,7 +638,7 @@ def list_article_tags(
     *,
     archived_url_id: int,
 ) -> List[ArticleTag]:
-    init_db(db_path)
+    # init_db removed - engine initialization happens in get_session()
     with get_session(db_path) as session:
         stmt = (
             select(ArticleTag)
@@ -640,7 +656,7 @@ def replace_article_entities(
     entities: Sequence[Dict[str, Any]],
 ) -> int:
     """Replace entity rows for an archived URL; returns number of rows inserted."""
-    init_db(db_path)
+    # init_db removed - engine initialization happens in get_session()
     normalized: list[ArticleEntity] = []
     seen: set[tuple[str, Optional[str]]] = set()
     for payload in entities:
@@ -684,7 +700,7 @@ def list_article_entities(
     *,
     archived_url_id: int,
 ) -> List[ArticleEntity]:
-    init_db(db_path)
+    # init_db removed - engine initialization happens in get_session()
     with get_session(db_path) as session:
         stmt = (
             select(ArticleEntity)
@@ -703,7 +719,7 @@ def update_total_size_for_url(
     Sums up all non-null size_bytes values from archive_artifact rows
     and stores in archived_urls.total_size_bytes.
     """
-    init_db(db_path)
+    # init_db removed - engine initialization happens in get_session()
     with get_session(db_path) as session:
         # Get all artifacts for this URL
         stmt = select(ArchiveArtifact).where(
@@ -732,7 +748,7 @@ def get_size_stats_by_archived_url_id(
     - total_size_bytes: total size across all artifacts
     - artifacts: list of {archiver, size_bytes} for each artifact
     """
-    init_db(db_path)
+    # init_db removed - engine initialization happens in get_session()
     with get_session(db_path) as session:
         au: ArchivedUrl | None = session.get(ArchivedUrl, archived_url_id)
         if not au:
