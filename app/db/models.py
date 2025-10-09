@@ -187,3 +187,46 @@ class ArticleTag(Base):
         Index("idx_article_tags_archived_url", "archived_url_id"),
         Index("idx_article_tags_tag", "tag"),
     )
+
+
+class CommandExecution(Base):
+    """Records of command executions with full observability."""
+    __tablename__ = "command_executions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    command = Column(Text, nullable=False)
+    start_time = Column(DateTime, nullable=False)
+    end_time = Column(DateTime, nullable=True)
+    exit_code = Column(Integer, nullable=True)
+    timeout = Column(Float, nullable=False)
+    timed_out = Column(Boolean, nullable=False, server_default=sa_text("false"))
+    # Optional context linking
+    archived_url_id = Column(Integer, ForeignKey("archived_urls.id"), nullable=True)
+    archiver = Column(String, nullable=True)
+
+    __table_args__ = (
+        Index("idx_command_executions_archived_url", "archived_url_id"),
+        Index("idx_command_executions_archiver", "archiver"),
+        Index("idx_command_executions_start_time", "start_time"),
+    )
+
+
+class CommandOutputLine(Base):
+    """Individual lines of stdin/stdout/stderr from command executions."""
+    __tablename__ = "command_output_lines"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    execution_id = Column(
+        Integer,
+        ForeignKey("command_executions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    timestamp = Column(DateTime, nullable=False)
+    stream = Column(String(length=10), nullable=False)  # 'stdin', 'stdout', 'stderr'
+    line = Column(Text, nullable=False)
+    line_number = Column(Integer, nullable=True)
+
+    __table_args__ = (
+        Index("idx_command_output_execution", "execution_id"),
+        Index("idx_command_output_stream", "stream"),
+    )
