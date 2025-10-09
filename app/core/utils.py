@@ -1,5 +1,6 @@
 import glob
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -122,6 +123,58 @@ def get_url_status(url: str, timeout: int = 10) -> int | None:
             return int(r.status_code)
     except Exception:
         return None
+
+
+@dataclass
+class URLCheck:
+    """Result of URL archivability check."""
+
+    url: str
+    is_reachable: bool
+    status_code: int | None
+    should_archive: bool
+
+    @property
+    def is_not_found(self) -> bool:
+        """True if URL returned 404 status."""
+        return self.status_code == 404
+
+    @property
+    def is_server_error(self) -> bool:
+        """True if URL returned 5xx status."""
+        return self.status_code is not None and 500 <= self.status_code < 600
+
+
+def check_url_archivability(url: str, timeout: int = 10) -> URLCheck:
+    """Check if a URL should be archived based on reachability.
+
+    Returns a URLCheck object with status information. URLs that return 404
+    are marked as should_archive=False, all other cases (including errors)
+    are marked as should_archive=True to allow archiving attempts.
+
+    Args:
+        url: URL to check
+        timeout: Request timeout in seconds (default: 10)
+
+    Returns:
+        URLCheck with reachability status and archiving recommendation
+    """
+    try:
+        status = get_url_status(url, timeout=timeout)
+        return URLCheck(
+            url=url,
+            is_reachable=status is not None,
+            status_code=status,
+            should_archive=status != 404,
+        )
+    except Exception:
+        # On any error, still attempt archiving (better to try than skip)
+        return URLCheck(
+            url=url,
+            is_reachable=False,
+            status_code=None,
+            should_archive=True,
+        )
 
 
 def get_directory_size(path: Path) -> int:

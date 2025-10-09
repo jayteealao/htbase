@@ -7,7 +7,7 @@ from threading import Event
 from typing import Any, Dict, List, Optional, Sequence
 
 from core.config import AppSettings
-from core.utils import get_url_status, rewrite_paywalled_url, sanitize_filename, get_directory_size, extract_original_url
+from core.utils import check_url_archivability, rewrite_paywalled_url, sanitize_filename, get_directory_size, extract_original_url
 from db.repository import (
     finalize_save_result,
     find_existing_success_save,
@@ -417,13 +417,9 @@ class ArchiverTaskManager(BackgroundTaskManager[BatchTask]):
                 continue
 
             try:
-                status = None
-                try:
-                    status = get_url_status(fetch_url)
-                except Exception:
-                    status = None
-                logger.debug("URL status check", extra={"rowid": item.rowid, "status": status, "url": fetch_url})
-                if status == 404:
+                url_check = check_url_archivability(fetch_url)
+                logger.debug("URL status check", extra={"rowid": item.rowid, "status": url_check.status_code, "should_archive": url_check.should_archive, "url": fetch_url})
+                if not url_check.should_archive:
                     logger.warning("URL returned 404", extra={"rowid": item.rowid, "url": fetch_url})
                     try:
                         record_http_failure(

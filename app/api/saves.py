@@ -30,7 +30,7 @@ from models import (
     BatchCreateRequest,
     TaskAccepted,
 )
-from core.utils import sanitize_filename, get_url_status, rewrite_paywalled_url, extract_original_url
+from core.utils import sanitize_filename, check_url_archivability, rewrite_paywalled_url, extract_original_url
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +107,7 @@ def _archive_with(
         payload_snapshot = payload.model_dump()  # type: ignore[attr-defined]
     except AttributeError:
         payload_snapshot = payload.dict()  # type: ignore[attr-defined]
-    logger.info(f"Archive request received", extra={"archiver": archiver_name, "payload": payload_snapshot})
+    logger.info("Archive request received", extra={"archiver": archiver_name, "payload": payload_snapshot})
 
     item_id = payload.id.strip()
     if not item_id:
@@ -145,12 +145,9 @@ def _archive_with(
     for name, archiver_obj in archiver_items:
         logger.info(f"Starting archiver run | archiver={name} item_id={safe_id} url={rewritten_url}")
         # Pre-check URL reachability and map 404 -> immediate failure
-        try:
-            status = get_url_status(rewritten_url)
-        except Exception:
-            status = None
-        logger.info(f"URL status probe | archiver={name} item_id={safe_id} status={status}")
-        if status == 404:
+        url_check = check_url_archivability(rewritten_url)
+        logger.info(f"URL status probe | archiver={name} item_id={safe_id} status={url_check.status_code} should_archive={url_check.should_archive}")
+        if not url_check.should_archive:
             logger.info(f"URL responded 404 | archiver={name} item_id={safe_id} url={rewritten_url}")
             # Record failed result with exit_code=404 via central helper
             # Store ORIGINAL URL in database, not rewritten
