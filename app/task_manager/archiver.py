@@ -7,7 +7,7 @@ from threading import Event
 from typing import Any, Dict, List, Optional, Sequence
 
 from core.config import AppSettings
-from core.utils import get_url_status, rewrite_paywalled_url, sanitize_filename
+from core.utils import get_url_status, rewrite_paywalled_url, sanitize_filename, get_directory_size, extract_original_url
 from db.repository import (
     finalize_save_result,
     find_existing_success_save,
@@ -15,14 +15,16 @@ from db.repository import (
     is_already_saved_success,
     list_artifacts_by_status,
     record_http_failure,
+    update_total_size_for_url,
 )
 from models import ArchiveResult
+
+from .base import BackgroundTaskManager
+from .summarization import SummarizationCoordinator
 
 DEFAULT_REQUEUE_PRIORITIES: tuple[str, ...] = ("singlefile-cli", "monolith", "readability", "pdf", "screenshot")
 DEFAULT_REQUEUE_CHUNK_SIZE = 10
 
-from .base import BackgroundTaskManager
-from .summarization import SummarizationCoordinator
 
 logger = logging.getLogger(__name__)
 
@@ -98,14 +100,26 @@ class ArchiverTaskManager(BackgroundTaskManager[BatchTask]):
                 )
             logger.debug("Planning archiving run", extra={"item_id": item_id, "url": url})
             for arch_name in archiver_order:
-                if self.settings.skip_existing_saves and is_already_saved_success(
-                    self.settings.resolved_db_path,
-                    item_id=item_id,
-                    url=url,
-                    archiver=arch_name,
-                ):
-                    logger.info("Skipping existing save", extra={"archiver": arch_name, "item_id": item_id, "url": url})
-                    continue
+                # Check for existing saves against both original and rewritten URLs
+                if self.settings.skip_existing_saves:
+                    # Check rewritten URL first
+                    already_saved = is_already_saved_success(
+                        self.settings.resolved_db_path,
+                        item_id=item_id,
+                        url=url,
+                        archiver=arch_name,
+                    )
+                    # Also check original URL if it was rewritten
+                    if not already_saved and url != original_url:
+                        already_saved = is_already_saved_success(
+                            self.settings.resolved_db_path,
+                            item_id=item_id,
+                            url=original_url,
+                            archiver=arch_name,
+                        )
+                    if already_saved:
+                        logger.info("Skipping existing save", extra={"archiver": arch_name, "item_id": item_id, "url": url, "original_url": original_url})
+                        continue
 
                 rowid = insert_pending_save(
                     db_path=self.settings.resolved_db_path,
@@ -420,12 +434,23 @@ class ArchiverTaskManager(BackgroundTaskManager[BatchTask]):
                     continue
 
                 if self.settings.skip_existing_saves:
+                    # Check rewritten URL first
                     existing = find_existing_success_save(
                         self.settings.resolved_db_path,
                         item_id=item.item_id,
                         url=item.url,
                         archiver=item.archiver_name,
                     )
+                    # Also check original URL if this is a freedium URL
+                    if existing is None:
+                        original_url = extract_original_url(item.url)
+                        if original_url:
+                            existing = find_existing_success_save(
+                                self.settings.resolved_db_path,
+                                item_id=item.item_id,
+                                url=original_url,
+                                archiver=item.archiver_name,
+                            )
                     if existing is not None:
                         logger.info(
                             "Reusing existing save",
@@ -457,20 +482,70 @@ class ArchiverTaskManager(BackgroundTaskManager[BatchTask]):
                 result: ArchiveResult = archiver.archive(
                     url=item.url, item_id=item.item_id
                 )
+
+                # Calculate size if save was successful
+                size_bytes = None
+                archived_url_id = None
+                if result.success and result.saved_path:
+                    from pathlib import Path
+                    from db.repository import get_save_by_rowid
+
+                    try:
+                        saved_path = Path(result.saved_path)
+                        # Calculate size of the archiver output directory
+                        if saved_path.exists():
+                            archiver_dir = saved_path.parent
+                            size_bytes = get_directory_size(archiver_dir)
+                            logger.debug(
+                                "Calculated artifact size",
+                                extra={
+                                    "rowid": item.rowid,
+                                    "archiver": item.archiver_name,
+                                    "size_bytes": size_bytes,
+                                    "path": str(archiver_dir)
+                                }
+                            )
+
+                        # Get archived_url_id for updating total size
+                        artifact = get_save_by_rowid(self.settings.resolved_db_path, item.rowid)
+                        if artifact:
+                            archived_url_id = artifact.archived_url_id
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to calculate size",
+                            extra={"rowid": item.rowid, "error": str(exc)}
+                        )
+
                 finalize_save_result(
                     db_path=self.settings.resolved_db_path,
                     rowid=item.rowid,
                     success=result.success,
                     exit_code=result.exit_code,
                     saved_path=result.saved_path,
+                    size_bytes=size_bytes,
                 )
+
+                # Update total size for the URL
+                if archived_url_id is not None:
+                    try:
+                        update_total_size_for_url(
+                            self.settings.resolved_db_path,
+                            archived_url_id=archived_url_id
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to update total size",
+                            extra={"archived_url_id": archived_url_id, "error": str(exc)}
+                        )
+
                 logger.info(
                     f"Finalized save ({'success' if result.success else 'failure'})",
                     extra={
                         "rowid": item.rowid,
                         "success": result.success,
                         "exit_code": result.exit_code,
-                        "saved_path": result.saved_path
+                        "saved_path": result.saved_path,
+                        "size_bytes": size_bytes
                     }
                 )
 

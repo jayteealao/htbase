@@ -19,6 +19,8 @@ from db.repository import (
     insert_save_metadata,
     get_saves_by_item_id,
     get_saves_by_url,
+    get_size_stats_by_archived_url_id,
+    get_archived_url_by_id,
 )
 from models import (
     ArchiveResult,
@@ -28,8 +30,7 @@ from models import (
     BatchCreateRequest,
     TaskAccepted,
 )
-from core.utils import sanitize_filename
-from core.utils import get_url_status
+from core.utils import sanitize_filename, get_url_status, rewrite_paywalled_url, extract_original_url
 
 logger = logging.getLogger(__name__)
 
@@ -133,23 +134,29 @@ def _archive_with(
     last_row_id: int | None = None
     summarization = getattr(request.app.state, "summarization", None)
 
+    # Apply paywall URL rewriting
+    original_url = str(payload.url)
+    rewritten_url = rewrite_paywalled_url(original_url)
+    if rewritten_url != original_url:
+        logger.info(f"Rewriting URL for paywall bypass | original={original_url} rewritten={rewritten_url}")
+
     # Run each archiver sequentially and record a row per run
     for name, archiver_obj in archiver_items:
-        logger.info(f"Starting archiver run | archiver={name} item_id={safe_id} url={payload.url}")
+        logger.info(f"Starting archiver run | archiver={name} item_id={safe_id} url={rewritten_url}")
         # Pre-check URL reachability and map 404 -> immediate failure
         try:
-            status = get_url_status(str(payload.url))
+            status = get_url_status(rewritten_url)
         except Exception:
             status = None
         logger.info(f"URL status probe | archiver={name} item_id={safe_id} status={status}")
         if status == 404:
-            logger.info(f"URL responded 404 | archiver={name} item_id={safe_id} url={payload.url}")
+            logger.info(f"URL responded 404 | archiver={name} item_id={safe_id} url={rewritten_url}")
             # Record failed result with exit_code=404 via central helper
             try:
                 last_row_id = record_http_failure(
                     db_path=settings.resolved_db_path,
                     item_id=safe_id,
-                    url=str(payload.url),
+                    url=rewritten_url,
                     archiver_name=name,
                     exit_code=404,
                 )
@@ -157,15 +164,26 @@ def _archive_with(
                 last_row_id = None
             last_result = ArchiveResult(success=False, exit_code=404, saved_path=None)
             continue
-        # Optional per-archiver skip
+        # Optional per-archiver skip - check both rewritten and original URLs
         if settings.skip_existing_saves:
             try:
+                # Check rewritten URL first
                 existing = find_existing_success_save(
                     settings.resolved_db_path,
                     item_id=safe_id,
-                    url=str(payload.url),
+                    url=rewritten_url,
                     archiver=name,
                 )
+                # Also check original URL if this is a freedium URL
+                if existing is None:
+                    extracted_original = extract_original_url(rewritten_url)
+                    if extracted_original:
+                        existing = find_existing_success_save(
+                            settings.resolved_db_path,
+                            item_id=safe_id,
+                            url=extracted_original,
+                            archiver=name,
+                        )
             except Exception:
                 existing = None
             if existing is not None:
@@ -178,7 +196,7 @@ def _archive_with(
                     last_row_id = insert_save_result(
                         db_path=settings.resolved_db_path,
                         item_id=safe_id,
-                        url=str(payload.url),
+                        url=rewritten_url,
                         success=True,
                         exit_code=0,
                         saved_path=existing.saved_path,
@@ -201,7 +219,7 @@ def _archive_with(
                 continue
 
         result: ArchiveResult = archiver_obj.archive(
-            url=str(payload.url), item_id=safe_id
+            url=rewritten_url, item_id=safe_id
         )
         last_result = result
         logger.info(f"Archiver completed | archiver={name} item_id={safe_id} success={result.success} exit_code={result.exit_code} saved_path={result.saved_path}")
@@ -211,7 +229,7 @@ def _archive_with(
             last_row_id = insert_save_result(
                 db_path=settings.resolved_db_path,
                 item_id=safe_id,
-                url=str(payload.url),
+                url=rewritten_url,
                 success=result.success,
                 exit_code=result.exit_code,
                 saved_path=result.saved_path,
@@ -429,5 +447,41 @@ def save_default_batch(
     response = archive_with_batch("all", payload, request, settings)
     logger.info(f"/save/batch response | task_id={response.task_id} count={response.count}")
     return response
+
+
+@router.get("/archive/{archived_url_id}/size")
+def get_archive_size(
+    archived_url_id: int,
+    settings: AppSettings = Depends(get_settings),
+):
+    """Get size statistics for an archived URL by its ID.
+
+    Returns:
+        - total_size_bytes: Total size across all artifacts for this URL
+        - artifacts: List of {archiver, size_bytes, saved_path} for each artifact
+    """
+    logger.info(f"/archive/{archived_url_id}/size requested")
+
+    # Verify the archived URL exists
+    archived_url = get_archived_url_by_id(settings.resolved_db_path, archived_url_id)
+    if not archived_url:
+        raise HTTPException(status_code=404, detail="Archived URL not found")
+
+    # Get size statistics
+    size_stats = get_size_stats_by_archived_url_id(
+        settings.resolved_db_path,
+        archived_url_id
+    )
+
+    logger.info(
+        f"/archive/{archived_url_id}/size response",
+        extra={
+            "archived_url_id": archived_url_id,
+            "total_size_bytes": size_stats.get("total_size_bytes"),
+            "artifact_count": len(size_stats.get("artifacts", []))
+        }
+    )
+
+    return size_stats
 
 

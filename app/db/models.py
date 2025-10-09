@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     Column,
     DateTime,
@@ -30,6 +31,8 @@ class ArchivedUrl(Base):
     url = Column(Text, nullable=False, unique=True)
     name = Column(String, nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=sa_text("now()"))
+    # Total size of all artifacts for this URL
+    total_size_bytes = Column(BigInteger, nullable=True)
 
     # Convenience indices
     __table_args__ = (
@@ -82,6 +85,8 @@ class ArchiveArtifact(Base):
     task_id = Column(String, nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=sa_text("now()"))
     updated_at = Column(DateTime, nullable=True)
+    # Size of individual archiver output in bytes
+    size_bytes = Column(BigInteger, nullable=True)
 
     __table_args__ = (
         UniqueConstraint("archived_url_id", "archiver", name="uq_artifact_url_archiver"),

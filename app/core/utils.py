@@ -35,6 +35,41 @@ def rewrite_paywalled_url(url: str) -> str:
     return raw_url
 
 
+def extract_original_url(url: str) -> str | None:
+    """Extract the original URL from a freedium.cfd rewritten URL.
+
+    Returns the original URL if this is a freedium URL, otherwise returns None.
+
+    Examples:
+        "https://freedium.cfd/https://medium.com/article" -> "https://medium.com/article"
+        "https://medium.com/article" -> None
+    """
+    raw_url = (url or "").strip()
+    if not raw_url:
+        return None
+
+    try:
+        parsed = urlparse(raw_url)
+    except ValueError:
+        return None
+
+    host = (parsed.hostname or "").lower()
+    if host != "freedium.cfd":
+        return None
+
+    # Extract the original URL from the path
+    # Format: https://freedium.cfd/{original_url}
+    path = parsed.path.lstrip('/')
+    if not path:
+        return None
+
+    # The path should be the full original URL
+    if path.startswith('http://') or path.startswith('https://'):
+        return path
+
+    return None
+
+
 def sanitize_filename(name: str) -> str:
     """Return a safe filename by keeping [A-Za-z0-9._-] and trimming length.
 
@@ -87,3 +122,29 @@ def get_url_status(url: str, timeout: int = 10) -> int | None:
             return int(r.status_code)
     except Exception:
         return None
+
+
+def get_directory_size(path: Path) -> int:
+    """Calculate total size of a directory and all its contents recursively.
+
+    Returns size in bytes. Returns 0 if path doesn't exist or on error.
+    """
+    if not path.exists():
+        return 0
+
+    total = 0
+    try:
+        if path.is_file():
+            return path.stat().st_size
+
+        for item in path.rglob("*"):
+            if item.is_file():
+                try:
+                    total += item.stat().st_size
+                except (OSError, PermissionError):
+                    # Skip files we can't access
+                    pass
+    except (OSError, PermissionError):
+        pass
+
+    return total

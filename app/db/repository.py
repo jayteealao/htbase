@@ -194,6 +194,7 @@ def finalize_save_result(
     success: bool,
     exit_code: Optional[int],
     saved_path: Optional[str],
+    size_bytes: Optional[int] = None,
 ) -> None:
     """Update an existing artifact row with final result and status."""
     init_db(db_path)
@@ -205,6 +206,8 @@ def finalize_save_result(
         art.exit_code = exit_code
         art.saved_path = saved_path
         art.status = "success" if success else "failed"
+        if size_bytes is not None:
+            art.size_bytes = size_bytes
 
 
 def record_http_failure(
@@ -658,3 +661,67 @@ def list_article_entities(
             .order_by(ArticleEntity.entity_type.asc().nullsfirst(), ArticleEntity.entity.asc())
         )
         return list(session.execute(stmt).scalars().all())
+
+
+def update_total_size_for_url(
+    db_path: Path | None,
+    archived_url_id: int,
+) -> None:
+    """Calculate and update the total size of all artifacts for an archived URL.
+
+    Sums up all non-null size_bytes values from archive_artifact rows
+    and stores in archived_urls.total_size_bytes.
+    """
+    init_db(db_path)
+    with get_session(db_path) as session:
+        # Get all artifacts for this URL
+        stmt = select(ArchiveArtifact).where(
+            ArchiveArtifact.archived_url_id == archived_url_id
+        )
+        artifacts = session.execute(stmt).scalars().all()
+
+        # Sum up all sizes
+        total = sum(
+            art.size_bytes for art in artifacts if art.size_bytes is not None
+        )
+
+        # Update the archived_urls row
+        au: ArchivedUrl | None = session.get(ArchivedUrl, archived_url_id)
+        if au:
+            au.total_size_bytes = total if total > 0 else None
+
+
+def get_size_stats_by_archived_url_id(
+    db_path: Path | None,
+    archived_url_id: int,
+) -> Dict[str, Any]:
+    """Return size statistics for an archived URL.
+
+    Returns a dictionary with:
+    - total_size_bytes: total size across all artifacts
+    - artifacts: list of {archiver, size_bytes} for each artifact
+    """
+    init_db(db_path)
+    with get_session(db_path) as session:
+        au: ArchivedUrl | None = session.get(ArchivedUrl, archived_url_id)
+        if not au:
+            return {"total_size_bytes": None, "artifacts": []}
+
+        stmt = select(ArchiveArtifact).where(
+            ArchiveArtifact.archived_url_id == archived_url_id
+        )
+        artifacts = session.execute(stmt).scalars().all()
+
+        artifact_sizes = [
+            {
+                "archiver": art.archiver,
+                "size_bytes": art.size_bytes,
+                "saved_path": art.saved_path,
+            }
+            for art in artifacts
+        ]
+
+        return {
+            "total_size_bytes": au.total_size_bytes,
+            "artifacts": artifact_sizes,
+        }
