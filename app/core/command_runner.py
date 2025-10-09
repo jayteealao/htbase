@@ -12,8 +12,6 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from db.session import get_session
-
 logger = logging.getLogger(__name__)
 
 
@@ -130,14 +128,13 @@ class CommandRunner:
         )
 
         # Log command to database as stdin
-        with get_session() as db:
-            append_command_output_line(
-                db=db,
-                execution_id=execution_id,
-                stream="stdin",
-                line=command,
-                timestamp=start_time,
-            )
+        cmd_repo.append_output_line(
+            execution_id=execution_id,
+            stream="stdin",
+            line=command,
+            timestamp=start_time,
+            line_number=1,
+        )
 
         if self.debug:
             logger.debug(f"[stdin] {command}")

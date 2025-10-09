@@ -239,7 +239,9 @@ class ArchiveArtifactRepository(BaseRepository[ArchiveArtifact]):
 
     def finalize_result(
         self,
-        artifact_id: int,
+        artifact_id: Optional[int] = None,
+        *,
+        rowid: Optional[int] = None,
         success: bool,
         exit_code: Optional[int],
         saved_path: Optional[str],
@@ -248,14 +250,22 @@ class ArchiveArtifactRepository(BaseRepository[ArchiveArtifact]):
         """Update artifact with final archiving result.
 
         Args:
-            artifact_id: Artifact ID to update
-            success: Whether archiving succeeded
-            exit_code: Process exit code
-            saved_path: Path to saved file
-            size_bytes: Optional file size in bytes
+            artifact_id: Artifact ID to update.
+            rowid: Legacy alias for artifact ID (deprecated).
+            success: Whether archiving succeeded.
+            exit_code: Process exit code.
+            saved_path: Path to saved file.
+            size_bytes: Optional file size in bytes.
+
+        Raises:
+            ValueError: If neither artifact_id nor rowid is provided.
         """
+        resolved_id = artifact_id if artifact_id is not None else rowid
+        if resolved_id is None:
+            raise ValueError("artifact_id or rowid must be provided")
+
         with self._get_session() as session:
-            art = session.get(ArchiveArtifact, artifact_id)
+            art = session.get(ArchiveArtifact, resolved_id)
             if art is None:
                 return
             art.success = bool(success)
