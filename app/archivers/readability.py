@@ -18,10 +18,10 @@ logger = logging.getLogger(__name__)
 class ReadabilityArchiver(BaseArchiver, ChromiumArchiverMixin):
     name = "readability"
 
-    def __init__(self, ht_runner, settings: AppSettings):
+    def __init__(self, command_runner, settings: AppSettings):
         super().__init__(settings)
-        # ht_runner no longer required; kept for constructor compatibility
-        self.ht_runner = ht_runner
+        # command_runner not used by readability; kept for constructor compatibility
+        self.command_runner = command_runner
         self.chromium_builder = ChromiumCommandBuilder(settings)
 
     def _get_source_html(self, url: str) -> Optional[str]:

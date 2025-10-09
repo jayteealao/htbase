@@ -18,7 +18,7 @@ from core.config import get_settings
 from core.logging import setup_logging
 from core.utils import cleanup_chromium_singleton_locks
 from db.repository import init_db
-from core.ht_runner import HTRunner
+from core.command_runner import CommandRunner
 from services.summarizer import SummaryService
 from task_manager import (
     ArchiverTaskManager,
@@ -32,7 +32,7 @@ settings = get_settings()
 setup_logging(settings.log_level)
 logger = logging.getLogger(__name__)
 
-ht_runner = HTRunner(settings.ht_bin, settings.ht_listen, log_path=settings.ht_log_file)
+command_runner = CommandRunner(debug=settings.log_level == "DEBUG")
 
 
 @asynccontextmanager
@@ -62,20 +62,13 @@ async def lifespan_context(app: FastAPI):
         logger.info(f"SingleFile CLI: {out}")
     except Exception:
         logger.warning("SingleFile CLI: not available")
-    try:
-        out = subprocess.check_output([settings.ht_bin, "--version"], text=True).strip()
-        logger.info(f"ht: {out}")
-    except Exception:
-        logger.warning("ht: not available")
-
     logger.info(f"Summarization enabled: {settings.enable_summarization}")
-    if settings.start_ht:
-        ht_runner.start()
+    logger.info(f"CommandRunner debug mode: {command_runner.debug}")
 
     # Register archivers using factory
     # Registration order matters when using the "all" pipeline
     # Run readability first so its DOM dump can be reused by monolith.
-    factory = ArchiverFactory(settings, ht_runner)
+    factory = ArchiverFactory(settings, command_runner)
     factory.register("readability", ReadabilityArchiver)
     factory.register("monolith", MonolithArchiver)
     factory.register("singlefile-cli", SingleFileCLIArchiver)
@@ -86,9 +79,9 @@ async def lifespan_context(app: FastAPI):
     app.state.archivers = factory.create_all()
     app.state.archiver_factory = factory  # Store factory for potential dynamic registration
     summarization_queue: "queue.Queue[SummarizeTask]" = queue.Queue()
-    
-    # Expose ht runner on app state for APIs
-    app.state.ht_runner = ht_runner
+
+    # Expose command runner on app state for APIs
+    app.state.command_runner = command_runner
     
     app.state.summarizer = SummaryService(settings)
     app.state.summarization_manager = SummarizationTaskManager(
@@ -129,12 +122,6 @@ async def lifespan_context(app: FastAPI):
             cleanup_chromium_singleton_locks(user_data_dir)
         except Exception:
             pass
-
-        if settings.start_ht:
-            try:
-                ht_runner.stop()
-            except Exception:
-                pass
 
 
 app = FastAPI(title="archiver service", version="0.3.0", lifespan=lifespan_context)

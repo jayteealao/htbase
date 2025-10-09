@@ -181,7 +181,7 @@ class AppSettings(BaseSettings):
     )
     log_level: str = Field(default="INFO", validation_alias=AliasChoices("LOG_LEVEL"))
     skip_existing_saves: bool = Field(
-        default=False,
+        default=True,
         validation_alias=AliasChoices("SKIP_EXISTING_SAVES"),
     )
     summarization: SummarizationSettings = Field(default_factory=SummarizationSettings)

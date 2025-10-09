@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Dict, Type
 
 if TYPE_CHECKING:
     from core.config import AppSettings
-    from core.ht_runner import HTRunner
+    from core.command_runner import CommandRunner
     from archivers.base import BaseArchiver
 
 logger = logging.getLogger(__name__)
@@ -20,15 +20,15 @@ class ArchiverFactory:
     their instantiation with proper dependency injection.
     """
 
-    def __init__(self, settings: "AppSettings", ht_runner: "HTRunner"):
+    def __init__(self, settings: "AppSettings", command_runner: "CommandRunner"):
         """Initialize the factory with required dependencies.
 
         Args:
             settings: Application settings
-            ht_runner: HTRunner instance for command execution
+            command_runner: CommandRunner instance for command execution
         """
         self.settings = settings
-        self.ht_runner = ht_runner
+        self.command_runner = command_runner
         self._registry: Dict[str, Type["BaseArchiver"]] = {}
 
     def register(self, name: str, archiver_class: Type["BaseArchiver"]) -> None:
@@ -69,7 +69,7 @@ class ArchiverFactory:
             )
 
         logger.debug("Creating archiver instance", extra={"name": name})
-        return archiver_class(ht_runner=self.ht_runner, settings=self.settings)
+        return archiver_class(command_runner=self.command_runner, settings=self.settings)
 
     def create_all(self) -> Dict[str, "BaseArchiver"]:
         """Create instances of all registered archivers.

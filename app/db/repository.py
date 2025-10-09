@@ -13,6 +13,8 @@ from .models import (
     ArticleSummary,
     ArticleEntity,
     ArticleTag,
+    CommandExecution,
+    CommandOutputLine,
 )
 from .session import get_engine, get_session
 
@@ -345,20 +347,40 @@ def get_task_rows(db_path: Path | None, task_id: str) -> List[Dict[str, Any]]:
 def find_existing_success_save(
     db_path: Path | None, *, item_id: str, url: str, archiver: str
 ) -> Optional[ArchiveArtifact]:
-    """Return the successful artifact row for a specific archiver and URL."""
+    """Return the successful artifact row for a specific archiver and URL.
+
+    Looks up by URL first (canonical match), then falls back to item_id if URL not found.
+    This ensures we skip only when the exact URL was previously archived successfully.
+    """
     init_db(db_path)
     with get_session(db_path) as session:
+        # First try to find by URL (most specific match)
         au = (
             session.execute(
-                select(ArchivedUrl).where(
-                    or_(ArchivedUrl.url == url, ArchivedUrl.item_id == item_id)
-                )
+                select(ArchivedUrl).where(ArchivedUrl.url == url)
             )
             .scalars()
             .first()
         )
+
+        # If no URL match and item_id provided, try item_id as fallback
+        # This handles cases where the URL might have changed but item_id is stable
+        if not au and item_id:
+            au = (
+                session.execute(
+                    select(ArchivedUrl).where(ArchivedUrl.item_id == item_id)
+                )
+                .scalars()
+                .first()
+            )
+            # But if we matched by item_id, verify the URL also matches
+            # to avoid false positives when same item_id is reused for different URLs
+            if au and au.url != url:
+                return None
+
         if not au:
             return None
+
         art = (
             session.execute(
                 select(ArchiveArtifact)
@@ -396,6 +418,15 @@ def get_archived_url_by_id(
     init_db(db_path)
     with get_session(db_path) as session:
         return session.get(ArchivedUrl, archived_url_id)
+
+
+def get_archived_url_by_url(db, *, url: str) -> Optional[ArchivedUrl]:
+    """Get an archived URL by its URL string."""
+    return (
+        db.execute(select(ArchivedUrl).where(ArchivedUrl.url == url))
+        .scalars()
+        .first()
+    )
 
 
 def get_metadata_for_archived_url(
@@ -725,3 +756,110 @@ def get_size_stats_by_archived_url_id(
             "total_size_bytes": au.total_size_bytes,
             "artifacts": artifact_sizes,
         }
+
+
+# Command execution logging functions
+
+def create_command_execution(
+    db,
+    *,
+    command: str,
+    start_time: datetime,
+    timeout: float,
+    archived_url_id: Optional[int] = None,
+    archiver: Optional[str] = None,
+) -> int:
+    """Create a new command execution record and return its ID."""
+    execution = CommandExecution(
+        command=command,
+        start_time=start_time,
+        timeout=timeout,
+        archived_url_id=archived_url_id,
+        archiver=archiver,
+    )
+    db.add(execution)
+    db.flush()
+    return execution.id
+
+
+def finalize_command_execution(
+    db,
+    *,
+    execution_id: int,
+    end_time: datetime,
+    exit_code: Optional[int],
+    timed_out: bool,
+) -> None:
+    """Update command execution with final results."""
+    stmt = (
+        update(CommandExecution)
+        .where(CommandExecution.id == execution_id)
+        .values(
+            end_time=end_time,
+            exit_code=exit_code,
+            timed_out=timed_out,
+        )
+    )
+    db.execute(stmt)
+    db.flush()
+
+
+def append_command_output_line(
+    db,
+    *,
+    execution_id: int,
+    stream: str,
+    line: str,
+    timestamp: datetime,
+    line_number: Optional[int] = None,
+) -> None:
+    """Append a single line of output to command execution log."""
+    output_line = CommandOutputLine(
+        execution_id=execution_id,
+        timestamp=timestamp,
+        stream=stream,
+        line=line,
+        line_number=line_number,
+    )
+    db.add(output_line)
+    db.flush()
+
+
+def get_command_execution(db, *, execution_id: int) -> Optional[CommandExecution]:
+    """Get a command execution by ID."""
+    return db.get(CommandExecution, execution_id)
+
+
+def get_command_output_lines(
+    db,
+    *,
+    execution_id: int,
+) -> List[CommandOutputLine]:
+    """Get all output lines for a command execution in chronological order."""
+    stmt = (
+        select(CommandOutputLine)
+        .where(CommandOutputLine.execution_id == execution_id)
+        .order_by(CommandOutputLine.timestamp.asc(), CommandOutputLine.id.asc())
+    )
+    return list(db.execute(stmt).scalars().all())
+
+
+def list_command_executions(
+    db,
+    *,
+    archived_url_id: Optional[int] = None,
+    archiver: Optional[str] = None,
+    limit: int = 100,
+) -> List[CommandExecution]:
+    """List command executions with optional filtering."""
+    stmt = select(CommandExecution).order_by(CommandExecution.start_time.desc())
+
+    if archived_url_id is not None:
+        stmt = stmt.where(CommandExecution.archived_url_id == archived_url_id)
+
+    if archiver is not None:
+        stmt = stmt.where(CommandExecution.archiver == archiver)
+
+    stmt = stmt.limit(limit)
+
+    return list(db.execute(stmt).scalars().all())

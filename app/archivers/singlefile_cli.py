@@ -8,7 +8,7 @@ import shlex
 from archivers.base import BaseArchiver
 from core.chromium_utils import ChromiumArchiverMixin, ChromiumCommandBuilder
 from core.config import AppSettings
-from core.ht_runner import HTRunner
+from core.command_runner import CommandRunner
 from core.utils import sanitize_filename
 from models import ArchiveResult
 
@@ -19,20 +19,20 @@ class SingleFileCLIArchiver(BaseArchiver, ChromiumArchiverMixin):
     # Folder name to write under each item_id
     name = "singlefile"
 
-    def __init__(self, ht_runner: HTRunner, settings: AppSettings):
+    def __init__(self, command_runner: CommandRunner, settings: AppSettings):
         super().__init__(settings)
-        self.ht_runner = ht_runner
+        self.command_runner = command_runner
         self.chromium_builder = ChromiumCommandBuilder(settings)
 
     def archive(self, *, url: str, item_id: str) -> ArchiveResult:
         out_dir, out_path = self.get_output_path(item_id)
 
-        logger.info(f"Archiving {url}", extra={"item_id": item_id, "archiver": "singlefile"})
+        logger.info(f"Archiving {item_id} {url}", extra={"item_id": item_id, "archiver": "singlefile"})
 
         # Setup Chromium (create user data dir and clean locks)
         self.setup_chromium()
 
-        # Compose command to run via ht
+        # Compose command to run via command runner
         url_q = shlex.quote(url)
         out_q = shlex.quote(str(out_path))
         user_data_dir = self.settings.resolved_chromium_user_data_dir
@@ -107,21 +107,38 @@ class SingleFileCLIArchiver(BaseArchiver, ChromiumArchiverMixin):
         sf_cmd = f"{self.settings.singlefile_bin} {url_q} {out_q}"
         if extra_q:
             sf_cmd += f" {extra_q}"
-        cmd = f"{sf_cmd}; echo __DONE__:$?"
 
-        code = self.ht_runner.execute_command(cmd, timeout=300.0)
+        # Get archived_url_id for context linking
+        from db.session import get_session
+        from db.repository import get_archived_url_by_url
 
-        if code is None:
-            return ArchiveResult(success=False, exit_code=None, saved_path=None)
+        archived_url_id = None
+        try:
+            with get_session() as db:
+                archived_url = get_archived_url_by_url(db, url=url)
+                if archived_url:
+                    archived_url_id = archived_url.id
+        except Exception:
+            pass
 
-        success = code == 0 and out_path.exists() and out_path.stat().st_size > 0
+        result = self.command_runner.execute(
+            command=sf_cmd,
+            timeout=300.0,
+            archived_url_id=archived_url_id,
+            archiver=self.name,
+        )
+
+        if result.timed_out:
+            return ArchiveResult(success=False, exit_code=result.exit_code, saved_path=None)
+
+        success = result.exit_code == 0 and out_path.exists() and out_path.stat().st_size > 0
 
         # Clean up Chromium singleton locks after archiving
         self.cleanup_chromium()
 
         return ArchiveResult(
             success=success,
-            exit_code=code,
+            exit_code=result.exit_code,
             saved_path=str(out_path) if success else None,
         )
 

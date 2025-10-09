@@ -135,6 +135,7 @@ def _archive_with(
     summarization = getattr(request.app.state, "summarization", None)
 
     # Apply paywall URL rewriting
+    # IMPORTANT: Store original URL in DB, use rewritten URL only for archiving
     original_url = str(payload.url)
     rewritten_url = rewrite_paywalled_url(original_url)
     if rewritten_url != original_url:
@@ -152,11 +153,12 @@ def _archive_with(
         if status == 404:
             logger.info(f"URL responded 404 | archiver={name} item_id={safe_id} url={rewritten_url}")
             # Record failed result with exit_code=404 via central helper
+            # Store ORIGINAL URL in database, not rewritten
             try:
                 last_row_id = record_http_failure(
                     db_path=settings.resolved_db_path,
                     item_id=safe_id,
-                    url=rewritten_url,
+                    url=original_url,  # Changed: store original URL
                     archiver_name=name,
                     exit_code=404,
                 )
@@ -164,39 +166,56 @@ def _archive_with(
                 last_row_id = None
             last_result = ArchiveResult(success=False, exit_code=404, saved_path=None)
             continue
-        # Optional per-archiver skip - check both rewritten and original URLs
+        # Optional per-archiver skip - check against ORIGINAL URL only
         if settings.skip_existing_saves:
+            existing = None
+
+            # First check: Database lookup by URL
             try:
-                # Check rewritten URL first
                 existing = find_existing_success_save(
                     settings.resolved_db_path,
                     item_id=safe_id,
-                    url=rewritten_url,
+                    url=original_url,  # Changed: check original URL
                     archiver=name,
                 )
-                # Also check original URL if this is a freedium URL
-                if existing is None:
-                    extracted_original = extract_original_url(rewritten_url)
-                    if extracted_original:
-                        existing = find_existing_success_save(
-                            settings.resolved_db_path,
-                            item_id=safe_id,
-                            url=extracted_original,
-                            archiver=name,
-                        )
             except Exception:
                 existing = None
+
+            # Second check: File system check (catches cases where DB is out of sync)
+            if existing is None:
+                try:
+                    archiver_instance = archiver_obj
+                    existing_file = archiver_instance.has_existing_output(safe_id)
+                    if existing_file:
+                        logger.info(f"Found existing file on disk (not in DB) | archiver={name} item_id={safe_id} path={existing_file}")
+                        # Create a mock existing object to reuse the file
+                        class MockExisting:
+                            def __init__(self, path):
+                                self.saved_path = str(path)
+                                self.archived_url_id = None
+                        existing = MockExisting(existing_file)
+                except Exception as e:
+                    logger.debug(f"File system check failed | archiver={name} item_id={safe_id} error={e}")
+
             if existing is not None:
-                logger.info(f"Reusing existing artifact | archiver={name} item_id={safe_id} saved_path={existing.saved_path}")
-                last_result = ArchiveResult(
-                    success=True, exit_code=0, saved_path=existing.saved_path
-                )
+                # Verify the file actually exists before reusing
+                saved_path_obj = Path(existing.saved_path) if existing.saved_path else None
+                if saved_path_obj and saved_path_obj.exists():
+                    logger.info(f"Reusing existing artifact | archiver={name} item_id={safe_id} saved_path={existing.saved_path}")
+                    last_result = ArchiveResult(
+                        success=True, exit_code=0, saved_path=existing.saved_path
+                    )
+                else:
+                    logger.warning(f"Existing artifact found but file missing | archiver={name} item_id={safe_id} saved_path={existing.saved_path} - will re-archive")
+                    existing = None  # Force re-archiving
+
+            if existing is not None:
                 try:
                     init_db(settings.resolved_db_path)
                     last_row_id = insert_save_result(
                         db_path=settings.resolved_db_path,
                         item_id=safe_id,
-                        url=rewritten_url,
+                        url=original_url,  # Changed: store original URL
                         success=True,
                         exit_code=0,
                         saved_path=existing.saved_path,
@@ -224,12 +243,13 @@ def _archive_with(
         last_result = result
         logger.info(f"Archiver completed | archiver={name} item_id={safe_id} success={result.success} exit_code={result.exit_code} saved_path={result.saved_path}")
         # Record to DB (best-effort)
+        # IMPORTANT: Store original URL, not rewritten URL
         try:
             init_db(settings.resolved_db_path)
             last_row_id = insert_save_result(
                 db_path=settings.resolved_db_path,
                 item_id=safe_id,
-                url=rewritten_url,
+                url=original_url,  # Changed: store original URL
                 success=result.success,
                 exit_code=result.exit_code,
                 saved_path=result.saved_path,

@@ -9,7 +9,6 @@ from core.utils import cleanup_chromium_singleton_locks
 
 if TYPE_CHECKING:
     from core.config import AppSettings
-    from core.ht_runner import HTRunner
 
 
 class ChromiumCommandBuilder:

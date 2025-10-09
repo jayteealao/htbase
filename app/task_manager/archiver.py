@@ -32,9 +32,10 @@ logger = logging.getLogger(__name__)
 @dataclass
 class BatchItem:
     item_id: str
-    url: str
+    url: str  # Original URL (stored in DB)
     rowid: int
     archiver_name: str
+    rewritten_url: str | None = None  # Freedium URL (used for archiving)
 
 
 @dataclass
@@ -88,43 +89,35 @@ class ArchiverTaskManager(BackgroundTaskManager[BatchTask]):
         for entry in items:
             item_id = str(entry["item_id"])
             original_url = str(entry["url"])
-            url = rewrite_paywalled_url(original_url)
-            if url != original_url:
+            rewritten_url = rewrite_paywalled_url(original_url)
+            if rewritten_url != original_url:
                 logger.debug(
                     "Rewriting URL for paywall bypass",
                     extra={
                         "item_id": item_id,
                         "original_url": original_url,
-                        "rewritten_url": url,
+                        "rewritten_url": rewritten_url,
                     },
                 )
-            logger.debug("Planning archiving run", extra={"item_id": item_id, "url": url})
+            logger.debug("Planning archiving run", extra={"item_id": item_id, "url": original_url})
             for arch_name in archiver_order:
-                # Check for existing saves against both original and rewritten URLs
+                # Check for existing saves against ORIGINAL URL only (what's stored in DB)
                 if self.settings.skip_existing_saves:
-                    # Check rewritten URL first
                     already_saved = is_already_saved_success(
                         self.settings.resolved_db_path,
                         item_id=item_id,
-                        url=url,
+                        url=original_url,  # Changed: check original URL
                         archiver=arch_name,
                     )
-                    # Also check original URL if it was rewritten
-                    if not already_saved and url != original_url:
-                        already_saved = is_already_saved_success(
-                            self.settings.resolved_db_path,
-                            item_id=item_id,
-                            url=original_url,
-                            archiver=arch_name,
-                        )
                     if already_saved:
-                        logger.info("Skipping existing save", extra={"archiver": arch_name, "item_id": item_id, "url": url, "original_url": original_url})
+                        logger.info("Skipping existing save", extra={"archiver": arch_name, "item_id": item_id, "url": original_url})
                         continue
 
+                # Store ORIGINAL URL in database, but we'll use rewritten URL for archiving
                 rowid = insert_pending_save(
                     db_path=self.settings.resolved_db_path,
                     item_id=item_id,
-                    url=url,
+                    url=original_url,  # Changed: store original URL
                     task_id=task_id,
                     archiver_name=arch_name,
                 )
@@ -132,9 +125,10 @@ class ArchiverTaskManager(BackgroundTaskManager[BatchTask]):
                 batch_items.append(
                     BatchItem(
                         item_id=item_id,
-                        url=url,
+                        url=original_url,  # Changed: original URL
                         rowid=rowid,
                         archiver_name=arch_name,
+                        rewritten_url=rewritten_url if rewritten_url != original_url else None,
                     )
                 )
 
@@ -303,19 +297,19 @@ class ArchiverTaskManager(BackgroundTaskManager[BatchTask]):
                 if not raw_url:
                     continue
                 original_url = str(raw_url)
-                url = rewrite_paywalled_url(original_url)
-                if url != original_url:
+                rewritten_url = rewrite_paywalled_url(original_url)
+                if rewritten_url != original_url:
                     logger.debug(
                         "Rewriting URL for paywall bypass",
                         extra={
                             "archiver": archiver_name,
                             "artifact_id": record.get("artifact_id"),
                             "original_url": original_url,
-                            "rewritten_url": url,
+                            "rewritten_url": rewritten_url,
                         },
                     )
                 raw_item_id = record.get("item_id")
-                safe_item_id = raw_item_id or sanitize_filename(url)
+                safe_item_id = raw_item_id or sanitize_filename(original_url)
                 if not safe_item_id:
                     safe_item_id = f"artifact-{record.get('artifact_id', uuid.uuid4().hex)}"
                 logger.debug(
@@ -324,28 +318,39 @@ class ArchiverTaskManager(BackgroundTaskManager[BatchTask]):
                         "archiver": archiver_name,
                         "artifact_id": record.get("artifact_id"),
                         "item_id": safe_item_id,
-                        "url": url
+                        "url": original_url
                     }
                 )
 
-                rowid = insert_pending_save(
-                    db_path=self.settings.resolved_db_path,
-                    item_id=safe_item_id,
-                    url=url,
-                    task_id=task_id,
-                    archiver_name=archiver_name,
-                )
-                logger.debug(
-                    "Requeue inserted pending save",
-                    extra={"rowid": rowid, "archiver": archiver_name, "item_id": safe_item_id}
-                )
+                # Use existing artifact_id as rowid if available (don't create duplicate)
+                existing_rowid = record.get("artifact_id")
+                if existing_rowid:
+                    rowid = int(existing_rowid)
+                    logger.debug(
+                        "Reusing existing artifact rowid",
+                        extra={"rowid": rowid, "archiver": archiver_name}
+                    )
+                else:
+                    # Only create new pending save if no existing rowid
+                    rowid = insert_pending_save(
+                        db_path=self.settings.resolved_db_path,
+                        item_id=safe_item_id,
+                        url=original_url,  # Changed: store original URL
+                        task_id=task_id,
+                        archiver_name=archiver_name,
+                    )
+                    logger.debug(
+                        "Requeue inserted pending save",
+                        extra={"rowid": rowid, "archiver": archiver_name, "item_id": safe_item_id}
+                    )
 
                 batch_items.append(
                     BatchItem(
                         item_id=safe_item_id,
-                        url=url,
+                        url=original_url,  # Changed: original URL
                         rowid=rowid,
                         archiver_name=archiver_name,
+                        rewritten_url=rewritten_url if rewritten_url != original_url else None,
                     )
                 )
                 logger.debug(
@@ -387,13 +392,16 @@ class ArchiverTaskManager(BackgroundTaskManager[BatchTask]):
 
     def process(self, task: BatchTask) -> None:  # type: ignore[override]
         for item in task.items:
+            # Use rewritten URL for fetching, original URL for storage/checks
+            fetch_url = item.rewritten_url or item.url
             logger.info(
                 "Processing artifact",
                 extra={
                     "task_id": task.task_id,
                     "rowid": item.rowid,
                     "archiver": item.archiver_name,
-                    "url": item.url
+                    "url": item.url,
+                    "fetch_url": fetch_url if fetch_url != item.url else None
                 }
             )
             archiver = self.archivers.get(item.archiver_name)
@@ -411,12 +419,12 @@ class ArchiverTaskManager(BackgroundTaskManager[BatchTask]):
             try:
                 status = None
                 try:
-                    status = get_url_status(item.url)
+                    status = get_url_status(fetch_url)
                 except Exception:
                     status = None
-                logger.debug("URL status check", extra={"rowid": item.rowid, "status": status})
+                logger.debug("URL status check", extra={"rowid": item.rowid, "status": status, "url": fetch_url})
                 if status == 404:
-                    logger.warning("URL returned 404", extra={"rowid": item.rowid, "url": item.url})
+                    logger.warning("URL returned 404", extra={"rowid": item.rowid, "url": fetch_url})
                     try:
                         record_http_failure(
                             db_path=self.settings.resolved_db_path,
@@ -434,53 +442,86 @@ class ArchiverTaskManager(BackgroundTaskManager[BatchTask]):
                     continue
 
                 if self.settings.skip_existing_saves:
-                    # Check rewritten URL first
+                    existing = None
+
+                    # First check: Database lookup by ORIGINAL URL
                     existing = find_existing_success_save(
                         self.settings.resolved_db_path,
                         item_id=item.item_id,
-                        url=item.url,
+                        url=item.url,  # Original URL (what's stored in DB)
                         archiver=item.archiver_name,
                     )
-                    # Also check original URL if this is a freedium URL
+
+                    # Second check: File system check (catches cases where DB is out of sync)
                     if existing is None:
-                        original_url = extract_original_url(item.url)
-                        if original_url:
-                            existing = find_existing_success_save(
-                                self.settings.resolved_db_path,
-                                item_id=item.item_id,
-                                url=original_url,
-                                archiver=item.archiver_name,
+                        try:
+                            existing_file = archiver.has_existing_output(item.item_id)
+                            if existing_file:
+                                from pathlib import Path
+                                logger.info(
+                                    "Found existing file on disk (not in DB)",
+                                    extra={
+                                        "archiver": item.archiver_name,
+                                        "item_id": item.item_id,
+                                        "path": str(existing_file)
+                                    }
+                                )
+                                # Create a mock existing object
+                                class MockExisting:
+                                    def __init__(self, path):
+                                        self.saved_path = str(path)
+                                        self.archived_url_id = None
+                                existing = MockExisting(existing_file)
+                        except Exception as e:
+                            logger.debug(
+                                "File system check failed",
+                                extra={"archiver": item.archiver_name, "item_id": item.item_id, "error": str(e)}
                             )
+
+                    # Verify file exists before reusing
                     if existing is not None:
-                        logger.info(
-                            "Reusing existing save",
-                            extra={
-                                "rowid": item.rowid,
-                                "archiver": item.archiver_name,
-                                "saved_path": existing.saved_path
-                            }
-                        )
-                        finalize_save_result(
-                            db_path=self.settings.resolved_db_path,
-                            rowid=item.rowid,
-                            success=True,
-                            exit_code=0,
-                            saved_path=existing.saved_path,
-                        )
-                        self._schedule_summary(
-                            archived_url_id=existing.archived_url_id,
-                            rowid=item.rowid,
-                            source=item.archiver_name,
-                            reason=f"task-existing-{item.archiver_name}",
-                        )
-                        continue
+                        from pathlib import Path
+                        saved_path_obj = Path(existing.saved_path) if existing.saved_path else None
+                        if saved_path_obj and saved_path_obj.exists():
+                            logger.info(
+                                "Reusing existing save",
+                                extra={
+                                    "rowid": item.rowid,
+                                    "archiver": item.archiver_name,
+                                    "saved_path": existing.saved_path
+                                }
+                            )
+                            finalize_save_result(
+                                db_path=self.settings.resolved_db_path,
+                                rowid=item.rowid,
+                                success=True,
+                                exit_code=0,
+                                saved_path=existing.saved_path,
+                            )
+                            if hasattr(existing, 'archived_url_id'):
+                                self._schedule_summary(
+                                    archived_url_id=existing.archived_url_id,
+                                    rowid=item.rowid,
+                                    source=item.archiver_name,
+                                    reason=f"task-existing-{item.archiver_name}",
+                                )
+                            continue
+                        else:
+                            logger.warning(
+                                "Existing artifact found but file missing - will re-archive",
+                                extra={
+                                    "rowid": item.rowid,
+                                    "archiver": item.archiver_name,
+                                    "saved_path": existing.saved_path
+                                }
+                            )
 
                 logger.info(
                     "Invoking archiver",
-                    extra={"archiver": item.archiver_name, "rowid": item.rowid, "url": item.url}
+                    extra={"archiver": item.archiver_name, "rowid": item.rowid, "url": fetch_url}
                 )
                 result: ArchiveResult = archiver.archive(
-                    url=item.url, item_id=item.item_id
+                    url=fetch_url, item_id=item.item_id  # Use rewritten URL for fetching
                 )
 
                 # Calculate size if save was successful
