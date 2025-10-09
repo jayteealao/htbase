@@ -55,6 +55,54 @@ class BaseArchiver(abc.ABC):
 
         return None
 
+    def validate_output(
+        self,
+        path: Path,
+        exit_code: int | None,
+        min_size: int = 1,
+    ) -> bool:
+        """Validate that archiver output meets success criteria.
+
+        Args:
+            path: Path to the output file
+            exit_code: Exit code from the archiver command
+            min_size: Minimum file size in bytes (default: 1)
+
+        Returns:
+            True if output is valid (exit code 0, file exists, size >= min_size)
+        """
+        return (
+            exit_code == 0
+            and path.exists()
+            and path.stat().st_size >= min_size
+        )
+
+    def create_result(
+        self,
+        path: Path,
+        exit_code: int | None,
+        metadata: dict | None = None,
+        min_size: int = 1,
+    ) -> ArchiveResult:
+        """Create a standardized ArchiveResult from archiver execution.
+
+        Args:
+            path: Path to the output file
+            exit_code: Exit code from the archiver command
+            metadata: Optional metadata dictionary
+            min_size: Minimum file size for success validation (default: 1)
+
+        Returns:
+            ArchiveResult with success status and saved path
+        """
+        success = self.validate_output(path, exit_code, min_size)
+        return ArchiveResult(
+            success=success,
+            exit_code=exit_code,
+            saved_path=str(path) if success else None,
+            metadata=metadata,
+        )
+
     @abc.abstractmethod
     def archive(self, *, url: str, item_id: str) -> ArchiveResult:  # noqa: D401
         """Archive the given URL keyed by item_id; returns result metadata."""

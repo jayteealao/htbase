@@ -172,10 +172,9 @@ class ReadabilityArchiver(BaseArchiver, ChromiumArchiverMixin):
         except Exception:
             return ArchiveResult(success=False, exit_code=1, saved_path=None)
 
-        success = out_path.exists() and out_path.stat().st_size > 0
-        return ArchiveResult(
-            success=success,
-            exit_code=0 if success else 1,
-            saved_path=str(out_path) if success else None,
-            metadata=meta if success else None,
+        # Use base class validation, passing exit_code=0 for successful parsing
+        return self.create_result(
+            path=out_path,
+            exit_code=0 if out_path.exists() and out_path.stat().st_size > 0 else 1,
+            metadata=meta,
         )

@@ -87,14 +87,8 @@ class MonolithArchiver(BaseArchiver, ChromiumArchiverMixin):
             self.cleanup_after_timeout()
             return ArchiveResult(success=False, exit_code=result.exit_code, saved_path=None)
 
-        success = result.exit_code == 0 and out_path.exists() and out_path.stat().st_size > 0
-
         # Clean up Chromium singleton locks after archiving (if using Chromium)
         if self.use_chromium:
             self.cleanup_chromium()
 
-        return ArchiveResult(
-            success=success,
-            exit_code=result.exit_code,
-            saved_path=str(out_path) if success else None,
-        )
+        return self.create_result(path=out_path, exit_code=result.exit_code)
