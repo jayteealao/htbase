@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import logging
-from typing import Dict, List
+import mimetypes
+import tarfile
+from io import BytesIO
+from pathlib import Path
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import FileResponse, StreamingResponse
 
 from core.config import AppSettings, get_settings
 from db.repository import (
@@ -12,9 +17,12 @@ from db.repository import (
     find_existing_success_save,
     record_http_failure,
     insert_save_metadata,
+    get_saves_by_item_id,
+    get_saves_by_url,
 )
 from models import (
     ArchiveResult,
+    ArchiveRetrieveRequest,
     SaveRequest,
     SaveResponse,
     BatchCreateRequest,
@@ -26,6 +34,63 @@ from core.utils import get_url_status
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _sanitize_optional_id(raw_id: Optional[str]) -> Optional[str]:
+    if raw_id is None:
+        return None
+    stripped = raw_id.strip()
+    if not stripped:
+        return None
+    return sanitize_filename(stripped)
+
+
+def _latest_successful_artifacts(artifacts: List[object]) -> List[object]:
+    latest: dict[str, object] = {}
+    for artifact in artifacts:
+        if not getattr(artifact, "success", False):
+            continue
+        saved_path = getattr(artifact, "saved_path", None)
+        if not saved_path:
+            continue
+        archiver = getattr(artifact, "archiver", "")
+        current = latest.get(archiver)
+        current_id = getattr(current, "id", 0) if current is not None else 0
+        candidate_id = getattr(artifact, "id", 0)
+        if current is None or candidate_id >= current_id:
+            latest[archiver] = artifact
+    return list(latest.values())
+
+
+def _collect_existing_artifacts(
+    *,
+    archiver: str,
+    safe_id: Optional[str],
+    url: Optional[str],
+    settings: AppSettings,
+) -> List[object]:
+    if archiver != "all":
+        try:
+            artifact = find_existing_success_save(
+                settings.resolved_db_path,
+                item_id=safe_id or "",
+                url=url or "",
+                archiver=archiver,
+            )
+        except Exception:
+            artifact = None
+        return [artifact] if artifact and getattr(artifact, "saved_path", None) else []
+
+    artifacts: List[object] = []
+    if safe_id:
+        artifacts.extend(
+            get_saves_by_item_id(settings.resolved_db_path, item_id=safe_id)
+        )
+    if url:
+        artifacts.extend(
+            get_saves_by_url(settings.resolved_db_path, url=url)
+        )
+    return _latest_successful_artifacts(artifacts)
 
 
 
@@ -210,6 +275,85 @@ def archive_with(
     response = _archive_with(archiver, payload, request, settings)
     logger.info(f"/archive/{archiver} response | ok={response.ok} exit_code={response.exit_code} rowid={response.db_rowid}")
     return response
+
+
+@router.post("/archive/retrieve")
+def retrieve_archive(
+    payload: ArchiveRetrieveRequest,
+    request: Request,
+    settings: AppSettings = Depends(get_settings),
+):
+    archiver_name = (payload.archiver or "all").strip().lower() or "all"
+    safe_id = _sanitize_optional_id(payload.id)
+    url_str = str(payload.url) if payload.url else None
+
+    logger.info(
+        "/archive/retrieve invoked",
+        extra={"archiver": archiver_name, "item_id": safe_id, "url": url_str},
+    )
+
+    artifacts = _collect_existing_artifacts(
+        archiver=archiver_name,
+        safe_id=safe_id,
+        url=url_str,
+        settings=settings,
+    )
+
+    if archiver_name != "all":
+        if not artifacts:
+            raise HTTPException(status_code=404, detail="url not archived")
+        artifact = artifacts[-1]
+        saved_path = getattr(artifact, "saved_path", None)
+        if not saved_path:
+            raise HTTPException(status_code=404, detail="url not archived")
+        file_path = Path(saved_path)
+        if not file_path.exists():
+            raise HTTPException(status_code=404, detail="archived file not available")
+        media_type, _ = mimetypes.guess_type(str(file_path))
+        media_type = media_type or "application/octet-stream"
+        archiver_label = getattr(artifact, "archiver", archiver_name)
+        base_label = safe_id or sanitize_filename(url_str or file_path.stem)
+        filename = (
+            f"{base_label}-{archiver_label}{file_path.suffix}"
+            if file_path.suffix
+            else f"{base_label}-{archiver_label}"
+        )
+        logger.info(
+            "Returning archived artifact",
+            extra={"archiver": archiver_label, "item_id": safe_id, "path": str(file_path)},
+        )
+        return FileResponse(
+            path=str(file_path),
+            media_type=media_type,
+            filename=filename,
+        )
+
+    files: list[tuple[str, Path]] = []
+    for artifact in artifacts:
+        saved_path = getattr(artifact, "saved_path", None)
+        archiver_label = getattr(artifact, "archiver", "artifact")
+        if not saved_path:
+            continue
+        file_path = Path(saved_path)
+        if file_path.exists():
+            files.append((archiver_label, file_path))
+    if not files:
+        raise HTTPException(status_code=404, detail="url not archived")
+
+    bundle_label = safe_id or sanitize_filename(url_str or "archive")
+    filename = f"{bundle_label}-artifacts.tar.gz"
+    buffer = BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
+        for archiver_label, file_path in files:
+            arcname = f"{archiver_label}/{file_path.name}"
+            tar.add(str(file_path), arcname=arcname)
+    buffer.seek(0)
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    logger.info(
+        "Returning archived bundle",
+        extra={"item_id": safe_id, "file_count": len(files), "filename": filename},
+    )
+    return StreamingResponse(buffer, media_type="application/gzip", headers=headers)
 
 
 @router.post("/save", response_model=TaskAccepted, status_code=202)

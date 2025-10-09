@@ -14,6 +14,29 @@ class SaveRequest(BaseModel):
     )
 
 
+class ArchiveRetrieveRequest(BaseModel):
+    url: Optional[HttpUrl] = None
+    id: Optional[str] = Field(
+        default=None,
+        description="Identifier specific to the URL (optional if url provided)",
+        validation_alias=AliasChoices("id", "user_id"),
+        serialization_alias="id",
+    )
+    archiver: str = Field(
+        default="all",
+        description="Archiver name or 'all' to download every archived artifact",
+    )
+
+    @model_validator(mode="after")
+    def _validate_target(self) -> "ArchiveRetrieveRequest":
+        if not any((self.id, self.url)):
+            raise ValueError("id or url must be provided")
+        archiver = (self.archiver or "all").strip() or "all"
+        self.archiver = archiver
+        return self
+
+
+
 class ArchiveResult(BaseModel):
     success: bool
     exit_code: Optional[int] = None
