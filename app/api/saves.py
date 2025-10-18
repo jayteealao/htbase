@@ -16,6 +16,8 @@ from db import (
     ArchivedUrlRepository,
     UrlMetadataRepository,
 )
+
+from db.repository import insert_save_result, record_http_failure
 from models import (
     ArchiveResult,
     ArchiveRetrieveRequest,
@@ -24,11 +26,15 @@ from models import (
     BatchCreateRequest,
     TaskAccepted,
 )
-from core.utils import sanitize_filename, check_url_archivability, rewrite_paywalled_url, extract_original_url
+from core.utils import sanitize_filename, check_url_archivability, rewrite_paywalled_url
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+artifact_repo = ArchiveArtifactRepository()
+url_repo = ArchivedUrlRepository()
+metadata_repo = UrlMetadataRepository()
 
 
 def _sanitize_optional_id(raw_id: Optional[str]) -> Optional[str]:
@@ -104,9 +110,9 @@ def _archive_with(
     logger.info("Archive request received", extra={"archiver": archiver_name, "payload": payload_snapshot})
 
     # Initialize repositories
-    artifact_repo = ArchiveArtifactRepository(settings.resolved_db_path)
-    url_repo = ArchivedUrlRepository(settings.resolved_db_path)
-    metadata_repo = UrlMetadataRepository(settings.resolved_db_path)
+    # artifact_repo = ArchiveArtifactRepository(settings.resolved_db_path)
+    # url_repo = ArchivedUrlRepository(settings.resolved_db_path)
+    # metadata_repo = UrlMetadataRepository(settings.resolved_db_path)
 
     item_id = payload.id.strip()
     if not item_id:
