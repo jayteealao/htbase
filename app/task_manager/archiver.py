@@ -414,235 +414,265 @@ class ArchiverTaskManager(BackgroundTaskManager[BatchTask]):
 
     def process(self, task: BatchTask) -> None:  # type: ignore[override]
         for item in task.items:
-            # Use rewritten URL for fetching, original URL for storage/checks
-            fetch_url = item.rewritten_url or item.url
-            logger.info(
-                "Processing artifact",
-                extra={
-                    "task_id": task.task_id,
-                    "rowid": item.rowid,
-                    "archiver": item.archiver_name,
-                    "url": item.url,
-                    "fetch_url": fetch_url if fetch_url != item.url else None
-                }
-            )
-            archiver = self.archivers.get(item.archiver_name)
-            if archiver is None:
-                logger.error("Archiver missing", extra={"archiver": item.archiver_name, "rowid": item.rowid})
-                self.artifact_repo.finalize_result(
-                    
-                    rowid=item.rowid,
-                    success=False,
-                    exit_code=127,
-                    saved_path=None,
-                )
-                continue
-
-            try:
-                url_check = check_url_archivability(fetch_url)
-                logger.debug("URL status check", extra={"rowid": item.rowid, "status": url_check.status_code, "should_archive": url_check.should_archive, "url": fetch_url})
-                if not url_check.should_archive:
-                    logger.warning("URL returned 404", extra={"rowid": item.rowid, "url": fetch_url})
-                    try:
-                        self.artifact_repo.finalize_result(
-                            
-                            rowid=item.rowid,
-                            exit_code=404,
-                        )
-                    except Exception:
-                        self.artifact_repo.finalize_result(
-                            
-                            rowid=item.rowid,
-                            success=False,
-                            exit_code=404,
-                            saved_path=None,
-                        )
-                    continue
-
-                if self.settings.skip_existing_saves:
-                    existing = None
-
-                    # First check: Database lookup by ORIGINAL URL
-                    existing = self.artifact_repo.find_successful(
-                        
-                        item_id=item.item_id,
-                        url=item.url,  # Original URL (what's stored in DB)
-                        archiver=item.archiver_name,
-                    )
-
-                    # Second check: File system check (catches cases where DB is out of sync)
-                    if existing is None:
-                        try:
-                            existing_file = archiver.has_existing_output(item.item_id)
-                            if existing_file:
-                                from pathlib import Path
-                                logger.info(
-                                    "Found existing file on disk (not in DB)",
-                                    extra={
-                                        "archiver": item.archiver_name,
-                                        "item_id": item.item_id,
-                                        "path": str(existing_file)
-                                    }
-                                )
-                                # Create a mock existing object
-                                class MockExisting:
-                                    def __init__(self, path):
-                                        self.saved_path = str(path)
-                                        self.archived_url_id = None
-                                existing = MockExisting(existing_file)
-                        except Exception as e:
-                            logger.debug(
-                                "File system check failed",
-                                extra={"archiver": item.archiver_name, "item_id": item.item_id, "error": str(e)}
-                            )
-
-                    # Verify file exists before reusing
-                    if existing is not None:
-                        from pathlib import Path
-                        saved_path_obj = Path(existing.saved_path) if existing.saved_path else None
-                        if saved_path_obj and saved_path_obj.exists():
-                            logger.info(
-                                "Reusing existing save",
-                                extra={
-                                    "rowid": item.rowid,
-                                    "archiver": item.archiver_name,
-                                    "saved_path": existing.saved_path
-                                }
-                            )
-                            self.artifact_repo.finalize_result(
-                                
-                                rowid=item.rowid,
-                                success=True,
-                                exit_code=0,
-                                saved_path=existing.saved_path,
-                            )
-                            if hasattr(existing, 'archived_url_id'):
-                                self._schedule_summary(
-                                    archived_url_id=existing.archived_url_id,
-                                    rowid=item.rowid,
-                                    source=item.archiver_name,
-                                    reason=f"task-existing-{item.archiver_name}",
-                                )
-                            continue
-                        else:
-                            logger.warning(
-                                "Existing artifact found but file missing - will re-archive",
-                                extra={
-                                    "rowid": item.rowid,
-                                    "archiver": item.archiver_name,
-                                    "saved_path": existing.saved_path
-                                }
-                            )
-
-                logger.info(
-                    "Invoking archiver",
-                    extra={"archiver": item.archiver_name, "rowid": item.rowid, "url": fetch_url}
-                )
-                result: ArchiveResult = archiver.archive(
-                    url=fetch_url, item_id=item.item_id  # Use rewritten URL for fetching
-                )
-
-                # Calculate size if save was successful
-                size_bytes = None
-                archived_url_id = None
-                if result.success and result.saved_path:
-                    from pathlib import Path
-                    try:
-                        saved_path = Path(result.saved_path)
-                        # Calculate size of the archiver output directory
-                        if saved_path.exists():
-                            archiver_dir = saved_path.parent
-                            size_bytes = get_directory_size(archiver_dir)
-                            logger.debug(
-                                "Calculated artifact size",
-                                extra={
-                                    "rowid": item.rowid,
-                                    "archiver": item.archiver_name,
-                                    "size_bytes": size_bytes,
-                                    "path": str(archiver_dir)
-                                }
-                            )
-
-                        # Get archived_url_id for updating total size
-                        artifact = self.artifact_repo.get_by_id( item.rowid)
-                        if artifact:
-                            archived_url_id = artifact.archived_url_id
-                    except Exception as exc:
-                        logger.warning(
-                            "Failed to calculate size",
-                            extra={"rowid": item.rowid, "error": str(exc)}
-                        )
-
-                self.artifact_repo.finalize_result(
-                    
-                    rowid=item.rowid,
-                    success=result.success,
-                    exit_code=result.exit_code,
-                    saved_path=result.saved_path,
-                    size_bytes=size_bytes,
-                )
-
-                # Update total size for the URL
-                if archived_url_id is not None:
-                    try:
-                        self.url_repo.update_total_size(
-                            
-                            archived_url_id=archived_url_id
-                        )
-                    except Exception as exc:
-                        logger.warning(
-                            "Failed to update total size",
-                            extra={"archived_url_id": archived_url_id, "error": str(exc)}
-                        )
-
-                logger.info(
-                    f"Finalized save ({'success' if result.success else 'failure'})",
-                    extra={
-                        "rowid": item.rowid,
-                        "success": result.success,
-                        "exit_code": result.exit_code,
-                        "saved_path": result.saved_path,
-                        "size_bytes": size_bytes
-                    }
-                )
-
-                try:
-                    if (
-                        getattr(result, "metadata", None)
-                        and item.archiver_name == "readability"
-                    ):
-                        self.metadata_repo.upsert(
-                            
-                            save_rowid=item.rowid,
-                            data=result.metadata,  # type: ignore[arg-type]
-                        )
-                except Exception:
-                    pass
-
-                if result.success:
-                    self._schedule_summary(
-                        archived_url_id=getattr(result, "archived_url_id", None),
-                        rowid=item.rowid,
-                        source=item.archiver_name,
-                        reason=f"task-{item.archiver_name}",
-                    )
-            except Exception as exc:
-                logger.error(
-                    "Archiving failed with exception",
-                    extra={"rowid": item.rowid, "archiver": item.archiver_name, "error": str(exc)},
-                    exc_info=True
-                )
-                self.artifact_repo.finalize_result(
-                    
-                    rowid=item.rowid,
-                    success=False,
-                    exit_code=1,
-                    saved_path=None,
-                )
+            self._process_item(task_id=task.task_id, item=item)
 
         if task.completion_event is not None:
             task.completion_event.set()
 
+    def _process_item(self, *, task_id: str, item: BatchItem) -> None:
+        fetch_url = item.rewritten_url or item.url
+        logger.info(
+            "Processing artifact",
+            extra={
+                "task_id": task_id,
+                "rowid": item.rowid,
+                "archiver": item.archiver_name,
+                "url": item.url,
+                "fetch_url": fetch_url if fetch_url != item.url else None,
+            },
+        )
+
+        archiver = self.archivers.get(item.archiver_name)
+        if archiver is None:
+            self._finalize_missing_archiver(item)
+            return
+
+        try:
+            if not self._should_archive(fetch_url=fetch_url, item=item):
+                return
+
+            if self.settings.skip_existing_saves and self._reuse_existing_save(item=item, archiver=archiver):
+                return
+
+            logger.info(
+                "Invoking archiver",
+                extra={"archiver": item.archiver_name, "rowid": item.rowid, "url": fetch_url},
+            )
+            result: ArchiveResult = archiver.archive(
+                url=fetch_url,
+                item_id=item.item_id,
+            )
+            self._record_result(item=item, result=result)
+        except Exception as exc:
+            self._handle_archiver_exception(item=item, error=exc)
+
+    def _finalize_missing_archiver(self, item: BatchItem) -> None:
+        logger.error("Archiver missing", extra={"archiver": item.archiver_name, "rowid": item.rowid})
+        self.artifact_repo.finalize_result(
+            
+            rowid=item.rowid,
+            success=False,
+            exit_code=127,
+            saved_path=None,
+        )
+
+    def _should_archive(self, *, fetch_url: str, item: BatchItem) -> bool:
+        url_check = check_url_archivability(fetch_url)
+        logger.debug(
+            "URL status check",
+            extra={
+                "rowid": item.rowid,
+                "status": url_check.status_code,
+                "should_archive": url_check.should_archive,
+                "url": fetch_url,
+            },
+        )
+        if url_check.should_archive:
+            return True
+
+        logger.warning("URL returned 404", extra={"rowid": item.rowid, "url": fetch_url})
+        try:
+            self.artifact_repo.finalize_result(
+                
+                rowid=item.rowid,
+                exit_code=404,
+            )
+        except Exception:
+            self.artifact_repo.finalize_result(
+                
+                rowid=item.rowid,
+                success=False,
+                exit_code=404,
+                saved_path=None,
+            )
+        return False
+
+    def _reuse_existing_save(self, *, item: BatchItem, archiver: Any) -> bool:
+        from pathlib import Path
+
+        existing = self.artifact_repo.find_successful(
+            
+            item_id=item.item_id,
+            url=item.url,
+            archiver=item.archiver_name,
+        )
+
+        saved_path: Optional[str] = getattr(existing, "saved_path", None) if existing else None
+        archived_url_id: Optional[int] = getattr(existing, "archived_url_id", None) if existing else None
+
+        if existing is None:
+            try:
+                existing_file = archiver.has_existing_output(item.item_id)
+                if existing_file:
+                    logger.info(
+                        "Found existing file on disk (not in DB)",
+                        extra={
+                            "archiver": item.archiver_name,
+                            "item_id": item.item_id,
+                            "path": str(existing_file),
+                        },
+                    )
+                    saved_path = str(existing_file)
+            except Exception as exc:
+                logger.debug(
+                    "File system check failed",
+                    extra={
+                        "archiver": item.archiver_name,
+                        "item_id": item.item_id,
+                        "error": str(exc),
+                    },
+                )
+
+        if not saved_path:
+            return False
+
+        saved_path_obj = Path(saved_path)
+        if saved_path_obj.exists():
+            logger.info(
+                "Reusing existing save",
+                extra={
+                    "rowid": item.rowid,
+                    "archiver": item.archiver_name,
+                    "saved_path": saved_path,
+                },
+            )
+            self.artifact_repo.finalize_result(
+                
+                rowid=item.rowid,
+                success=True,
+                exit_code=0,
+                saved_path=saved_path,
+            )
+            if archived_url_id is not None:
+                self._schedule_summary(
+                    archived_url_id=archived_url_id,
+                    rowid=item.rowid,
+                    source=item.archiver_name,
+                    reason=f"task-existing-{item.archiver_name}",
+                )
+            return True
+
+        logger.warning(
+            "Existing artifact found but file missing - will re-archive",
+            extra={
+                "rowid": item.rowid,
+                "archiver": item.archiver_name,
+                "saved_path": saved_path,
+            },
+        )
+        return False
+
+    def _record_result(self, *, item: BatchItem, result: ArchiveResult) -> None:
+        size_bytes: Optional[int] = None
+        archived_url_id: Optional[int] = None
+
+        if result.success and result.saved_path:
+            from pathlib import Path
+
+            try:
+                saved_path = Path(result.saved_path)
+                if saved_path.exists():
+                    archiver_dir = saved_path.parent
+                    size_bytes = get_directory_size(archiver_dir)
+                    logger.debug(
+                        "Calculated artifact size",
+                        extra={
+                            "rowid": item.rowid,
+                            "archiver": item.archiver_name,
+                            "size_bytes": size_bytes,
+                            "path": str(archiver_dir),
+                        },
+                    )
+
+                artifact = self.artifact_repo.get_by_id(item.rowid)
+                if artifact:
+                    archived_url_id = artifact.archived_url_id
+            except Exception as exc:
+                logger.warning(
+                    "Failed to calculate size",
+                    extra={"rowid": item.rowid, "error": str(exc)},
+                )
+
+        self.artifact_repo.finalize_result(
+            
+            rowid=item.rowid,
+            success=result.success,
+            exit_code=result.exit_code,
+            saved_path=result.saved_path,
+            size_bytes=size_bytes,
+        )
+
+        if archived_url_id is not None:
+            try:
+                self.url_repo.update_total_size(
+                    
+                    archived_url_id=archived_url_id,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to update total size",
+                    extra={"archived_url_id": archived_url_id, "error": str(exc)},
+                )
+
+        logger.info(
+            f"Finalized save ({'success' if result.success else 'failure'})",
+            extra={
+                "rowid": item.rowid,
+                "success": result.success,
+                "exit_code": result.exit_code,
+                "saved_path": result.saved_path,
+                "size_bytes": size_bytes,
+            },
+        )
+
+        if (
+            getattr(result, "metadata", None)
+            and item.archiver_name == "readability"
+        ):
+            try:
+                self.metadata_repo.upsert(
+                    
+                    save_rowid=item.rowid,
+                    data=result.metadata,  # type: ignore[arg-type]
+                )
+            except Exception:
+                pass
+
+        if result.success:
+            self._schedule_summary(
+                archived_url_id=getattr(result, "archived_url_id", None),
+                rowid=item.rowid,
+                source=item.archiver_name,
+                reason=f"task-{item.archiver_name}",
+            )
+
+    def _handle_archiver_exception(self, *, item: BatchItem, error: Exception) -> None:
+        logger.error(
+            "Archiving failed with exception",
+            extra={
+                "rowid": item.rowid,
+                "archiver": item.archiver_name,
+                "error": str(error),
+            },
+            exc_info=True,
+        )
+        self.artifact_repo.finalize_result(
+            
+            rowid=item.rowid,
+            success=False,
+            exit_code=1,
+            saved_path=None,
+        )
 
     def _schedule_summary(
         self,
