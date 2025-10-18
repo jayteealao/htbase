@@ -20,6 +20,8 @@ from core.utils import cleanup_chromium_singleton_locks
 # init_db is deprecated - engine initialization happens automatically
 from core.command_runner import CommandRunner
 from services.summarizer import SummaryService
+from services.providers import ProviderFactory, ProviderChain
+from services.summarization import ArticleChunker, PromptBuilder, ResponseParser
 from task_manager import (
     ArchiverTaskManager,
     SummarizeTask,
@@ -82,8 +84,49 @@ async def lifespan_context(app: FastAPI):
 
     # Expose command runner on app state for APIs
     app.state.command_runner = command_runner
-    
-    app.state.summarizer = SummaryService(settings)
+
+    # Build summarization components using dependency injection
+    logger.info("Initializing summarization service components")
+
+    # Create provider chain
+    provider_factory = ProviderFactory(settings.summarization)
+    try:
+        providers = provider_factory.create_all_configured()
+        provider_chain = ProviderChain(
+            providers=providers,
+            sticky=settings.summary_provider_sticky
+        )
+        logger.info(
+            "Created provider chain",
+            extra={
+                "provider_count": len(providers),
+                "provider_names": [p.name for p in providers],
+                "sticky": settings.summary_provider_sticky,
+            }
+        )
+    except ValueError as e:
+        logger.error(f"Failed to create provider chain: {e}")
+        provider_chain = None
+
+    # Create orchestration components
+    chunker = ArticleChunker(chunk_size=settings.summary_chunk_size)
+    prompt_builder = PromptBuilder()
+    response_parser = ResponseParser()
+
+    # Assemble SummaryService with all dependencies
+    if provider_chain and chunker.is_enabled:
+        app.state.summarizer = SummaryService(
+            provider=provider_chain,
+            prompt_builder=prompt_builder,
+            response_parser=response_parser,
+            chunker=chunker,
+            settings=settings,
+        )
+        logger.info("SummaryService initialized successfully")
+    else:
+        app.state.summarizer = None
+        logger.warning("SummaryService disabled: provider chain or chunker unavailable")
+
     app.state.summarization_manager = SummarizationTaskManager(
         settings,
         summarizer=app.state.summarizer,

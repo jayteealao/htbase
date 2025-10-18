@@ -71,11 +71,88 @@ class ChromiumSettings(BaseModel):
         return profile or "Default"
 
 
+class HuggingFaceProviderSettings(BaseModel):
+    """HuggingFace TGI provider configuration."""
+
+    api_base: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "SUMMARIZATION_API_BASE",
+            "SUMMARIZATION__HUGGINGFACE__API_BASE",
+        ),
+    )
+    api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "SUMMARIZATION_API_KEY",
+            "SUMMARIZATION__HUGGINGFACE__API_KEY",
+        ),
+    )
+    max_concurrency: int = Field(
+        default=4,
+        validation_alias=AliasChoices(
+            "SUMMARY_MAX_CONCURRENCY",
+            "SUMMARIZATION__HUGGINGFACE__MAX_CONCURRENCY",
+        ),
+    )
+
+
+class OpenAIProviderSettings(BaseModel):
+    """OpenAI API provider configuration."""
+
+    api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "OPENAI_API_KEY",
+            "SUMMARIZATION__OPENAI__API_KEY",
+        ),
+    )
+    model: str = Field(
+        default="gpt-4o-mini",
+        validation_alias=AliasChoices(
+            "OPENAI_MODEL",
+            "SUMMARIZATION__OPENAI__MODEL",
+        ),
+    )
+    temperature: float = Field(
+        default=0.2,
+        validation_alias=AliasChoices(
+            "OPENAI_TEMPERATURE",
+            "SUMMARIZATION__OPENAI__TEMPERATURE",
+        ),
+    )
+    max_tokens: int = Field(
+        default=400,
+        validation_alias=AliasChoices(
+            "OPENAI_MAX_TOKENS",
+            "SUMMARIZATION__OPENAI__MAX_TOKENS",
+        ),
+    )
+
+
 class SummarizationSettings(BaseModel):
     enabled: bool = Field(
         default=False,
         validation_alias=AliasChoices("ENABLE_SUMMARIZATION", "SUMMARIZATION__ENABLED"),
     )
+    providers: list[str] = Field(
+        default_factory=lambda: ["huggingface"],
+        validation_alias=AliasChoices("SUMMARY_PROVIDERS", "SUMMARIZATION__PROVIDERS"),
+    )
+    provider_sticky: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("SUMMARY_PROVIDER_STICKY", "SUMMARIZATION__PROVIDER_STICKY"),
+    )
+
+    # Provider-specific settings
+    huggingface: HuggingFaceProviderSettings = Field(
+        default_factory=HuggingFaceProviderSettings
+    )
+    openai: OpenAIProviderSettings = Field(
+        default_factory=OpenAIProviderSettings
+    )
+
+    # Legacy fields for backward compatibility
     openrouter_api_key: str | None = Field(
         default=None,
         validation_alias=AliasChoices(
@@ -87,24 +164,11 @@ class SummarizationSettings(BaseModel):
         default="openrouter/sonoma-sky-alpha",
         validation_alias=AliasChoices("SUMMARIZATION_MODEL", "SUMMARIZATION__MODEL"),
     )
-    api_base: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("SUMMARIZATION_API_BASE", "SUMMARIZATION__API_BASE"),
-    )
-    api_key: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("SUMMARIZATION_API_KEY", "SUMMARIZATION__API_KEY"),
-    )
+
+    # Orchestration settings
     chunk_size: int = Field(
         default=1200,
         validation_alias=AliasChoices("SUMMARY_CHUNK_SIZE", "SUMMARIZATION__CHUNK_SIZE"),
-    )
-    max_concurrency: int = Field(
-        default=4,
-        validation_alias=AliasChoices(
-            "SUMMARY_MAX_CONCURRENCY",
-            "SUMMARIZATION__MAX_CONCURRENCY",
-        ),
     )
     max_bullets: int = Field(
         default=6,
@@ -125,6 +189,19 @@ class SummarizationSettings(BaseModel):
             "SUMMARIZATION__TAG_WHITELIST",
         ),
     )
+
+    @field_validator("providers", mode="before")
+    @classmethod
+    def _parse_providers(cls, value):
+        if value is None:
+            return ["huggingface"]
+        if isinstance(value, str):
+            items = [item.strip() for item in value.split(",") if item.strip()]
+            return items or ["huggingface"]
+        if isinstance(value, (list, tuple, set)):
+            items = [str(item).strip() for item in value if str(item).strip()]
+            return items or ["huggingface"]
+        return ["huggingface"]
 
     @field_validator("source_archivers", mode="before")
     @classmethod
@@ -273,6 +350,14 @@ class AppSettings(BaseSettings):
     @property
     def summary_tag_whitelist(self) -> list[str]:
         return self.summarization.tag_whitelist
+
+    @property
+    def summary_providers(self) -> list[str]:
+        return self.summarization.providers
+
+    @property
+    def summary_provider_sticky(self) -> bool:
+        return self.summarization.provider_sticky
 
     @property
     def resolved_db_path(self) -> Path:
