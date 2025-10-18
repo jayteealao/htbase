@@ -73,7 +73,7 @@ def _collect_existing_artifacts(
     if archiver != "all":
         try:
             artifact = artifact_repo.find_successful(
-                settings.resolved_db_path,
+                settings.database.resolved_path(settings.data_dir),
                 item_id=safe_id or "",
                 url=url or "",
                 archiver=archiver,
@@ -110,9 +110,9 @@ def _archive_with(
     logger.info("Archive request received", extra={"archiver": archiver_name, "payload": payload_snapshot})
 
     # Initialize repositories
-    # artifact_repo = ArchiveArtifactRepository(settings.resolved_db_path)
-    # url_repo = ArchivedUrlRepository(settings.resolved_db_path)
-    # metadata_repo = UrlMetadataRepository(settings.resolved_db_path)
+    # artifact_repo = ArchiveArtifactRepository(settings.database.resolved_path(settings.data_dir))
+    # url_repo = ArchivedUrlRepository(settings.database.resolved_path(settings.data_dir))
+    # metadata_repo = UrlMetadataRepository(settings.database.resolved_path(settings.data_dir))
 
     item_id = payload.id.strip()
     if not item_id:
@@ -158,7 +158,7 @@ def _archive_with(
             # Store ORIGINAL URL in database, not rewritten
             try:
                 last_row_id = record_http_failure(
-                    db_path=settings.resolved_db_path,
+                    db_path=settings.database.resolved_path(settings.data_dir),
                     item_id=safe_id,
                     url=original_url,  # Changed: store original URL
                     archiver_name=name,
@@ -175,7 +175,7 @@ def _archive_with(
             # First check: Database lookup by URL
             try:
                 existing = artifact_repo.find_successful(
-                    settings.resolved_db_path,
+                    settings.database.resolved_path(settings.data_dir),
                     item_id=safe_id,
                     url=original_url,  # Changed: check original URL
                     archiver=name,
@@ -215,7 +215,7 @@ def _archive_with(
                 try:
                     
                     last_row_id = insert_save_result(
-                        db_path=settings.resolved_db_path,
+                        db_path=settings.database.resolved_path(settings.data_dir),
                         item_id=safe_id,
                         url=original_url,  # Changed: store original URL
                         success=True,
@@ -249,7 +249,7 @@ def _archive_with(
         try:
             
             last_row_id = insert_save_result(
-                db_path=settings.resolved_db_path,
+                db_path=settings.database.resolved_path(settings.data_dir),
                 item_id=safe_id,
                 url=original_url,  # Changed: store original URL
                 success=result.success,
@@ -267,7 +267,7 @@ def _archive_with(
                 try:
                     logger.info(f"Persisting readability metadata | rowid={last_row_id}")
                     metadata_repo.upsert(
-                        db_path=settings.resolved_db_path,
+                        db_path=settings.database.resolved_path(settings.data_dir),
                         save_rowid=last_row_id,
                         data=result.metadata,  # type: ignore[arg-type]
                     )
@@ -491,7 +491,7 @@ def get_archive_size(
 
     # Get size statistics
     size_stats = artifact_repo.get_size_stats(
-        settings.resolved_db_path,
+        settings.database.resolved_path(settings.data_dir),
         archived_url_id
     )
 

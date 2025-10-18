@@ -14,7 +14,7 @@ router = APIRouter()
 
 @router.get("/tasks/{task_id}", response_model=TaskStatusResponse)
 def get_task_status(task_id: str, settings: AppSettings = Depends(get_settings)):
-    artifact_repo = ArchiveArtifactRepository(settings.resolved_db_path)
+    artifact_repo = ArchiveArtifactRepository(settings.database.resolved_path(settings.data_dir))
     rows = artifact_repo.list_by_task_id(task_id)
     if not rows:
         raise HTTPException(status_code=404, detail="task not found")

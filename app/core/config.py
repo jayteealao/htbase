@@ -39,6 +39,10 @@ class DatabaseSettings(BaseModel):
         pwd = quote_plus(self.password.get_secret_value())
         return f"postgresql+psycopg://{user}:{pwd}@{self.host}:{self.port}/{self.name}"
 
+    def resolved_path(self, data_dir: Path) -> Path:
+        """Get resolved database path with fallback to data_dir/app.db."""
+        return self.path or (data_dir / "app.db")
+
 
 class ChromiumSettings(BaseModel):
     enabled: bool = Field(
@@ -69,6 +73,10 @@ class ChromiumSettings(BaseModel):
             return "Default"
         profile = str(value).strip()
         return profile or "Default"
+
+    def resolved_user_data_dir(self, data_dir: Path) -> Path:
+        """Get resolved chromium user data directory with fallback to data_dir/chromium-user-data."""
+        return self.user_data_dir or (data_dir / "chromium-user-data")
 
 
 class HuggingFaceProviderSettings(BaseModel):
@@ -270,107 +278,6 @@ class AppSettings(BaseSettings):
         extra="ignore",
         env_nested_delimiter="__",
     )
-
-    @property
-    def db_path(self) -> Path | None:
-        return self.database.path
-
-    @property
-    def db_host(self) -> str:
-        return self.database.host
-
-    @property
-    def db_port(self) -> int:
-        return self.database.port
-
-    @property
-    def db_name(self) -> str:
-        return self.database.name
-
-    @property
-    def db_user(self) -> str:
-        return self.database.user
-
-    @property
-    def db_password(self) -> SecretStr:
-        return self.database.password
-
-    @property
-    def use_chromium(self) -> bool:
-        return self.chromium.enabled
-
-    @property
-    def chromium_bin(self) -> str:
-        return self.chromium.binary
-
-    @property
-    def chromium_user_data_dir(self) -> Path | None:
-        return self.chromium.user_data_dir
-
-    @property
-    def chromium_profile_directory(self) -> str:
-        return self.chromium.profile_directory
-
-    @property
-    def enable_summarization(self) -> bool:
-        return self.summarization.enabled
-
-    @property
-    def openrouter_api_key(self) -> str | None:
-        return self.summarization.openrouter_api_key
-
-    @property
-    def summarization_model(self) -> str:
-        return self.summarization.model
-
-    @property
-    def summarization_api_base(self) -> str | None:
-        return self.summarization.api_base
-
-    @property
-    def summarization_api_key(self) -> str | None:
-        return self.summarization.api_key
-
-    @property
-    def summary_chunk_size(self) -> int:
-        return self.summarization.chunk_size
-
-    @property
-    def summary_max_concurrency(self) -> int:
-        return self.summarization.max_concurrency
-
-    @property
-    def summary_max_bullets(self) -> int:
-        return self.summarization.max_bullets
-
-    @property
-    def summary_source_archivers(self) -> list[str]:
-        return self.summarization.source_archivers
-
-    @property
-    def summary_tag_whitelist(self) -> list[str]:
-        return self.summarization.tag_whitelist
-
-    @property
-    def summary_providers(self) -> list[str]:
-        return self.summarization.providers
-
-    @property
-    def summary_provider_sticky(self) -> bool:
-        return self.summarization.provider_sticky
-
-    @property
-    def resolved_db_path(self) -> Path:
-        return self.database.path or (self.data_dir / "app.db")
-
-    @property
-    def resolved_chromium_user_data_dir(self) -> Path:
-        return self.chromium.user_data_dir or (self.data_dir / "chromium-user-data")
-
-    @property
-    def database_url(self) -> str:
-        """Build a SQLAlchemy DSN for Postgres using psycopg driver."""
-        return self.database.sqlalchemy_url()
 
 
 @lru_cache

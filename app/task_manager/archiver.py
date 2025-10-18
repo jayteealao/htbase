@@ -58,9 +58,9 @@ class ArchiverTaskManager(BackgroundTaskManager[BatchTask]):
         self._summarization = summarization
 
         # Repository instances
-        self.artifact_repo = ArchiveArtifactRepository(settings.resolved_db_path)
-        self.url_repo = ArchivedUrlRepository(settings.resolved_db_path)
-        self.metadata_repo = UrlMetadataRepository(settings.resolved_db_path)
+        self.artifact_repo = ArchiveArtifactRepository(settings.database.resolved_path(settings.data_dir))
+        self.url_repo = ArchivedUrlRepository(settings.database.resolved_path(settings.data_dir))
+        self.metadata_repo = UrlMetadataRepository(settings.database.resolved_path(settings.data_dir))
         sources = getattr(settings, "summary_source_archivers", None) or []
         self.summary_source_archivers: set[str] = {
             str(name).strip() for name in sources if str(name).strip()

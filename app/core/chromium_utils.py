@@ -16,7 +16,7 @@ class ChromiumCommandBuilder:
 
     def __init__(self, settings: AppSettings):
         self.settings = settings
-        self.user_data_dir = settings.resolved_chromium_user_data_dir
+        self.user_data_dir = settings.chromium.resolved_user_data_dir(settings.data_dir)
 
     def build_base_args(self, *, incognito: bool = False) -> List[str]:
         """Build common base arguments for all Chromium invocations.
@@ -28,7 +28,7 @@ class ChromiumCommandBuilder:
             List of base Chromium arguments
         """
         args = [
-            self.settings.chromium_bin,
+            self.settings.chromium.binary,
             "--headless=new",
             f"--user-data-dir={self.user_data_dir}",
             "--no-sandbox",
@@ -142,13 +142,13 @@ class ChromiumArchiverMixin:
 
     def setup_chromium(self) -> None:
         """Prepare Chromium user data directory and clean singleton locks."""
-        user_data_dir = self.settings.resolved_chromium_user_data_dir
+        user_data_dir = self.settings.chromium.resolved_user_data_dir(settings.data_dir)
         user_data_dir.mkdir(parents=True, exist_ok=True)
         cleanup_chromium_singleton_locks(user_data_dir)
 
     def cleanup_chromium(self) -> None:
         """Clean up Chromium singleton locks after execution."""
-        cleanup_chromium_singleton_locks(self.settings.resolved_chromium_user_data_dir)
+        cleanup_chromium_singleton_locks(self.settings.chromium.resolved_user_data_dir(settings.data_dir))
 
     def cleanup_after_timeout(self) -> None:
         """Standard timeout cleanup for Chromium archivers.

@@ -50,7 +50,7 @@ def list_saves_endpoint(
     offset: int = 0,
     settings: AppSettings = Depends(get_settings),
 ):
-    artifact_repo = ArchiveArtifactRepository(settings.resolved_db_path)
+    artifact_repo = ArchiveArtifactRepository(settings.database.resolved_path(settings.data_dir))
     rows = artifact_repo.list_with_pagination(limit=limit, offset=offset)
     # Serialize and enrich
     out: List[Dict[str, object]] = []
@@ -114,7 +114,7 @@ def requeue_saves(
     if task_manager is None:
         raise HTTPException(status_code=500, detail="task manager not initialized")
 
-    artifact_repo = ArchiveArtifactRepository(settings.resolved_db_path)
+    artifact_repo = ArchiveArtifactRepository(settings.database.resolved_path(settings.data_dir))
 
     try:
         payload_snapshot = payload.model_dump()  # type: ignore[attr-defined]
@@ -190,7 +190,7 @@ def summarize_article(
     if summarization is None or not summarization.is_enabled:
         raise HTTPException(status_code=503, detail="summarizer unavailable")
 
-    artifact_repo = ArchiveArtifactRepository(settings.resolved_db_path)
+    artifact_repo = ArchiveArtifactRepository(settings.database.resolved_path(settings.data_dir))
 
     archived_url_id: Optional[int] = None
     rowid: Optional[int] = None
@@ -238,7 +238,7 @@ def delete_save(
     remove_files: bool = False,
     settings: AppSettings = Depends(get_settings),
 ):
-    artifact_repo = ArchiveArtifactRepository(settings.resolved_db_path)
+    artifact_repo = ArchiveArtifactRepository(settings.database.resolved_path(settings.data_dir))
     # Fetch the row to know what to delete
     row = artifact_repo.get_by_id( rowid)
     if row is None:
@@ -288,7 +288,7 @@ def delete_saves_by_item(
     remove_files: bool = False,
     settings: AppSettings = Depends(get_settings),
 ):
-    artifact_repo = ArchiveArtifactRepository(settings.resolved_db_path)
+    artifact_repo = ArchiveArtifactRepository(settings.database.resolved_path(settings.data_dir))
     item_id = sanitize_filename(item_id.strip())
     rows = artifact_repo.list_by_item_id( item_id)
     if not rows:
@@ -337,7 +337,7 @@ def delete_saves_by_url_endpoint(
     remove_files: bool = False,
     settings: AppSettings = Depends(get_settings),
 ):
-    artifact_repo = ArchiveArtifactRepository(settings.resolved_db_path)
+    artifact_repo = ArchiveArtifactRepository(settings.database.resolved_path(settings.data_dir))
     rows = artifact_repo.list_by_url( url)
     if not rows:
         raise HTTPException(status_code=404, detail="no saves for url")

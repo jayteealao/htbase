@@ -35,7 +35,7 @@ class SingleFileCLIArchiver(BaseArchiver, ChromiumArchiverMixin):
         # Compose command to run via command runner
         url_q = shlex.quote(url)
         out_q = shlex.quote(str(out_path))
-        user_data_dir = self.settings.resolved_chromium_user_data_dir
+        user_data_dir = self.settings.chromium.resolved_user_data_dir(settings.data_dir)
 
         chromium_bin = getattr(self.settings, "chromium_bin", "")
         chromium_bin = chromium_bin.strip() if isinstance(chromium_bin, str) else str(chromium_bin)

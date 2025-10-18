@@ -20,7 +20,7 @@ def _engine_for_url(_: str = "default") -> Engine:
     relative to previous sqlite-based code which cached by path.
     """
     settings = get_settings()
-    url = settings.database_url
+    url = settings.database.sqlalchemy_url()
     # Create engine with pool_pre_ping for better resiliency
     return create_engine(url, pool_pre_ping=True, future=True)
 

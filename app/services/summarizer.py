@@ -46,7 +46,7 @@ class SummaryService:
 
         # Build whitelist for tag extraction (legacy feature)
         self._whitelist_entries: List[Tuple[str, re.Pattern[str]]] = (
-            self._build_whitelist(settings.summary_tag_whitelist)
+            self._build_whitelist(settings.summarization.tag_whitelist)
         )
 
     # def _build_whitelist(
@@ -149,8 +149,8 @@ class SummaryService:
         self, archived_url_id: int
     ) -> Optional[Tuple[SummaryInputs, str]]:
         """Fetch metadata and prepare context for summarization."""
-        metadata_repo = UrlMetadataRepository(self.settings.resolved_db_path)
-        url_repo = ArchivedUrlRepository(self.settings.resolved_db_path)
+        metadata_repo = UrlMetadataRepository(self.settings.database.resolved_path(settings.data_dir))
+        url_repo = ArchivedUrlRepository(self.settings.database.resolved_path(settings.data_dir))
 
         metadata = metadata_repo.get_by_archived_url(archived_url_id)
         if metadata is None or not (metadata.text and metadata.text.strip()):
@@ -292,13 +292,13 @@ class SummaryService:
         lede_text = (final_output.lede or "").strip()
         bullets = [lede_text] if lede_text else None
 
-        summary_repo = ArticleSummaryRepository(self.settings.resolved_db_path)
+        summary_repo = ArticleSummaryRepository(self.settings.database.resolved_path(settings.data_dir))
         summary_repo.upsert(
             archived_url_id=archived_url_id,
             summary_type="default",
             summary_text=summary_text,
             bullet_points=bullets,
-            model_name=self.settings.summarization_model,
+            model_name=self.settings.summarization.model,
         )
         logger.info(
             "Completed summarization run",

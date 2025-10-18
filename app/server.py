@@ -44,13 +44,13 @@ async def lifespan_context(app: FastAPI):
     # Database initialization happens automatically in get_session()
 
     # Clean up Chromium singleton locks at startup to prevent exit code 21
-    user_data_dir = settings.resolved_chromium_user_data_dir
+    user_data_dir = settings.chromium.resolved_user_data_dir(settings.data_dir)
     user_data_dir.mkdir(parents=True, exist_ok=True)
     cleanup_chromium_singleton_locks(user_data_dir)
 
     # Log chromium and monolith versions (best-effort)
     try:
-        out = subprocess.check_output([settings.chromium_bin, "--version"], text=True).strip()
+        out = subprocess.check_output([settings.chromium.binary, "--version"], text=True).strip()
         logger.info(f"Chromium: {out}")
     except Exception:
         logger.warning("Chromium: not available")
@@ -64,7 +64,7 @@ async def lifespan_context(app: FastAPI):
         logger.info(f"SingleFile CLI: {out}")
     except Exception:
         logger.warning("SingleFile CLI: not available")
-    logger.info(f"Summarization enabled: {settings.enable_summarization}")
+    logger.info(f"Summarization enabled: {settings.summarization.enabled}")
     logger.info(f"CommandRunner debug mode: {command_runner.debug}")
 
     # Register archivers using factory
@@ -94,14 +94,14 @@ async def lifespan_context(app: FastAPI):
         providers = provider_factory.create_all_configured()
         provider_chain = ProviderChain(
             providers=providers,
-            sticky=settings.summary_provider_sticky
+            sticky=settings.summarization.provider_sticky
         )
         logger.info(
             "Created provider chain",
             extra={
                 "provider_count": len(providers),
                 "provider_names": [p.name for p in providers],
-                "sticky": settings.summary_provider_sticky,
+                "sticky": settings.summarization.provider_sticky,
             }
         )
     except ValueError as e:
@@ -109,7 +109,7 @@ async def lifespan_context(app: FastAPI):
         provider_chain = None
 
     # Create orchestration components
-    chunker = ArticleChunker(chunk_size=settings.summary_chunk_size)
+    chunker = ArticleChunker(chunk_size=settings.summarization.chunk_size)
     prompt_builder = PromptBuilder()
     response_parser = ResponseParser()
 

@@ -20,7 +20,7 @@ class MonolithArchiver(BaseArchiver, ChromiumArchiverMixin):
     def __init__(self, command_runner: CommandRunner, settings: AppSettings):
         super().__init__(settings)
         self.command_runner = command_runner
-        self.use_chromium = settings.use_chromium
+        self.use_chromium = settings.chromium.enabled
         self.chromium_builder = ChromiumCommandBuilder(settings)
 
     def archive(self, *, url: str, item_id: str) -> ArchiveResult:
