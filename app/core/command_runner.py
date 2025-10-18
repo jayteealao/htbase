@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import logging
+import os
+import signal
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -55,6 +58,48 @@ class CommandRunner:
         """
         self.lock = threading.Lock()
         self.debug = debug
+
+    def _kill_process_tree(self, proc: subprocess.Popen, execution_id: int, is_windows: bool) -> None:
+        """
+        Kill the entire process tree to ensure all child processes are terminated.
+
+        Args:
+            proc: The subprocess.Popen object to kill
+            execution_id: ID for logging context
+            is_windows: Whether running on Windows
+        """
+        try:
+            if is_windows:
+                # Windows: Use taskkill to kill process tree
+                # proc.kill() only kills the shell, not children
+                import subprocess as sp
+                sp.run(
+                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                    stdout=sp.DEVNULL,
+                    stderr=sp.DEVNULL,
+                    timeout=5,
+                )
+                logger.debug(f"Killed process tree on Windows (execution_id={execution_id}, pid={proc.pid})")
+            else:
+                # Unix: Kill the entire process group
+                # Use negative PID to kill process group
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                    logger.debug(f"Killed process group on Unix (execution_id={execution_id}, pgid={os.getpgid(proc.pid)})")
+                except ProcessLookupError:
+                    # Process already died
+                    logger.debug(f"Process group already terminated (execution_id={execution_id})")
+                except Exception as e:
+                    # Fallback to killing just the process
+                    logger.warning(f"Failed to kill process group, falling back to proc.kill() (execution_id={execution_id}): {e}")
+                    proc.kill()
+        except Exception as e:
+            logger.error(f"Failed to kill process tree (execution_id={execution_id}): {e}", exc_info=True)
+            # Last resort: try regular kill
+            try:
+                proc.kill()
+            except Exception:
+                pass
 
     def execute(
         self,
@@ -147,25 +192,47 @@ class CommandRunner:
         timed_out = False
 
         try:
-            proc = subprocess.Popen(
-                command,
-                shell=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                cwd=cwd,
-                env=env,
-                bufsize=1,  # Line buffered
-            )
+            # On Windows, use CREATE_NEW_PROCESS_GROUP; on Unix, use process groups
+            # This ensures we can kill the entire process tree on timeout
+            is_windows = sys.platform == "win32"
+
+            if is_windows:
+                # Windows: CREATE_NEW_PROCESS_GROUP allows us to terminate the whole tree
+                proc = subprocess.Popen(
+                    command,
+                    shell=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    cwd=cwd,
+                    env=env,
+                    bufsize=1,  # Line buffered
+                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+                )
+            else:
+                # Unix: Use process group to kill entire tree
+                proc = subprocess.Popen(
+                    command,
+                    shell=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    cwd=cwd,
+                    env=env,
+                    bufsize=1,  # Line buffered
+                    preexec_fn=os.setsid,  # Create new process group
+                )
 
             # Read output in real-time
             try:
                 stdout, stderr = proc.communicate(timeout=timeout)
                 exit_code = proc.returncode
             except subprocess.TimeoutExpired:
-                proc.kill()
+                # Kill the entire process tree
+                self._kill_process_tree(proc, execution_id, is_windows)
                 stdout, stderr = proc.communicate()
                 timed_out = True
+                exit_code = -1  # Set explicit timeout exit code
                 logger.warning(
                     f"Command timed out after {timeout}s (execution_id={execution_id})",
                     extra={"execution_id": execution_id, "command": command, "timeout": timeout}
