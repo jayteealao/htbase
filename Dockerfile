@@ -83,8 +83,8 @@ EXPOSE 8000 7681
 ENV PYTHONUNBUFFERED=1
 # Safer defaults for SingleFile (avoid sandbox + tiny /dev/shm issues)
 ENV NODE_OPTIONS="--dns-result-order=ipv4first"
-# Properly quote browser args as a single JSON array argument for SingleFile
-ENV SINGLEFILE_FLAGS="--browser-executable-path=/usr/bin/chromium --browser-args='[\"--headless=new\",\"--no-sandbox\",\"--disable-dev-shm-usage\",\"--hide-scrollbars\",\"--mute-audio\",\"--disable-gpu\",\"--disable-software-rasterizer\",\"--run-all-compositor-stages-before-draw\"]' --browser-ignore-insecure-certs"
+# Browser args as JSON array for SingleFile (no nested quotes - Python will handle JSON)
+ENV SINGLEFILE_FLAGS="--browser-executable-path=/usr/bin/chromium --browser-args=[\\\"--headless=new\\\",\\\"--no-sandbox\\\",\\\"--disable-dev-shm-usage\\\",\\\"--hide-scrollbars\\\",\\\"--mute-audio\\\",\\\"--disable-gpu\\\",\\\"--disable-software-rasterizer\\\",\\\"--run-all-compositor-stages-before-draw\\\",\\\"--no-first-run\\\",\\\"--no-default-browser-check\\\",\\\"--disable-features=LockProfileCookieDatabase\\\"]"
 
 
 # Use the venv's interpreter/binaries via PATH

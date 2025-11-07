@@ -1,32 +1,96 @@
 services:
-  monolith-ht:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: ht-base:local
-    container_name: ht-base
-    ports:
-      - "8000:8000"   # REST API
-      - "7681:7681"   # ht live preview
-    env_file:
-      - .env
-    environment:
-      - DATA_DIR=/data
-      - HT_LISTEN=0.0.0.0:7681
-      - MONOLITH_FLAGS=${MONOLITH_FLAGS}
-    volumes:
-      - ./data:/data
-    develop:
-      watch:
-        # Rebuild image and restart when source changes
-        - action: rebuild
-          path: .
-          ignore:
-            - data/**
-            - .git/**
-            - .venv/**
-            - __pycache__/**
-            - .pytest_cache/**
-            - tests/**
-            - ht.md
-            - monolith.md
+    monolith-ht:
+        build:
+            context: .
+            dockerfile: Dockerfile
+        image: ht-base:local
+        container_name: ht-base
+        ports:
+        - "8000:8000"   # REST API
+        - "7681:7681"   # ht live preview
+        - "9222:9222"   # Chromium remote debugging
+        env_file:
+        - .env
+        environment:
+        - DATA_DIR=/data
+        - HT_LISTEN=0.0.0.0:7681
+        - MONOLITH_FLAGS=${MONOLITH_FLAGS}
+        volumes:
+        - ./data:/data
+        develop:
+            watch:
+            # Rebuild image and restart when source changes
+                - action: rebuild
+                  path: .
+                  ignore:
+                    - data/**
+                    - .git/**
+                    - .venv/**
+                    - __pycache__/**
+                    - .pytest_cache/**
+                    - tests/**
+                    - ht.md
+                    - monolith.md
+    # text-generation:
+    #     image: ghcr.io/huggingface/text-generation-inference:3.3.6
+    #     container_name: text-generation
+    #     ports:
+    #       - "8001:80"   # REST API
+    #     volumes:
+    #       - ./data/tgi:/data
+    #     environment:
+    #       HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN}
+    #       HF_TOKEN: ${HF_TOKEN}
+    #     deploy:
+    #         resources:
+    #             reservations:
+    #                 devices:
+    #                     - driver: nvidia
+    #                       count: all
+    #                       capabilities: [gpu]
+    #     shm_size: "1g"
+    #     command:
+    #       - --model-id=Qwen/Qwen3-4B-Instruct-2507
+    #       - --trust-remote-code
+    #       - --sharded=false
+    
+    # text-embedding:
+    #     image: ghcr.io/huggingface/text-embeddings-inference:1.8.2
+    #     container_name: text-embedding
+    #     ports:
+    #       - "8002:80"   # REST API
+    #     volumes:
+    #       - ./data/tei:/data
+    #     environment:
+    #     - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
+    #       - HF_TOKEN=${HF_TOKEN}
+    #     deploy:
+    #         resources:
+    #             reservations:
+    #                 devices:
+    #                     - driver: nvidia
+    #                       count: all
+    #                       capabilities: [gpu]
+    #     shm_size: "1g"
+    #     command:
+    #       - --model-id=Qwen/Qwen3-Embedding-0.6B
+    
+    postgrest-pa:
+        image: postgrest/postgrest
+        container_name: postgrest_pa
+        ports:
+          - "3000:3000"   # PostgREST API
+        environment:
+          PGRST_DB_URI: postgres://postgres:your_password@192.168.1.12:5432/postgres
+          PGRST_DB_SCHEMA: public
+          PGRST_DB_ANON_ROLE: postgres
+    
+    postgrest-ht:
+        image: postgrest/postgrest
+        container_name: postgrest_ht
+        ports:
+          - "3001:3000"   # PostgREST API
+        environment:
+          PGRST_DB_URI: postgres://postgres:your_password@192.168.1.12:5432/htbase
+          PGRST_DB_SCHEMA: public
+          PGRST_DB_ANON_ROLE: postgres
