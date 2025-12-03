@@ -76,12 +76,15 @@ def sanitize_filename(name: str) -> str:
 
     Also prevents hidden filenames by stripping leading dots and ensures
     a non-empty fallback value.
+
+    NOTE: Preserves leading underscores and dashes to maintain itemId integrity
+    for Trails app <-> Firestore <-> htbase relationship.
     """
     safe = re.sub(r"[^A-Za-z0-9._-]", "_", name)
     # remove leading dots to prevent hidden files
     safe = safe.lstrip(".")
-    # also trim leading separators produced by replacements
-    safe = safe.lstrip("_-")
+    # DO NOT strip leading underscores or dashes - they are valid in itemIds
+    # and required for maintaining relationships with Trails app and Firestore
     if not safe:
         safe = "file"
     return safe[:200]
