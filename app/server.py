@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 import logging
 import queue
 import subprocess
+from typing import Optional
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -28,6 +29,12 @@ from task_manager import (
     SummarizationCoordinator,
     SummarizationTaskManager,
 )
+from storage.local_file_storage import LocalFileStorage
+from storage.gcs_file_storage import GCSFileStorage
+from storage.postgres_storage import PostgresStorage
+from storage.firestore_storage import FirestoreStorage
+from storage.file_storage import FileStorageProvider
+from storage.database_storage import DatabaseStorageProvider
 
 
 settings = get_settings()
@@ -67,10 +74,45 @@ async def lifespan_context(app: FastAPI):
     logger.info(f"Summarization enabled: {settings.summarization.enabled}")
     logger.info(f"CommandRunner debug mode: {command_runner.debug}")
 
-    # Register archivers using factory
+    # Initialize storage providers
+    file_storage: Optional[FileStorageProvider] = None
+    db_storage: Optional[DatabaseStorageProvider] = None
+
+    # Initialize file storage provider
+    storage_backend = getattr(settings, 'storage_backend', 'local')
+    if storage_backend == 'gcs':
+        try:
+            # Initialize GCS storage for production
+            bucket_name = getattr(settings, 'gcs_bucket', 'htbase-archives-standard')
+            file_storage = GCSFileStorage(bucket_name=bucket_name)
+            logger.info(f"Initialized GCS file storage with bucket: {bucket_name}")
+        except Exception as e:
+            logger.warning(f"Failed to initialize GCS storage, falling back to local: {e}")
+            file_storage = LocalFileStorage(root_dir=settings.data_dir)
+    else:
+        # Default to local storage for development
+        file_storage = LocalFileStorage(root_dir=settings.data_dir)
+        logger.info("Initialized local file storage")
+
+    # Initialize database storage provider
+    db_backend = getattr(settings, 'database_backend', 'postgres')
+    if db_backend == 'firestore':
+        try:
+            # Initialize Firestore storage for mobile sync
+            db_storage = FirestoreStorage()
+            logger.info("Initialized Firestore database storage")
+        except Exception as e:
+            logger.warning(f"Failed to initialize Firestore storage, falling back to PostgreSQL: {e}")
+            db_storage = PostgresStorage()
+    else:
+        # Default to PostgreSQL for analytics and complex queries
+        db_storage = PostgresStorage()
+        logger.info("Initialized PostgreSQL database storage")
+
+    # Register archivers using factory with storage providers
     # Registration order matters when using the "all" pipeline
     # Run readability first so its DOM dump can be reused by monolith.
-    factory = ArchiverFactory(settings, command_runner)
+    factory = ArchiverFactory(settings, command_runner, file_storage, db_storage)
     factory.register("readability", ReadabilityArchiver)
     factory.register("monolith", MonolithArchiver)
     factory.register("singlefile-cli", SingleFileCLIArchiver)
@@ -80,6 +122,19 @@ async def lifespan_context(app: FastAPI):
 
     app.state.archivers = factory.create_all()
     app.state.archiver_factory = factory  # Store factory for potential dynamic registration
+
+    # Store storage providers on app state for API access
+    app.state.file_storage = file_storage
+    app.state.db_storage = db_storage
+
+    logger.info(
+        "Storage providers initialized",
+        extra={
+            "file_storage": file_storage.provider_name,
+            "db_storage": db_storage.provider_name,
+            "archiver_count": len(app.state.archivers)
+        }
+    )
     summarization_queue: "queue.Queue[SummarizeTask]" = queue.Queue()
 
     # Expose command runner on app state for APIs
@@ -173,11 +228,19 @@ app = FastAPI(title="archiver service", version="0.3.0", lifespan=lifespan_conte
 app.include_router(api_router)
 app.include_router(web_router)
 
-# Serve saved files directly for viewing in UI. During tests the DATA_DIR may
-# not exist at import time, so skip existence check here; the lifespan startup
-# ensures the directory is created before use.
-app.mount(
-    "/files",
-    StaticFiles(directory=str(settings.data_dir), check_dir=False),
-    name="files",
-)
+# Serve saved files directly for viewing in UI only when using local storage backend.
+# During tests the DATA_DIR may not exist at import time, so skip existence check here;
+# the lifespan startup ensures the directory is created before use.
+if settings.storage_backend == 'local':
+    app.mount(
+        "/files",
+        StaticFiles(directory=str(settings.data_dir), check_dir=False),
+        name="files",
+    )
+else:
+    # For cloud storage backends (GCS), file serving will be handled by API endpoints
+    # that use storage providers instead of static file mounting
+    logger.info(
+        f"Static file mounting skipped for storage backend: {settings.storage_backend}",
+        extra={"storage_backend": settings.storage_backend}
+    )
