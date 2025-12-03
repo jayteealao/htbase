@@ -271,6 +271,84 @@ class AppSettings(BaseSettings):
     )
     summarization: SummarizationSettings = Field(default_factory=SummarizationSettings)
 
+    # Storage integration configuration
+    enable_storage_integration: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("ENABLE_STORAGE_INTEGRATION", "STORAGE__ENABLE_INTEGRATION"),
+        description="Enable archive_with_storage for automatic file/db storage integration"
+    )
+
+    # Storage configuration
+    storage_backend: str = Field(
+        default="local",
+        validation_alias=AliasChoices("STORAGE_BACKEND", "STORAGE__BACKEND"),
+        description="File storage backend: 'local' or 'gcs'"
+    )
+    gcs_bucket: str = Field(
+        default="htbase-archives-standard",
+        validation_alias=AliasChoices("GCS_BUCKET", "STORAGE__GCS_BUCKET"),
+        description="Google Cloud Storage bucket name for GCS backend"
+    )
+    gcs_project_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("GCS_PROJECT_ID", "STORAGE__GCS_PROJECT_ID"),
+        description="Google Cloud project ID for GCS authentication"
+    )
+
+    # Database storage configuration
+    database_backend: str = Field(
+        default="postgres",
+        validation_alias=AliasChoices("DATABASE_BACKEND", "DATABASE__BACKEND"),
+        description="Database storage backend: 'postgres' or 'firestore'"
+    )
+    firestore_project_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("FIRESTORE_PROJECT_ID", "DATABASE__FIRESTORE_PROJECT_ID"),
+        description="Firebase project ID for Firestore backend"
+    )
+
+    # GCS Credentials Configuration
+    gcs_credentials_path: Path | None = Field(
+        default=None,
+        validation_alias=AliasChoices("GCS_CREDENTIALS_PATH", "STORAGE__GCS_CREDENTIALS_PATH"),
+        description="Path to GCP service account JSON credentials file"
+    )
+    gcs_application_credentials: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("GOOGLE_APPLICATION_CREDENTIALS", "STORAGE__GCS_APPLICATION_CREDENTIALS"),
+        description="GCP service account credentials JSON string or file path"
+    )
+
+    # Firestore Credentials Configuration
+    firestore_credentials_path: Path | None = Field(
+        default=None,
+        validation_alias=AliasChoices("FIRESTORE_CREDENTIALS_PATH", "DATABASE__FIRESTORE_CREDENTIALS_PATH"),
+        description="Path to Firebase service account JSON credentials file"
+    )
+    firestore_application_credentials: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("FIREBASE_APPLICATION_CREDENTIALS", "DATABASE__FIRESTORE_APPLICATION_CREDENTIALS"),
+        description="Firebase service account credentials JSON string or file path"
+    )
+
+    # Storage Management Settings
+    storage_fallback_to_local: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("STORAGE_FALLBACK_TO_LOCAL", "STORAGE__FALLBACK_TO_LOCAL"),
+        description="Fallback to local storage if cloud storage fails"
+    )
+    storage_retention_days: int = Field(
+        default=365,
+        validation_alias=AliasChoices("STORAGE_RETENTION_DAYS", "STORAGE__RETENTION_DAYS"),
+        description="Default retention period for stored files in days"
+    )
+
+    # Properties for backward compatibility
+    @property
+    def database_url(self) -> str:
+        """Get database connection string."""
+        return self.database.sqlalchemy_url()
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_prefix="",
