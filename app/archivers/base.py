@@ -2,18 +2,28 @@ from __future__ import annotations
 
 import abc
 from pathlib import Path
+from typing import Optional
 
 from core.config import AppSettings
 from core.utils import sanitize_filename
 from models import ArchiveResult
+from ..storage.file_storage import FileStorageProvider
+from ..storage.database_storage import DatabaseStorageProvider
 
 
 class BaseArchiver(abc.ABC):
     name: str = "base"
     output_extension: str = "html"  # Subclasses can override (e.g., "pdf", "png")
 
-    def __init__(self, settings: AppSettings):
+    def __init__(
+        self,
+        settings: AppSettings,
+        file_storage: Optional[FileStorageProvider] = None,
+        db_storage: Optional[DatabaseStorageProvider] = None
+    ):
         self.settings = settings
+        self.file_storage = file_storage
+        self.db_storage = db_storage
 
     def get_output_path(self, item_id: str) -> tuple[Path, Path]:
         """Return (output_dir, output_file_path) for this archiver.
@@ -102,6 +112,117 @@ class BaseArchiver(abc.ABC):
             saved_path=str(path) if success else None,
             metadata=metadata,
         )
+
+    def handle_file_storage(
+        self,
+        local_path: Path,
+        item_id: str
+    ) -> dict:
+        """Handle file storage upload and return storage metadata.
+
+        Args:
+            local_path: Path to the local file to upload
+            item_id: Article identifier
+
+        Returns:
+            Dictionary with storage metadata (gcs_path, compressed_size, etc.)
+        """
+        if not self.file_storage or not local_path.exists():
+            return {}
+
+        try:
+            # Determine storage path
+            storage_path = f"archives/{item_id}/{self.name}/output.{self.output_extension}"
+
+            # Upload to storage (will compress if supported)
+            upload_result = self.file_storage.upload_file(
+                local_path=local_path,
+                destination_path=storage_path,
+                compress=True
+            )
+
+            return {
+                'gcs_path': upload_result.storage_path,
+                'gcs_bucket': getattr(upload_result, 'bucket_name', None),
+                'compressed_size': upload_result.compressed_size,
+                'compression_ratio': upload_result.compression_ratio,
+                'file_size': upload_result.compressed_size,
+            }
+        except Exception as e:
+            # Log error but don't fail the archiving process
+            print(f"Storage upload failed for {item_id}/{self.name}: {e}")
+            return {}
+
+    def update_database_storage(
+        self,
+        item_id: str,
+        archive_result: dict
+    ) -> None:
+        """Update database storage with archive metadata.
+
+        Args:
+            item_id: Article identifier
+            archive_result: Storage metadata from handle_file_storage
+        """
+        if not self.db_storage or not archive_result:
+            return
+
+        try:
+            from ..storage.database_storage import ArchiveArtifact, ArchiveStatus
+
+            # Update artifact status with storage metadata
+            self.db_storage.update_artifact_status(
+                item_id=item_id,
+                archiver=self.name,
+                status=ArchiveStatus.SUCCESS,
+                gcs_path=archive_result.get('gcs_path'),
+                gcs_bucket=archive_result.get('gcs_bucket'),
+                file_size=archive_result.get('compressed_size'),
+                compression_ratio=archive_result.get('compression_ratio')
+            )
+        except Exception as e:
+            # Log error but don't fail the archiving process
+            print(f"Database update failed for {item_id}/{self.name}: {e}")
+
+    def archive_with_storage(
+        self,
+        *,
+        url: str,
+        item_id: str
+    ) -> ArchiveResult:
+        """Archive URL with storage abstraction integration.
+
+        This method extends the base archive() method to handle:
+        - File storage upload (local or GCS)
+        - Database storage updates (PostgreSQL or Firestore)
+
+        Args:
+            url: URL to archive
+            item_id: Article identifier
+
+        Returns:
+            ArchiveResult with storage metadata included
+        """
+        # 1. Run the base archiving logic
+        result = self.archive(url=url, item_id=item_id)
+
+        # 2. Handle file storage upload if successful
+        if result.success and result.saved_path and self.file_storage:
+            storage_metadata = self.handle_file_storage(
+                Path(result.saved_path),
+                item_id
+            )
+
+            # Add storage metadata to result
+            if storage_metadata:
+                if result.metadata is None:
+                    result.metadata = {}
+                result.metadata.update(storage_metadata)
+
+                # Update database with storage info
+                self.update_database_storage(item_id, storage_metadata)
+
+        return result
 
     @abc.abstractmethod
     def archive(self, *, url: str, item_id: str) -> ArchiveResult:  # noqa: D401
