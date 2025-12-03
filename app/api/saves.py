@@ -239,9 +239,15 @@ def _archive_with(
                     last_row_id = None
                 continue
 
-        result: ArchiveResult = archiver_obj.archive(
-            url=rewritten_url, item_id=safe_id
-        )
+        # Use storage integration when providers are available
+        if hasattr(archiver_obj, 'archive_with_storage') and archiver_obj.file_storage:
+            result: ArchiveResult = archiver_obj.archive_with_storage(
+                url=rewritten_url, item_id=safe_id
+            )
+        else:
+            result: ArchiveResult = archiver_obj.archive(
+                url=rewritten_url, item_id=safe_id
+            )
         last_result = result
         logger.info(f"Archiver completed | archiver={name} item_id={safe_id} success={result.success} exit_code={result.exit_code} saved_path={result.saved_path}")
         # Record to DB (best-effort)
@@ -346,54 +352,97 @@ def retrieve_archive(
         saved_path = getattr(artifact, "saved_path", None)
         if not saved_path:
             raise HTTPException(status_code=404, detail="url not archived")
-        file_path = Path(saved_path)
-        if not file_path.exists():
-            raise HTTPException(status_code=404, detail="archived file not available")
-        media_type, _ = mimetypes.guess_type(str(file_path))
-        media_type = media_type or "application/octet-stream"
+
+        # Storage-aware file serving - works with any backend
         archiver_label = getattr(artifact, "archiver", archiver_name)
-        base_label = safe_id or sanitize_filename(url_str or file_path.stem)
-        filename = (
-            f"{base_label}-{archiver_label}{file_path.suffix}"
-            if file_path.suffix
-            else f"{base_label}-{archiver_label}"
-        )
-        logger.info(
-            "Returning archived artifact",
-            extra={"archiver": archiver_label, "item_id": safe_id, "path": str(file_path)},
-        )
-        return FileResponse(
-            path=str(file_path),
-            media_type=media_type,
-            filename=filename,
-        )
+        base_label = safe_id or sanitize_filename(url_str or "archive")
+
+        # Try to determine media type from path or default to octet-stream
+        media_type, _ = mimetypes.guess_type(str(saved_path))
+        media_type = media_type or "application/octet-stream"
+
+        # Generate appropriate filename based on archiver and file type
+        extension = Path(saved_path).suffix or infer_extension_from_archiver(archiver_label)
+        filename = f"{base_label}-{archiver_label}{extension}"
+
+        # Check if we have storage providers available
+        if hasattr(request.app.state, 'file_storage') and request.app.state.file_storage:
+            logger.info(
+                "Serving archived artifact via storage provider",
+                extra={"archiver": archiver_label, "item_id": safe_id, "storage_path": saved_path},
+            )
+            # Use storage provider (GCS, local, etc.) to serve the file
+            # Note: FileStorageProvider should implement serve_file method
+            return request.app.state.file_storage.serve_file(
+                storage_path=saved_path,
+                filename=filename,
+                media_type=media_type
+            )
+        else:
+            # Fallback to local file serving for backward compatibility
+            file_path = Path(saved_path)
+            if not file_path.exists():
+                raise HTTPException(status_code=404, detail="archived file not available")
+            logger.info(
+                "Serving archived artifact via local filesystem",
+                extra={"archiver": archiver_label, "item_id": safe_id, "path": str(file_path)},
+            )
+            return FileResponse(
+                path=str(file_path),
+                media_type=media_type,
+                filename=filename,
+            )
 
     files: list[tuple[str, Path]] = []
+    temp_files: list[Path] = []  # Track temporary files for cleanup
+
     for artifact in artifacts:
         saved_path = getattr(artifact, "saved_path", None)
         archiver_label = getattr(artifact, "archiver", "artifact")
         if not saved_path:
             continue
-        file_path = Path(saved_path)
-        if file_path.exists():
-            files.append((archiver_label, file_path))
+
+        # Check if we have storage providers available
+        if hasattr(request.app.state, 'file_storage') and request.app.state.file_storage:
+            # For cloud storage, we need to download to temp file
+            try:
+                temp_file = request.app.state.file_storage.download_to_temp(saved_path)
+                files.append((archiver_label, temp_file))
+                temp_files.append(temp_file)
+            except Exception as e:
+                logger.warning(f"Failed to download {saved_path} from storage: {e}")
+                continue
+        else:
+            # Fallback to local file serving
+            file_path = Path(saved_path)
+            if file_path.exists():
+                files.append((archiver_label, file_path))
+
     if not files:
         raise HTTPException(status_code=404, detail="url not archived")
 
-    bundle_label = safe_id or sanitize_filename(url_str or "archive")
-    filename = f"{bundle_label}-artifacts.tar.gz"
-    buffer = BytesIO()
-    with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
-        for archiver_label, file_path in files:
-            arcname = f"{archiver_label}/{file_path.name}"
-            tar.add(str(file_path), arcname=arcname)
-    buffer.seek(0)
-    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
-    logger.info(
-        "Returning archived bundle",
-        extra={"item_id": safe_id, "file_count": len(files), "filename": filename},
-    )
-    return StreamingResponse(buffer, media_type="application/gzip", headers=headers)
+    try:
+        bundle_label = safe_id or sanitize_filename(url_str or "archive")
+        filename = f"{bundle_label}-artifacts.tar.gz"
+        buffer = BytesIO()
+        with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
+            for archiver_label, file_path in files:
+                arcname = f"{archiver_label}/{file_path.name}"
+                tar.add(str(file_path), arcname=arcname)
+        buffer.seek(0)
+        headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+        logger.info(
+            "Returning archived bundle",
+            extra={"item_id": safe_id, "file_count": len(files), "filename": filename},
+        )
+        return StreamingResponse(buffer, media_type="application/gzip", headers=headers)
+    finally:
+        # Clean up temporary files
+        for temp_file in temp_files:
+            try:
+                temp_file.unlink(missing_ok=True)
+            except Exception as e:
+                logger.warning(f"Failed to cleanup temp file {temp_file}: {e}")
 
 
 @router.post("/save", response_model=TaskAccepted, status_code=202)
@@ -505,5 +554,18 @@ def get_archive_size(
     )
 
     return size_stats
+
+
+def infer_extension_from_archiver(archiver_name: str) -> str:
+    """Infer file extension based on archiver name."""
+    archiver_extensions = {
+        "monolith": ".html",
+        "singlefile": ".html",
+        "readability": ".html",
+        "pdf": ".pdf",
+        "screenshot": ".png",
+        "singlefile-cli": ".html",
+    }
+    return archiver_extensions.get(archiver_name.lower(), "")
 
 
