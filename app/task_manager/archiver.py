@@ -448,10 +448,17 @@ class ArchiverTaskManager(BackgroundTaskManager[BatchTask]):
                 "Invoking archiver",
                 extra={"archiver": item.archiver_name, "rowid": item.rowid, "url": fetch_url},
             )
-            result: ArchiveResult = archiver.archive(
-                url=fetch_url,
-                item_id=item.item_id,
-            )
+            # Use storage integration if enabled
+            if self.settings.enable_storage_integration and hasattr(archiver, 'archive_with_storage'):
+                result: ArchiveResult = archiver.archive_with_storage(
+                    url=fetch_url,
+                    item_id=item.item_id,
+                )
+            else:
+                result: ArchiveResult = archiver.archive(
+                    url=fetch_url,
+                    item_id=item.item_id,
+                )
             self._record_result(item=item, result=result)
         except Exception as exc:
             self._handle_archiver_exception(item=item, error=exc)
