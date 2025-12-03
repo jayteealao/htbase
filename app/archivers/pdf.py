@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Optional
 import shlex
 
 from archivers.base import BaseArchiver
@@ -10,6 +11,8 @@ from core.config import AppSettings
 from core.command_runner import CommandRunner
 from core.utils import sanitize_filename
 from models import ArchiveResult
+from ..storage.file_storage import FileStorageProvider
+from ..storage.database_storage import DatabaseStorageProvider
 
 logger = logging.getLogger(__name__)
 
@@ -18,8 +21,14 @@ class PDFArchiver(BaseArchiver, ChromiumArchiverMixin):
     name = "pdf"
     output_extension = "pdf"
 
-    def __init__(self, command_runner: CommandRunner, settings: AppSettings):
-        super().__init__(settings)
+    def __init__(
+        self,
+        command_runner: CommandRunner,
+        settings: AppSettings,
+        file_storage: Optional[FileStorageProvider] = None,
+        db_storage: Optional[DatabaseStorageProvider] = None
+    ):
+        super().__init__(settings, file_storage, db_storage)
         self.command_runner = command_runner
         self.chromium_builder = ChromiumCommandBuilder(settings)
 
