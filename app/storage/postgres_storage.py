@@ -22,7 +22,7 @@ from .database_storage import (
     ArticleRecord,
     ArchiveStatus
 )
-from ..db.repositories import (
+from db.repositories import (
     ArchivedUrlRepository,
     ArchiveArtifactRepository,
     UrlMetadataRepository,
@@ -30,12 +30,12 @@ from ..db.repositories import (
     ArticleEntityRepository,
     ArticleTagRepository
 )
-from ..db.models import ArchivedUrl, UrlMetadata
-from ..db.models import ArchiveArtifact as DBArchiveArtifact
-from ..db.models import ArticleSummary as DBArticleSummary
-from ..db.models import ArticleEntity as DBArticleEntity
-from ..db.models import ArticleTag as DBArticleTag
-from ..db.session import get_session
+from db.models import ArchivedUrl, UrlMetadata
+from db.models import ArchiveArtifact as DBArchiveArtifact
+from db.models import ArticleSummary as DBArticleSummary
+from db.models import ArticleEntity as DBArticleEntity
+from db.models import ArticleTag as DBArticleTag
+from db.session import get_session
 
 
 class PostgresStorage(DatabaseStorageProvider):

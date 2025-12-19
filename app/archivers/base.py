@@ -7,8 +7,8 @@ from typing import Optional
 from core.config import AppSettings
 from core.utils import sanitize_filename
 from models import ArchiveResult
-from ..storage.file_storage import FileStorageProvider
-from ..storage.database_storage import DatabaseStorageProvider
+from storage.file_storage import FileStorageProvider
+from storage.database_storage import DatabaseStorageProvider
 
 
 class BaseArchiver(abc.ABC):
@@ -18,11 +18,11 @@ class BaseArchiver(abc.ABC):
     def __init__(
         self,
         settings: AppSettings,
-        file_storage: Optional[FileStorageProvider] = None,
+        file_storage_providers: Optional[list[FileStorageProvider]] = None,
         db_storage: Optional[DatabaseStorageProvider] = None
     ):
         self.settings = settings
-        self.file_storage = file_storage
+        self.file_storage_providers = file_storage_providers or []
         self.db_storage = db_storage
 
     def get_output_path(self, item_id: str) -> tuple[Path, Path]:
@@ -113,45 +113,67 @@ class BaseArchiver(abc.ABC):
             metadata=metadata,
         )
 
-    def handle_file_storage(
+    def upload_to_all_providers(
         self,
         local_path: Path,
         item_id: str
-    ) -> dict:
-        """Handle file storage upload and return storage metadata.
+    ) -> list[dict]:
+        """Upload file to all configured storage providers.
 
         Args:
             local_path: Path to the local file to upload
             item_id: Article identifier
 
         Returns:
-            Dictionary with storage metadata (gcs_path, compressed_size, etc.)
+            List of upload results (one per provider)
         """
-        if not self.file_storage or not local_path.exists():
-            return {}
+        import logging
+        from datetime import datetime
 
-        try:
-            # Determine storage path
-            storage_path = f"archives/{item_id}/{self.name}/output.{self.output_extension}"
+        logger = logging.getLogger(__name__)
 
-            # Upload to storage (will compress if supported)
-            upload_result = self.file_storage.upload_file(
-                local_path=local_path,
-                destination_path=storage_path,
-                compress=True
-            )
+        if not self.file_storage_providers or not local_path.exists():
+            return []
 
-            return {
-                'gcs_path': upload_result.storage_path,
-                'gcs_bucket': getattr(upload_result, 'bucket_name', None),
-                'compressed_size': upload_result.compressed_size,
-                'compression_ratio': upload_result.compression_ratio,
-                'file_size': upload_result.compressed_size,
-            }
-        except Exception as e:
-            # Log error but don't fail the archiving process
-            print(f"Storage upload failed for {item_id}/{self.name}: {e}")
-            return {}
+        results = []
+        storage_path = f"archives/{item_id}/{self.name}/output.{self.output_extension}"
+
+        for provider in self.file_storage_providers:
+            try:
+                upload_result = provider.upload_file(
+                    local_path=local_path,
+                    destination_path=storage_path,
+                    compress=True
+                )
+
+                if upload_result.success:
+                    metadata = {
+                        'provider_name': provider.provider_name,
+                        'storage_uri': upload_result.uri,
+                        'original_size': upload_result.original_size,
+                        'stored_size': upload_result.stored_size,
+                        'compression_ratio': upload_result.compression_ratio,
+                        'uploaded_at': datetime.utcnow(),
+                        'success': True
+                    }
+                else:
+                    metadata = {
+                        'provider_name': provider.provider_name,
+                        'success': False,
+                        'error': upload_result.error
+                    }
+
+                results.append(metadata)
+
+            except Exception as e:
+                logger.error(f"Upload to {provider.provider_name} failed: {e}")
+                results.append({
+                    'provider_name': provider.provider_name,
+                    'success': False,
+                    'error': str(e)
+                })
+
+        return results
 
     def update_database_storage(
         self,
@@ -168,7 +190,7 @@ class BaseArchiver(abc.ABC):
             return
 
         try:
-            from ..storage.database_storage import ArchiveArtifact, ArchiveStatus
+            from storage.database_storage import ArchiveArtifact, ArchiveStatus
 
             # Update artifact status with storage metadata
             self.db_storage.update_artifact_status(
@@ -190,11 +212,12 @@ class BaseArchiver(abc.ABC):
         url: str,
         item_id: str
     ) -> ArchiveResult:
-        """Archive URL with storage abstraction integration.
+        """Archive URL and upload to all configured storage providers.
 
         This method extends the base archive() method to handle:
-        - File storage upload (local or GCS)
+        - File storage upload to all configured providers
         - Database storage updates (PostgreSQL or Firestore)
+        - Local file cleanup scheduling (only after ALL uploads succeed)
 
         Args:
             url: URL to archive
@@ -206,23 +229,143 @@ class BaseArchiver(abc.ABC):
         # 1. Run the base archiving logic
         result = self.archive(url=url, item_id=item_id)
 
-        # 2. Handle file storage upload if successful
-        if result.success and result.saved_path and self.file_storage:
-            storage_metadata = self.handle_file_storage(
-                Path(result.saved_path),
-                item_id
-            )
+        # 2. Upload to all providers if successful
+        if result.success and result.saved_path and self.file_storage_providers:
+            local_path = Path(result.saved_path)
+            upload_results = self.upload_to_all_providers(local_path, item_id)
 
-            # Add storage metadata to result
-            if storage_metadata:
-                if result.metadata is None:
-                    result.metadata = {}
-                result.metadata.update(storage_metadata)
+            # 3. Check if ALL uploads succeeded
+            all_succeeded = all(r.get('success', False) for r in upload_results)
 
-                # Update database with storage info
-                self.update_database_storage(item_id, storage_metadata)
+            # 4. Store upload results in metadata
+            if result.metadata is None:
+                result.metadata = {}
+            result.metadata['storage_uploads'] = upload_results
+            result.metadata['all_uploads_succeeded'] = all_succeeded
+
+            # 5. Update database with upload status
+            # Extract first upload result (GCS takes priority if multiple providers)
+            primary_result = upload_results[0] if upload_results else {}
+            self.update_database_storage(item_id, primary_result)
+
+            # 6. Update Firestore article status if using Firestore backend
+            if self.db_storage and self.db_storage.provider_name == "firestore":
+                self._update_firestore_article_status(item_id, result, upload_results)
+
+            # 7. Schedule cleanup only if ALL uploads succeeded
+            if all_succeeded and self.settings.enable_local_cleanup:
+                artifact_id = self._get_artifact_id(item_id)
+                if artifact_id:
+                    self.schedule_local_cleanup(
+                        local_path=local_path,
+                        artifact_id=artifact_id,
+                        retention_hours=self.settings.local_workspace_retention_hours
+                    )
 
         return result
+
+    def schedule_local_cleanup(
+        self,
+        local_path: Path,
+        artifact_id: int,
+        retention_hours: int
+    ) -> None:
+        """Schedule cleanup of local file after retention period.
+
+        Args:
+            local_path: Path to local file to clean up
+            artifact_id: Artifact database ID for tracking
+            retention_hours: Hours to wait before cleanup
+        """
+        if not self.settings.enable_local_cleanup:
+            return
+
+        cleanup_manager = getattr(self, '_cleanup_manager', None)
+        if cleanup_manager:
+            cleanup_manager.schedule_cleanup(local_path, artifact_id, retention_hours)
+
+    def _get_artifact_id(self, item_id: str) -> Optional[int]:
+        """Get artifact ID from database for this archiver and item.
+
+        Args:
+            item_id: Article identifier
+
+        Returns:
+            Artifact ID or None if not found
+        """
+        try:
+            from db import ArchiveArtifactRepository
+            repo = ArchiveArtifactRepository(
+                self.settings.database.resolved_path(self.settings.data_dir)
+            )
+            artifact = repo.find_successful(item_id=item_id, archiver=self.name)
+            return artifact.id if artifact else None
+        except Exception:
+            return None
+
+    def _update_firestore_article_status(
+        self,
+        item_id: str,
+        result,
+        upload_results: list[dict]
+    ) -> None:
+        """Update Firestore article status after archival completes.
+
+        Args:
+            item_id: Article identifier
+            result: ArchiveResult from archival
+            upload_results: List of upload results from storage providers
+        """
+        import logging
+        from datetime import datetime
+
+        logger = logging.getLogger(__name__)
+
+        if not self.db_storage:
+            return
+
+        try:
+            # Check if any archiver has completed successfully
+            # (we only update article status to "completed" when at least one archiver succeeds)
+            # The Cloud Function onArchiveStatusChange will handle sync to PostgreSQL if needed
+
+            # Update specific archiver status in archives map
+            gcs_path = None
+            for upload in upload_results:
+                if upload.get('success') and upload.get('storage_uri'):
+                    # Extract GCS path from storage URI
+                    uri = upload.get('storage_uri', '')
+                    if uri.startswith('gs://'):
+                        gcs_path = uri.replace('gs://', '').split('/', 1)[1]
+                        break
+
+            # Update artifact status
+            from storage.database_storage import ArchiveStatus
+            self.db_storage.update_artifact_status(
+                item_id=item_id,
+                archiver=self.name,
+                status=ArchiveStatus.SUCCESS if result.success else ArchiveStatus.FAILED,
+                gcs_path=gcs_path
+            )
+
+            # Update article metadata with completion status
+            # Only mark as "completed" if this archival was successful
+            if result.success:
+                try:
+                    self.db_storage.update_article_metadata(
+                        item_id=item_id,
+                        metadata={
+                            'status': 'completed',
+                            'updated_at': datetime.utcnow()
+                        }
+                    )
+                    logger.info(f"Updated Firestore article {item_id} status to completed")
+                except Exception as e:
+                    logger.warning(f"Failed to update article metadata for {item_id}: {e}")
+
+        except Exception as e:
+            # Log error but don't fail the archival if Firestore update fails
+            logger.error(f"Failed to update Firestore for {item_id}/{self.name}: {e}")
 
     @abc.abstractmethod
     def archive(self, *, url: str, item_id: str) -> ArchiveResult:  # noqa: D401

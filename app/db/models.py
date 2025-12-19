@@ -7,6 +7,7 @@ from sqlalchemy import (
     DateTime,
     Index,
     Integer,
+    JSON,
     String,
     Text,
     ForeignKey,
@@ -88,10 +89,18 @@ class ArchiveArtifact(Base):
     # Size of individual archiver output in bytes
     size_bytes = Column(BigInteger, nullable=True)
 
+    # Multi-provider upload tracking
+    uploaded_to_storage = Column(Boolean, nullable=False, server_default=sa_text("false"))
+    storage_uploads = Column(JSON, nullable=True)  # List of upload results per provider
+    all_uploads_succeeded = Column(Boolean, nullable=False, server_default=sa_text("false"))
+    local_file_deleted = Column(Boolean, nullable=False, server_default=sa_text("false"))
+    local_file_deleted_at = Column(DateTime, nullable=True)
+
     __table_args__ = (
         UniqueConstraint("archived_url_id", "archiver", name="uq_artifact_url_archiver"),
         Index("idx_artifact_task_id", "task_id"),
         Index("idx_artifact_archiver", "archiver"),
+        Index("idx_artifact_cleanup", "success", "all_uploads_succeeded", "local_file_deleted"),
     )
 
 

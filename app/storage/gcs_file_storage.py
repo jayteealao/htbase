@@ -279,6 +279,54 @@ class GCSFileStorage(FileStorageProvider):
         """Supports signed URLs."""
         return True
 
+    def serve_file(
+        self,
+        storage_path: str,
+        filename: str,
+        media_type: str = "application/octet-stream"
+    ):
+        """Serve file from GCS by streaming."""
+        from fastapi.responses import StreamingResponse
+        from fastapi import HTTPException
+
+        blob = self.bucket.blob(storage_path)
+        if not blob.exists():
+            raise HTTPException(status_code=404, detail="File not found in GCS")
+
+        # Stream file from GCS
+        def iterfile():
+            with blob.open('rb') as f:
+                while chunk := f.read(8192):  # 8KB chunks
+                    yield chunk
+
+        headers = {
+            'Content-Disposition': f'attachment; filename="{filename}"'
+        }
+
+        return StreamingResponse(
+            iterfile(),
+            media_type=media_type,
+            headers=headers
+        )
+
+    def download_to_temp(self, storage_path: str) -> Path:
+        """Download from GCS to temporary file."""
+        import tempfile
+
+        blob = self.bucket.blob(storage_path)
+        if not blob.exists():
+            raise FileNotFoundError(f"File not found in GCS: {storage_path}")
+
+        # Create temp file with proper extension
+        suffix = Path(storage_path).suffix
+        temp_file = Path(tempfile.mktemp(suffix=suffix))
+
+        # Download (handles decompression if .gz)
+        is_compressed = storage_path.endswith('.gz')
+        self.download_file(storage_path, temp_file, decompress=is_compressed)
+
+        return temp_file
+
     def _guess_content_type(self, file_path: Path) -> str:
         """Guess content type from file extension."""
         suffix = file_path.suffix.lower()

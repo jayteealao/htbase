@@ -5,14 +5,14 @@ from pathlib import Path
 import shlex
 from typing import Optional
 
-from archivers.base import BaseArchiver
+from .base import BaseArchiver
 from core.chromium_utils import ChromiumArchiverMixin, ChromiumCommandBuilder
 from core.config import AppSettings
 from core.command_runner import CommandRunner
 from core.utils import sanitize_filename
 from models import ArchiveResult
-from ..storage.file_storage import FileStorageProvider
-from ..storage.database_storage import DatabaseStorageProvider
+from storage.file_storage import FileStorageProvider
+from storage.database_storage import DatabaseStorageProvider
 
 logger = logging.getLogger(__name__)
 
@@ -25,10 +25,10 @@ class ScreenshotArchiver(BaseArchiver, ChromiumArchiverMixin):
         self,
         command_runner: CommandRunner,
         settings: AppSettings,
-        file_storage: Optional[FileStorageProvider] = None,
+        file_storage_providers: Optional[list[FileStorageProvider]] = None,
         db_storage: Optional[DatabaseStorageProvider] = None
     ):
-        super().__init__(settings, file_storage, db_storage)
+        super().__init__(settings, file_storage_providers, db_storage)
         self.command_runner = command_runner
         self.chromium_builder = ChromiumCommandBuilder(settings)
 
@@ -57,7 +57,7 @@ class ScreenshotArchiver(BaseArchiver, ChromiumArchiverMixin):
         # Execute command (archived_url_id context should be set by caller if needed)
         result = self.command_runner.execute(
             command=cmd,
-            timeout=300.0,
+            timeout=30.0,
             archived_url_id=None,  # Could be passed from caller
             archiver=self.name,
         )

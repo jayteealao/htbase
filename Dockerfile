@@ -78,7 +78,7 @@ COPY alembic /app/alembic
 RUN mkdir -p /data
 VOLUME ["/data"]
 
-EXPOSE 8000 7681
+EXPOSE 8080 7681
 
 ENV PYTHONUNBUFFERED=1
 # Safer defaults for SingleFile (avoid sandbox + tiny /dev/shm issues)

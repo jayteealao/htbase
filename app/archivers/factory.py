@@ -9,8 +9,8 @@ if TYPE_CHECKING:
     from core.config import AppSettings
     from core.command_runner import CommandRunner
     from archivers.base import BaseArchiver
-    from ..storage.file_storage import FileStorageProvider
-    from ..storage.database_storage import DatabaseStorageProvider
+    from storage.file_storage import FileStorageProvider
+    from storage.database_storage import DatabaseStorageProvider
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ class ArchiverFactory:
         self,
         settings: "AppSettings",
         command_runner: "CommandRunner",
-        file_storage: Optional["FileStorageProvider"] = None,
+        file_storage_providers: Optional[list["FileStorageProvider"]] = None,
         db_storage: Optional["DatabaseStorageProvider"] = None
     ):
         """Initialize the factory with required dependencies.
@@ -34,12 +34,12 @@ class ArchiverFactory:
         Args:
             settings: Application settings
             command_runner: CommandRunner instance for command execution
-            file_storage: Optional file storage provider (local, GCS, etc.)
+            file_storage_providers: Optional list of file storage providers (local, GCS, etc.)
             db_storage: Optional database storage provider (PostgreSQL, Firestore, etc.)
         """
         self.settings = settings
         self.command_runner = command_runner
-        self.file_storage = file_storage
+        self.file_storage_providers = file_storage_providers or []
         self.db_storage = db_storage
         self._registry: Dict[str, Type["BaseArchiver"]] = {}
 
@@ -84,14 +84,14 @@ class ArchiverFactory:
             "Creating archiver instance",
             extra={
                 "name": name,
-                "has_file_storage": self.file_storage is not None,
+                "file_storage_count": len(self.file_storage_providers),
                 "has_db_storage": self.db_storage is not None
             }
         )
         return archiver_class(
             command_runner=self.command_runner,
             settings=self.settings,
-            file_storage=self.file_storage,
+            file_storage_providers=self.file_storage_providers,
             db_storage=self.db_storage
         )
 

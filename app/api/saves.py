@@ -240,7 +240,7 @@ def _archive_with(
                 continue
 
         # Use storage integration when providers are available
-        if hasattr(archiver_obj, 'archive_with_storage') and archiver_obj.file_storage:
+        if hasattr(archiver_obj, 'archive_with_storage') and archiver_obj.file_storage_providers:
             result: ArchiveResult = archiver_obj.archive_with_storage(
                 url=rewritten_url, item_id=safe_id
             )
@@ -345,6 +345,46 @@ def retrieve_archive(
         settings=settings,
     )
 
+    # Lazy migration: if article exists in PostgreSQL but not Firestore, migrate it
+    if settings.enable_lazy_migration and hasattr(request.app.state, 'firestore_storage'):
+        firestore = request.app.state.firestore_storage
+        postgres = request.app.state.postgres_storage
+
+        if firestore and postgres and safe_id:
+            try:
+                # Check if article exists in Firestore
+                fs_article = firestore.get_article(safe_id)
+
+                if not fs_article and artifacts:
+                    # Article exists in PostgreSQL but not in Firestore - migrate it
+                    logger.info(f"Lazy migrating article {safe_id} to Firestore")
+
+                    # Get article from PostgreSQL
+                    pg_article = postgres.get_article(safe_id)
+                    if pg_article:
+                        # Import SyncFilter for data filtering
+                        from storage.sync_filter import SyncFilter
+                        sync_filter = SyncFilter()
+
+                        # Filter data for Firestore
+                        fs_data = sync_filter.filter_for_firestore(pg_article)
+
+                        # Create article in Firestore
+                        firestore.create_article(pg_article.metadata)
+
+                        # Sync pocket data if present
+                        if pg_article.pocket:
+                            firestore.create_pocket_data(pg_article.pocket)
+
+                        # Sync artifacts
+                        for artifact in pg_article.archives:
+                            firestore.create_artifact(artifact)
+
+                        logger.info(f"Lazily migrated {safe_id} to Firestore ({len(pg_article.archives)} artifacts)")
+            except Exception as e:
+                logger.error(f"Lazy migration failed for {safe_id}: {e}")
+                # Continue with normal retrieval even if migration fails
+
     if archiver_name != "all":
         if not artifacts:
             raise HTTPException(status_code=404, detail="url not archived")
@@ -366,23 +406,29 @@ def retrieve_archive(
         filename = f"{base_label}-{archiver_label}{extension}"
 
         # Check if we have storage providers available
-        if hasattr(request.app.state, 'file_storage') and request.app.state.file_storage:
-            logger.info(
-                "Serving archived artifact via storage provider",
-                extra={"archiver": archiver_label, "item_id": safe_id, "storage_path": saved_path},
-            )
-            # Use storage provider (GCS, local, etc.) to serve the file
-            # Note: FileStorageProvider should implement serve_file method
-            return request.app.state.file_storage.serve_file(
-                storage_path=saved_path,
-                filename=filename,
-                media_type=media_type
-            )
-        else:
-            # Fallback to local file serving for backward compatibility
-            file_path = Path(saved_path)
-            if not file_path.exists():
-                raise HTTPException(status_code=404, detail="archived file not available")
+        if hasattr(request.app.state, 'file_storage_providers') and request.app.state.file_storage_providers:
+            # Try to retrieve from any storage provider
+            for provider in request.app.state.file_storage_providers:
+                try:
+                    # Check if file exists in this provider
+                    storage_path = saved_path.replace(str(settings.data_dir), "archives")
+                    if provider.exists(storage_path):
+                        logger.info(
+                            f"Serving archived artifact via {provider.provider_name}",
+                            extra={"archiver": archiver_label, "item_id": safe_id, "storage_path": storage_path},
+                        )
+                        return provider.serve_file(
+                            storage_path=storage_path,
+                            filename=filename,
+                            media_type=media_type
+                        )
+                except Exception as e:
+                    logger.warning(f"Failed to serve from {provider.provider_name}: {e}")
+                    continue
+
+        # Fallback to local file serving if exists
+        file_path = Path(saved_path)
+        if file_path.exists():
             logger.info(
                 "Serving archived artifact via local filesystem",
                 extra={"archiver": archiver_label, "item_id": safe_id, "path": str(file_path)},
@@ -403,19 +449,28 @@ def retrieve_archive(
             continue
 
         # Check if we have storage providers available
-        if hasattr(request.app.state, 'file_storage') and request.app.state.file_storage:
-            # For cloud storage, we need to download to temp file
-            try:
-                temp_file = request.app.state.file_storage.download_to_temp(saved_path)
-                files.append((archiver_label, temp_file))
-                temp_files.append(temp_file)
-            except Exception as e:
-                logger.warning(f"Failed to download {saved_path} from storage: {e}")
+        if hasattr(request.app.state, 'file_storage_providers') and request.app.state.file_storage_providers:
+            # Try to download from any storage provider
+            downloaded = False
+            for provider in request.app.state.file_storage_providers:
+                try:
+                    storage_path = saved_path.replace(str(settings.data_dir), "archives")
+                    if provider.exists(storage_path):
+                        temp_file = provider.download_to_temp(storage_path)
+                        files.append((archiver_label, temp_file))
+                        temp_files.append(temp_file)
+                        downloaded = True
+                        break
+                except Exception as e:
+                    logger.warning(f"Failed to download from {provider.provider_name}: {e}")
+                    continue
+
+            if downloaded:
                 continue
-        else:
-            # Fallback to local file serving
-            file_path = Path(saved_path)
-            if file_path.exists():
+
+        # Fallback to local file serving
+        file_path = Path(saved_path)
+        if file_path.exists():
                 files.append((archiver_label, file_path))
 
     if not files:

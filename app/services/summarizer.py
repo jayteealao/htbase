@@ -49,18 +49,18 @@ class SummaryService:
             self._build_whitelist(settings.summarization.tag_whitelist)
         )
 
-    # def _build_whitelist(
-    #     self, raw_tags: Sequence[str]
-    # ) -> List[Tuple[str, re.Pattern[str]]]:
-    #     """Build regex patterns for tag whitelist."""
-    #     entries: List[Tuple[str, re.Pattern[str]]] = []
-    #     for raw_tag in raw_tags:
-    #         tag = raw_tag.strip()
-    #         if not tag:
-    #             continue
-    #         pattern = re.compile(rf"(?<!\w){re.escape(tag)}(?!\w)", re.IGNORECASE)
-    #         entries.append((tag, pattern))
-    #     return entries
+    def _build_whitelist(
+        self, raw_tags: Sequence[str]
+    ) -> List[Tuple[str, re.Pattern[str]]]:
+        """Build regex patterns for tag whitelist."""
+        entries: List[Tuple[str, re.Pattern[str]]] = []
+        for raw_tag in raw_tags:
+            tag = raw_tag.strip()
+            if not tag:
+                continue
+            pattern = re.compile(rf"(?<!\w){re.escape(tag)}(?!\w)", re.IGNORECASE)
+            entries.append((tag, pattern))
+        return entries
 
     @property
     def is_enabled(self) -> bool:

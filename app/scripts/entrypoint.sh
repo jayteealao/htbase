@@ -5,6 +5,12 @@ APP_DIR="/app"
 cd "$APP_DIR"
 export ALEMBIC_CONFIG="/app/alembic.ini"
 
+# Use .env.default if no .env file is present
+# if [ ! -f /app/.env ] && [ -f /app/.env.default ]; then
+#     echo "[entrypoint] No .env file found, using .env.default..."
+#     cp /app/.env.default /app/.env
+# fi
+
 echo "[entrypoint] Applying DB migrations..."
 retries=${ALEMBIC_RETRIES:-3}
 delay=${ALEMBIC_RETRY_DELAY:-3}
@@ -21,4 +27,5 @@ for i in $(seq 1 "$retries"); do
   sleep "$delay"
 done
 
-exec uvicorn server:app --host 0.0.0.0 --port 8000
+PORT=${PORT:-8080}
+exec uvicorn server:app --host 0.0.0.0 --port "$PORT"

@@ -31,7 +31,7 @@ class LocalFileStorage(FileStorageProvider):
 
         Args:
             root_dir: Root directory for file storage
-            base_url: Base URL for serving files (e.g., http://localhost:8000/files)
+            base_url: Base URL for serving files (e.g., http://localhost:8080/files)
                      If None, file:/// URLs will be used
         """
         self.root_dir = Path(root_dir).resolve()
@@ -228,6 +228,33 @@ class LocalFileStorage(FileStorageProvider):
     def supports_signed_urls(self) -> bool:
         """Does not support signed URLs (uses file:/// or HTTP)."""
         return False
+
+    def serve_file(
+        self,
+        storage_path: str,
+        filename: str,
+        media_type: str = "application/octet-stream"
+    ):
+        """Serve file from local storage."""
+        from fastapi.responses import FileResponse
+        from fastapi import HTTPException
+
+        file_path = self.root_dir / storage_path
+        if not file_path.exists():
+            raise HTTPException(status_code=404, detail="File not found in storage")
+
+        return FileResponse(
+            path=str(file_path),
+            media_type=media_type,
+            filename=filename
+        )
+
+    def download_to_temp(self, storage_path: str) -> Path:
+        """For local storage, just return the path directly since it's already local."""
+        file_path = self.root_dir / storage_path
+        if not file_path.exists():
+            raise FileNotFoundError(f"File not found: {storage_path}")
+        return file_path
 
     def _guess_content_type(self, file_path: Path) -> str:
         """Guess content type from file extension."""

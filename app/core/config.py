@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Optional
 from urllib.parse import quote_plus
 
 from pydantic import AliasChoices, BaseModel, Field, SecretStr, field_validator
@@ -139,6 +140,7 @@ class OpenAIProviderSettings(BaseModel):
 
 
 class SummarizationSettings(BaseModel):
+
     enabled: bool = Field(
         default=False,
         validation_alias=AliasChoices("ENABLE_SUMMARIZATION", "SUMMARIZATION__ENABLED"),
@@ -236,6 +238,104 @@ class SummarizationSettings(BaseModel):
         return []
 
 
+class GcsSettings(BaseSettings):
+    """Google Cloud Storage configuration."""
+
+    bucket: str = Field(
+        default="htbase-archives-standard",
+        validation_alias=AliasChoices("GCS_BUCKET", "STORAGE__GCS_BUCKET"),
+        description="Google Cloud Storage bucket name for archive storage"
+    )
+
+    project_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("GCS_PROJECT_ID", "STORAGE__GCS_PROJECT_ID"),
+        description="Google Cloud project ID for GCS authentication"
+    )
+
+    credentials_path: Path | None = Field(
+        default=None,
+        validation_alias=AliasChoices("GCS_CREDENTIALS_PATH", "STORAGE__GCS_CREDENTIALS_PATH"),
+        description="Path to GCP service account JSON credentials file"
+    )
+
+    application_credentials: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            "STORAGE__GCS_APPLICATION_CREDENTIALS"
+        ),
+        description="GCP service account credentials JSON string or file path"
+    )
+
+    fallback_to_local: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("STORAGE_FALLBACK_TO_LOCAL", "STORAGE__FALLBACK_TO_LOCAL"),
+        description="Fallback to local storage if cloud storage fails"
+    )
+
+    retention_days: int = Field(
+        default=365,
+        validation_alias=AliasChoices("STORAGE_RETENTION_DAYS", "STORAGE__RETENTION_DAYS"),
+        description="Default retention period for stored files in days"
+    )
+
+    def is_configured(self) -> bool:
+        """Check if GCS is properly configured.
+
+        Returns:
+            True if bucket name is set (minimum requirement)
+        """
+        return bool(self.bucket)
+
+    model_config = SettingsConfigDict(
+        extra="allow",
+    )
+
+
+class FirestoreSettings(BaseSettings):
+    """Firebase Firestore configuration."""
+
+    project_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "FIRESTORE_PROJECT_ID",
+            "DATABASE__FIRESTORE_PROJECT_ID"
+        ),
+        description="Firebase project ID for Firestore backend"
+    )
+
+    credentials_path: Path | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "FIRESTORE_CREDENTIALS_PATH",
+            "DATABASE__FIRESTORE_CREDENTIALS_PATH"
+        ),
+        description="Path to Firebase service account JSON credentials file"
+    )
+
+    application_credentials: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "FIREBASE_APPLICATION_CREDENTIALS",
+            "DATABASE__FIRESTORE_APPLICATION_CREDENTIALS"
+        ),
+        description="Firebase service account credentials JSON string or file path"
+    )
+
+    def is_configured(self) -> bool:
+        """Check if Firestore is properly configured.
+
+        Returns:
+            True if project_id is set (required for Firestore client)
+        """
+        return bool(self.project_id)
+
+    model_config = SettingsConfigDict(
+        extra="allow",
+    )
+
+
 class AppSettings(BaseSettings):
     """Application configuration loaded from environment variables.
 
@@ -278,70 +378,89 @@ class AppSettings(BaseSettings):
         description="Enable archive_with_storage for automatic file/db storage integration"
     )
 
-    # Storage configuration
+    # Backend selection (controls which providers are initialized)
     storage_backend: str = Field(
         default="local",
         validation_alias=AliasChoices("STORAGE_BACKEND", "STORAGE__BACKEND"),
         description="File storage backend: 'local' or 'gcs'"
     )
-    gcs_bucket: str = Field(
-        default="htbase-archives-standard",
-        validation_alias=AliasChoices("GCS_BUCKET", "STORAGE__GCS_BUCKET"),
-        description="Google Cloud Storage bucket name for GCS backend"
-    )
-    gcs_project_id: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("GCS_PROJECT_ID", "STORAGE__GCS_PROJECT_ID"),
-        description="Google Cloud project ID for GCS authentication"
-    )
 
-    # Database storage configuration
     database_backend: str = Field(
         default="postgres",
         validation_alias=AliasChoices("DATABASE_BACKEND", "DATABASE__BACKEND"),
         description="Database storage backend: 'postgres' or 'firestore'"
     )
-    firestore_project_id: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("FIRESTORE_PROJECT_ID", "DATABASE__FIRESTORE_PROJECT_ID"),
-        description="Firebase project ID for Firestore backend"
+
+    # Multi-provider storage configuration
+    storage_providers_raw: str = Field(
+        default="local",
+        validation_alias=AliasChoices("STORAGE_PROVIDERS", "STORAGE__PROVIDERS"),
+        description="Comma-separated list of storage providers to use (local, gcs)"
     )
 
-    # GCS Credentials Configuration
-    gcs_credentials_path: Path | None = Field(
-        default=None,
-        validation_alias=AliasChoices("GCS_CREDENTIALS_PATH", "STORAGE__GCS_CREDENTIALS_PATH"),
-        description="Path to GCP service account JSON credentials file"
-    )
-    gcs_application_credentials: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("GOOGLE_APPLICATION_CREDENTIALS", "STORAGE__GCS_APPLICATION_CREDENTIALS"),
-        description="GCP service account credentials JSON string or file path"
+    @property
+    def storage_providers(self) -> list[str]:
+        """Get storage providers as list."""
+        return self._parse_storage_providers(self.storage_providers_raw)
+
+    # File lifecycle management
+    local_workspace_retention_hours: int = Field(
+        default=24,
+        validation_alias=AliasChoices("LOCAL_WORKSPACE_RETENTION_HOURS", "STORAGE__RETENTION_HOURS"),
+        description="Hours to keep local workspace files after successful upload to all providers"
     )
 
-    # Firestore Credentials Configuration
-    firestore_credentials_path: Path | None = Field(
-        default=None,
-        validation_alias=AliasChoices("FIRESTORE_CREDENTIALS_PATH", "DATABASE__FIRESTORE_CREDENTIALS_PATH"),
-        description="Path to Firebase service account JSON credentials file"
-    )
-    firestore_application_credentials: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("FIREBASE_APPLICATION_CREDENTIALS", "DATABASE__FIRESTORE_APPLICATION_CREDENTIALS"),
-        description="Firebase service account credentials JSON string or file path"
+    failed_output_retention_days: int = Field(
+        default=7,
+        validation_alias=AliasChoices("FAILED_OUTPUT_RETENTION_DAYS", "STORAGE__FAILED_RETENTION_DAYS"),
+        description="Days to keep failed archival outputs before cleanup"
     )
 
-    # Storage Management Settings
-    storage_fallback_to_local: bool = Field(
+    enable_local_cleanup: bool = Field(
         default=True,
-        validation_alias=AliasChoices("STORAGE_FALLBACK_TO_LOCAL", "STORAGE__FALLBACK_TO_LOCAL"),
-        description="Fallback to local storage if cloud storage fails"
+        validation_alias=AliasChoices("ENABLE_LOCAL_CLEANUP", "STORAGE__ENABLE_CLEANUP"),
+        description="Enable automatic cleanup of local files after cloud upload"
     )
-    storage_retention_days: int = Field(
-        default=365,
-        validation_alias=AliasChoices("STORAGE_RETENTION_DAYS", "STORAGE__RETENTION_DAYS"),
-        description="Default retention period for stored files in days"
+
+    # Local backup storage (when using multiple providers)
+    local_backup_dir: Optional[Path] = Field(
+        default=None,
+        validation_alias=AliasChoices("LOCAL_BACKUP_DIR", "STORAGE__LOCAL_BACKUP_DIR"),
+        description="Directory for local backup storage provider (optional)"
     )
+
+    # Nested storage configuration
+    gcs: GcsSettings = Field(default_factory=GcsSettings)
+    firestore: FirestoreSettings = Field(default_factory=FirestoreSettings)
+
+    # Dual database persistence configuration
+    enable_dual_persistence: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("ENABLE_DUAL_PERSISTENCE", "DATABASE__ENABLE_DUAL"),
+        description="Enable dual PostgreSQL + Firestore writes for mobile app sync"
+    )
+
+    dual_write_failure_mode: str = Field(
+        default="fail_fast",
+        validation_alias=AliasChoices("DUAL_WRITE_FAILURE_MODE", "DATABASE__DUAL_FAILURE_MODE"),
+        description="Behavior when Firestore write fails: fail_fast (fail entire operation), log_and_continue (log and proceed), queue_retry (queue for retry)"
+    )
+
+    enable_lazy_migration: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("ENABLE_LAZY_MIGRATION", "DATABASE__ENABLE_LAZY_MIGRATION"),
+        description="Enable lazy migration of existing PostgreSQL articles to Firestore on access"
+    )
+
+    @staticmethod
+    def _parse_storage_providers(value: str) -> list[str]:
+        """Parse comma-separated storage providers string into list."""
+        if not value or value.strip() == "":
+            return ["local"]
+        if isinstance(value, str):
+            items = [item.strip() for item in value.split(",") if item.strip()]
+            return items or ["local"]
+        return ["local"]
 
     # Properties for backward compatibility
     @property

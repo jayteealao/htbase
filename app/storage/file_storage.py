@@ -163,6 +163,48 @@ class FileStorageProvider(ABC):
         pass
 
     @abstractmethod
+    def serve_file(
+        self,
+        storage_path: str,
+        filename: str,
+        media_type: str = "application/octet-stream"
+    ):
+        """
+        Serve a file for download by streaming from storage.
+
+        Used to proxy file downloads through the app instead of direct access.
+        Returns a FastAPI response object that streams the file.
+
+        Args:
+            storage_path: Path in storage to the file
+            filename: Filename to use in Content-Disposition header
+            media_type: MIME type for the response
+
+        Returns:
+            FastAPI StreamingResponse or FileResponse for file download
+        """
+        pass
+
+    @abstractmethod
+    def download_to_temp(self, storage_path: str) -> Path:
+        """
+        Download a file from storage to a temporary location.
+
+        Used for operations that need local file access (e.g., creating tarballs).
+        Caller is responsible for cleanup of the returned temporary file.
+
+        Args:
+            storage_path: Path in storage to the file
+
+        Returns:
+            Path to temporary file
+
+        Raises:
+            FileNotFoundError: If file doesn't exist in storage
+        """
+        pass
+
+    @abstractmethod
     def list_files(
         self,
         prefix: str = "",

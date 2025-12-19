@@ -6,11 +6,11 @@ services:
         image: ht-base:local
         container_name: ht-base
         ports:
-        - "8000:8000"   # REST API
+        - "8080:8080"   # REST API
         - "7681:7681"   # ht live preview
         - "9222:9222"   # Chromium remote debugging
         env_file:
-        - .env
+        - .env.production
         environment:
         - DATA_DIR=/data
         - HT_LISTEN=0.0.0.0:7681

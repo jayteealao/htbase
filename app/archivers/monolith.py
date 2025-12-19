@@ -5,14 +5,14 @@ from pathlib import Path
 from typing import Optional
 import shlex
 
-from archivers.base import BaseArchiver
+from .base import BaseArchiver
 from core.chromium_utils import ChromiumArchiverMixin, ChromiumCommandBuilder
 from core.config import AppSettings
 from core.command_runner import CommandRunner
 from models import ArchiveResult
 from core.utils import sanitize_filename
-from ..storage.file_storage import FileStorageProvider
-from ..storage.database_storage import DatabaseStorageProvider
+from storage.file_storage import FileStorageProvider
+from storage.database_storage import DatabaseStorageProvider
 
 logger = logging.getLogger(__name__)
 
@@ -24,10 +24,10 @@ class MonolithArchiver(BaseArchiver, ChromiumArchiverMixin):
         self,
         command_runner: CommandRunner,
         settings: AppSettings,
-        file_storage: Optional[FileStorageProvider] = None,
+        file_storage_providers: Optional[list[FileStorageProvider]] = None,
         db_storage: Optional[DatabaseStorageProvider] = None
     ):
-        super().__init__(settings, file_storage, db_storage)
+        super().__init__(settings, file_storage_providers, db_storage)
         self.command_runner = command_runner
         self.use_chromium = settings.chromium.enabled
         self.chromium_builder = ChromiumCommandBuilder(settings)
