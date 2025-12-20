@@ -35,7 +35,7 @@ steps:
       - 'europe-west2-docker.pkg.dev/trails-414917/htbase-docker/htbase:latest'
     waitFor: ['build-image']
 
-  # Step 4: Deploy to Cloud Run (trails-e428e project)
+  # Step 4: Deploy to Cloud Run (trails-414917 project)
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     id: 'deploy-cloud-run'
     entrypoint: gcloud
@@ -48,12 +48,12 @@ steps:
       - '--platform=managed'
       - '--service-account=firebase-adminsdk-fbsvc@trails-e428e.iam.gserviceaccount.com'
       - '--allow-unauthenticated'
-      - '--project=trails-e428e'
+      - '--project=trails-414917'
       - '--memory=2Gi'
       - '--cpu=2'
       - '--timeout=300s'
       - '--max-instances=10'
-      - '--set-env-vars=STORAGE_BACKEND=gcs,STORAGE_PROVIDERS=gcs,GCS_BUCKET=htbase-archives-standard,GCS_PROJECT_ID=trails-414917,FIRESTORE_PROJECT_ID=trails-e428e,ENABLE_STORAGE_INTEGRATION=true,ENABLE_DUAL_PERSISTENCE=true,DB_HOST=${_DB_HOST},DB_PORT=${_DB_PORT},DB_NAME=${_DB_NAME},DB_USER=${_DB_USER},DB_PASSWORD=${_DB_PASSWORD}'
+      - '--set-env-vars=STORAGE_BACKEND=gcs,STORAGE_PROVIDERS=gcs,GCS_BUCKET=htbase-archives-standard,GCS_PROJECT_ID=trails-414917,FIRESTORE_PROJECT_ID=trails-414917,ENABLE_STORAGE_INTEGRATION=true,ENABLE_DUAL_PERSISTENCE=true,DB_HOST=${_DB_HOST},DB_PORT=${_DB_PORT},DB_NAME=${_DB_NAME},DB_USER=${_DB_USER},DB_PASSWORD=${_DB_PASSWORD}'
     waitFor: ['push-timestamp', 'push-latest']
 
 # Build options
