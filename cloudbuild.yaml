@@ -1,0 +1,83 @@
+# Cloud Build configuration for HTBase
+# Builds Docker image and deploys to Cloud Run
+#
+# Usage:
+#   gcloud builds submit --config=cloudbuild.yaml --project=trails-414917
+
+steps:
+  # Step 1: Build the Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'build-image'
+    args:
+      - 'build'
+      - '-t'
+      - 'europe-west2-docker.pkg.dev/trails-414917/htbase-docker/htbase:${_TIMESTAMP}'
+      - '-t'
+      - 'europe-west2-docker.pkg.dev/trails-414917/htbase-docker/htbase:latest'
+      - '-f'
+      - 'Dockerfile'
+      - '.'
+    timeout: 1200s  # 20 minutes for build
+
+  # Step 2: Push the timestamped image
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'push-timestamp'
+    args:
+      - 'push'
+      - 'europe-west2-docker.pkg.dev/trails-414917/htbase-docker/htbase:${_TIMESTAMP}'
+    waitFor: ['build-image']
+
+  # Step 3: Push the latest tag
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'push-latest'
+    args:
+      - 'push'
+      - 'europe-west2-docker.pkg.dev/trails-414917/htbase-docker/htbase:latest'
+    waitFor: ['build-image']
+
+  # Step 4: Deploy to Cloud Run (trails-e428e project)
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'deploy-cloud-run'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'htbase'
+      - '--image=europe-west2-docker.pkg.dev/trails-414917/htbase-docker/htbase:${_TIMESTAMP}'
+      - '--region=europe-west2'
+      - '--platform=managed'
+      - '--service-account=firebase-adminsdk-fbsvc@trails-e428e.iam.gserviceaccount.com'
+      - '--allow-unauthenticated'
+      - '--project=trails-e428e'
+      - '--memory=2Gi'
+      - '--cpu=2'
+      - '--timeout=300s'
+      - '--max-instances=10'
+      - '--set-env-vars=STORAGE_BACKEND=gcs,STORAGE_PROVIDERS=gcs,GCS_BUCKET=htbase-archives-standard,GCS_PROJECT_ID=trails-414917,FIRESTORE_PROJECT_ID=trails-e428e,ENABLE_STORAGE_INTEGRATION=true,ENABLE_DUAL_PERSISTENCE=true,DB_HOST=${_DB_HOST},DB_PORT=${_DB_PORT},DB_NAME=${_DB_NAME},DB_USER=${_DB_USER},DB_PASSWORD=${_DB_PASSWORD}'
+    waitFor: ['push-timestamp', 'push-latest']
+
+# Build options
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: 'E2_HIGHCPU_8'
+  substitutionOption: 'ALLOW_LOOSE'
+
+# Images to store in Artifact Registry
+images:
+  - 'europe-west2-docker.pkg.dev/trails-414917/htbase-docker/htbase:${_TIMESTAMP}'
+  - 'europe-west2-docker.pkg.dev/trails-414917/htbase-docker/htbase:latest'
+
+# Substitutions (default timestamp to build ID if not provided)
+substitutions:
+  _TIMESTAMP: ${BUILD_ID}
+  _DB_HOST: ''
+  _DB_PORT: ''
+  _DB_NAME: ''
+  _DB_USER: ''
+  _DB_PASSWORD: ''
+
+# Use default Cloud Build service account for the build
+# serviceAccount: 'projects/trails-e428e/serviceAccounts/firebase-adminsdk-fbsvc@trails-e428e.iam.gserviceaccount.com'
+
+# Build timeout
+timeout: 1800s  # 30 minutes total

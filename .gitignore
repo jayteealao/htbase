@@ -7,6 +7,15 @@ __pycache__/
 *.log
 *.sqlite
 .env
+.env.*
+.env.production
+.env.local
+
+# Google Cloud / Firebase credentials
+*-firebase-adminsdk-*.json
+service-account*.json
+*.json.key
+
 .coverage
 htmlcov/
 .coveragerc
