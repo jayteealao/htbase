@@ -46,7 +46,7 @@ steps:
       - '--image=europe-west2-docker.pkg.dev/trails-414917/htbase-docker/htbase:${_TIMESTAMP}'
       - '--region=europe-west2'
       - '--platform=managed'
-      - '--service-account=firebase-adminsdk-fbsvc@trails-e428e.iam.gserviceaccount.com'
+      - '--service-account=firebase-adminsdk-fbsvc@trails-414917.iam.gserviceaccount.com'
       - '--allow-unauthenticated'
       - '--project=trails-414917'
       - '--memory=2Gi'
