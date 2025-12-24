@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  api_gateway:
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+  archiver:
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+  summarization:
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+  task_manager:
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+  storage:
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - STORAGE_PROVIDER=local
+      - LOCAL_STORAGE_ROOT_DIR=/data
+  data:
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - POSTGRES_URL=postgresql://user:password@postgres:5432/ht-base
+      - FIRESTORE_PROJECT_ID=mock-project-id

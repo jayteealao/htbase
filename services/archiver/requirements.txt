@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+celery
+redis
+psycopg2-binary
+google-cloud-firestore
+google-cloud-storage
+pydantic
+sqlalchemy

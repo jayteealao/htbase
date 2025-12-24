@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from models import SaveRequest
+from main import SaveRequest
 
 
 def test_save_request_requires_id():
