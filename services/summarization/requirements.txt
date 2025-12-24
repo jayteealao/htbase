@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+celery
+redis
+pydantic
+google-cloud-aiplatform
+huggingface_hub
+langchain
+bs4

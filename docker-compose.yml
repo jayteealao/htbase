@@ -1,96 +1,95 @@
+version: '3.8'
+
 services:
-    monolith-ht:
-        build:
-            context: .
-            dockerfile: Dockerfile
-        image: ht-base:local
-        container_name: ht-base
-        ports:
-        - "8080:8080"   # REST API
-        - "7681:7681"   # ht live preview
-        - "9222:9222"   # Chromium remote debugging
-        env_file:
-        - .env.production
-        environment:
-        - DATA_DIR=/data
-        - HT_LISTEN=0.0.0.0:7681
-        - MONOLITH_FLAGS=${MONOLITH_FLAGS}
-        volumes:
-        - ./data:/data
-        develop:
-            watch:
-            # Rebuild image and restart when source changes
-                - action: rebuild
-                  path: .
-                  ignore:
-                    - data/**
-                    - .git/**
-                    - .venv/**
-                    - __pycache__/**
-                    - .pytest_cache/**
-                    - tests/**
-                    - ht.md
-                    - monolith.md
-    # text-generation:
-    #     image: ghcr.io/huggingface/text-generation-inference:3.3.6
-    #     container_name: text-generation
-    #     ports:
-    #       - "8001:80"   # REST API
-    #     volumes:
-    #       - ./data/tgi:/data
-    #     environment:
-    #       HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN}
-    #       HF_TOKEN: ${HF_TOKEN}
-    #     deploy:
-    #         resources:
-    #             reservations:
-    #                 devices:
-    #                     - driver: nvidia
-    #                       count: all
-    #                       capabilities: [gpu]
-    #     shm_size: "1g"
-    #     command:
-    #       - --model-id=Qwen/Qwen3-4B-Instruct-2507
-    #       - --trust-remote-code
-    #       - --sharded=false
-    
-    # text-embedding:
-    #     image: ghcr.io/huggingface/text-embeddings-inference:1.8.2
-    #     container_name: text-embedding
-    #     ports:
-    #       - "8002:80"   # REST API
-    #     volumes:
-    #       - ./data/tei:/data
-    #     environment:
-    #     - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
-    #       - HF_TOKEN=${HF_TOKEN}
-    #     deploy:
-    #         resources:
-    #             reservations:
-    #                 devices:
-    #                     - driver: nvidia
-    #                       count: all
-    #                       capabilities: [gpu]
-    #     shm_size: "1g"
-    #     command:
-    #       - --model-id=Qwen/Qwen3-Embedding-0.6B
-    
-    postgrest-pa:
-        image: postgrest/postgrest
-        container_name: postgrest_pa
-        ports:
-          - "3000:3000"   # PostgREST API
-        environment:
-          PGRST_DB_URI: postgres://postgres:your_password@192.168.1.12:5432/postgres
-          PGRST_DB_SCHEMA: public
-          PGRST_DB_ANON_ROLE: postgres
-    
-    postgrest-ht:
-        image: postgrest/postgrest
-        container_name: postgrest_ht
-        ports:
-          - "3001:3000"   # PostgREST API
-        environment:
-          PGRST_DB_URI: postgres://postgres:your_password@192.168.1.12:5432/htbase
-          PGRST_DB_SCHEMA: public
-          PGRST_DB_ANON_ROLE: postgres
+  redis:
+    image: redis:6.2-alpine
+    restart: always
+    ports:
+      - '6379:6379'
+
+  api_gateway:
+    build: ./services/api_gateway
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./services/api_gateway:/app
+    environment:
+      - ARCHIVER_URL=http://archiver:8000
+      - DATA_URL=http://data:8000
+      - STORAGE_URL=http://storage:8000
+    env_file:
+      - ./services/api_gateway/.env.example
+
+  archiver:
+    build: ./services/archiver
+    volumes:
+      - ./services/archiver:/app
+      - ./data:/data
+    depends_on:
+      - redis
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    env_file:
+      - ./services/archiver/.env.example
+
+  summarization:
+    build: ./services/summarization
+    volumes:
+      - ./services/summarization:/app
+    depends_on:
+      - redis
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - DATA_SERVICE_URL=http://data:8000
+      - STORAGE_SERVICE_URL=http://storage:8000
+    env_file:
+      - ./services/summarization/.env.example
+
+  task_manager:
+    build: ./services/task_manager
+    volumes:
+      - ./services/task_manager:/app
+    depends_on:
+      - redis
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - DATA_SERVICE_URL=http://data:8000
+      - STORAGE_SERVICE_URL=http://storage:8000
+    env_file:
+      - ./services/task_manager/.env.example
+
+  storage:
+    build: ./services/storage
+    volumes:
+      - ./services/storage:/app
+      - ./data:/data
+    env_file:
+      - ./services/storage/.env.example
+
+  data:
+    build: ./services/data
+    volumes:
+      - ./services/data:/app
+    depends_on:
+      - postgres
+    env_file:
+      - ./services/data/.env.example
+
+  postgres:
+    image: postgres:13-alpine
+    restart: always
+    environment:
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=ht-base
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
+  data:
