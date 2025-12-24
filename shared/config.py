@@ -116,6 +116,25 @@ class GCSSettings(BaseModel):
         return bool(self.bucket)
 
 
+class FirestoreSettings(BaseModel):
+    """Firestore settings for mobile client sync."""
+
+    project_id: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "FIRESTORE_PROJECT_ID", "GOOGLE_CLOUD_PROJECT", "GCS_PROJECT_ID"
+        ),
+    )
+    collection_name: str = Field(
+        default="articles",
+        validation_alias=AliasChoices("FIRESTORE_COLLECTION", "FIRESTORE__COLLECTION"),
+    )
+
+    def is_configured(self) -> bool:
+        """Check if Firestore is properly configured."""
+        return bool(self.project_id)
+
+
 class SummarizationSettings(BaseModel):
     """Summarization service settings."""
 
@@ -209,6 +228,7 @@ class SharedSettings(BaseSettings):
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     redis: RedisSettings = Field(default_factory=RedisSettings)
     gcs: GCSSettings = Field(default_factory=GCSSettings)
+    firestore: FirestoreSettings = Field(default_factory=FirestoreSettings)
     summarization: SummarizationSettings = Field(default_factory=SummarizationSettings)
 
     # Storage configuration

@@ -211,13 +211,18 @@ async def add_pocket_article(
         if settings.firestore.project_id:
             try:
                 from shared.storage.firestore_storage import FirestoreStorage
+                from shared.storage.database_storage import ArticleMetadata
 
-                firestore = FirestoreStorage(project_id=settings.firestore.project_id)
-                firestore.create_article(
+                firestore_storage = FirestoreStorage(project_id=settings.firestore.project_id)
+                article_metadata = ArticleMetadata(
                     item_id=item_id,
                     url=data.url,
-                    pocket_data=data.pocket_data,
+                    title=data.pocket_data.get("title"),
+                    byline=data.pocket_data.get("author"),
+                    excerpt=data.pocket_data.get("excerpt"),
+                    word_count=data.pocket_data.get("word_count"),
                 )
+                firestore_storage.create_article(article_metadata)
                 logger.info("Created article in Firestore", extra={"item_id": item_id})
             except Exception as e:
                 logger.warning(f"Failed to create Firestore document: {e}")
@@ -335,7 +340,7 @@ async def generate_download_url(
         from shared.storage.gcs_file_storage import GCSFileStorage
 
         gcs = GCSFileStorage(
-            bucket_name=settings.gcs.bucket_name,
+            bucket_name=settings.gcs.bucket,
             project_id=settings.gcs.project_id,
         )
 
@@ -513,15 +518,16 @@ async def archive_article(
         if settings.firestore.project_id:
             try:
                 from shared.storage.firestore_storage import FirestoreStorage
+                from shared.storage.database_storage import ArchiveStatus
 
-                firestore = FirestoreStorage(project_id=settings.firestore.project_id)
+                firestore_storage = FirestoreStorage(project_id=settings.firestore.project_id)
 
                 # Update archive status for each archiver
                 for archiver in archivers_to_queue:
-                    firestore.update_archive_status(
+                    firestore_storage.update_artifact_status(
                         item_id=data.item_id,
                         archiver=archiver,
-                        status="pending",
+                        status=ArchiveStatus.PENDING,
                     )
             except Exception as e:
                 logger.warning(f"Failed to update Firestore: {e}")
