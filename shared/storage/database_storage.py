@@ -87,11 +87,27 @@ class ArticleTag:
 
 
 @dataclass
+class PocketData:
+    """Pocket article metadata (for articles imported from Pocket)."""
+
+    item_id: str
+    resolved_id: Optional[str] = None
+    word_count: Optional[int] = None
+    time_added: Optional[int] = None
+    time_read: Optional[int] = None
+    favorite: bool = False
+    status: Optional[int] = None
+    images: Optional[List[Dict[str, Any]]] = None
+    authors: Optional[List[Dict[str, Any]]] = None
+
+
+@dataclass
 class ArticleRecord:
     """Complete article record with all related data."""
 
     metadata: ArticleMetadata
     archives: List[ArchiveArtifact]
+    pocket: Optional[PocketData] = None
     summary: Optional[ArticleSummary] = None
     entities: Optional[List[ArticleEntity]] = None
     tags: Optional[List[ArticleTag]] = None
@@ -167,6 +183,18 @@ class DatabaseStorageProvider(ABC):
         self, item_id: str, archiver: str, status: ArchiveStatus, **kwargs
     ) -> bool:
         """Update artifact status and related fields."""
+        pass
+
+    # ==================== Pocket Data Operations ====================
+
+    @abstractmethod
+    def create_pocket_data(self, pocket: PocketData) -> bool:
+        """Create or update Pocket metadata."""
+        pass
+
+    @abstractmethod
+    def get_pocket_data(self, item_id: str) -> Optional[PocketData]:
+        """Get Pocket metadata for an article."""
         pass
 
     # ==================== AI Content Operations ====================
