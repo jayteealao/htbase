@@ -159,3 +159,31 @@ variable "log_level" {
   type        = string
   default     = "INFO"
 }
+
+# =============================================================================
+# Domain Configuration
+# =============================================================================
+
+variable "domain" {
+  description = "Domain name for the application (leave empty for no ingress)"
+  type        = string
+  default     = ""
+}
+
+# =============================================================================
+# Secret Values (for GKE deployment)
+# =============================================================================
+
+variable "huggingface_api_key" {
+  description = "HuggingFace API key"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "openai_api_key" {
+  description = "OpenAI API key"
+  type        = string
+  default     = ""
+  sensitive   = true
+}

@@ -138,6 +138,16 @@ services:
       timeout: 10s
       retries: 3
       start_period: 15s
+    labels:
+      # Traefik configuration (used when --profile proxy is enabled)
+      - "traefik.enable=true"
+      - "traefik.http.routers.htbase-api.rule=Host(`${DOMAIN:-localhost}`)"
+      - "traefik.http.routers.htbase-api.entrypoints=websecure"
+      - "traefik.http.routers.htbase-api.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.htbase-api.middlewares=security-headers@file,gzip-compress@file"
+      - "traefik.http.services.htbase-api.loadbalancer.server.port=8080"
+      - "traefik.http.services.htbase-api.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.htbase-api.loadbalancer.healthcheck.interval=30s"
     deploy:
       resources:
         limits:
@@ -318,6 +328,7 @@ services:
       --basic_auth=${FLOWER_USER:-admin}:${FLOWER_PASSWORD:-admin}
       --persistent=true
       --db=/data/flower.db
+      --url_prefix=/flower
     ports:
       - "${FLOWER_PORT:-5555}:5555"
     volumes:
@@ -327,6 +338,13 @@ services:
         condition: service_healthy
     networks:
       - htbase-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.htbase-flower.rule=Host(`${DOMAIN:-localhost}`) && PathPrefix(`/flower`)"
+      - "traefik.http.routers.htbase-flower.entrypoints=websecure"
+      - "traefik.http.routers.htbase-flower.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.htbase-flower.middlewares=monitoring-auth@file"
+      - "traefik.http.services.htbase-flower.loadbalancer.server.port=5555"
     profiles:
       - monitoring
 
@@ -345,28 +363,50 @@ services:
         condition: service_healthy
     networks:
       - htbase-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.htbase-redis.rule=Host(`${DOMAIN:-localhost}`) && PathPrefix(`/redis`)"
+      - "traefik.http.routers.htbase-redis.entrypoints=websecure"
+      - "traefik.http.routers.htbase-redis.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.htbase-redis.middlewares=monitoring-auth@file,strip-redis@file"
+      - "traefik.http.services.htbase-redis.loadbalancer.server.port=8081"
     profiles:
       - monitoring
 
   # ===========================================================================
-  # Reverse Proxy (Optional - use --profile proxy)
+  # Reverse Proxy - Traefik (Optional - use --profile proxy)
+  # ===========================================================================
+  # If you already have Traefik running, skip this and add the labels to your
+  # existing Traefik configuration. See infrastructure/traefik/ for examples.
   # ===========================================================================
 
-  caddy:
-    image: caddy:2-alpine
-    container_name: htbase-caddy
+  traefik:
+    image: traefik:v3.2
+    container_name: htbase-traefik
     restart: unless-stopped
+    command:
+      - "--configFile=/etc/traefik/traefik.yml"
     ports:
       - "80:80"
       - "443:443"
+      - "8082:8082"  # Metrics
+    environment:
+      ACME_EMAIL: ${ACME_EMAIL:-admin@example.com}
     volumes:
-      - ./infrastructure/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data
-      - caddy-config:/config
-    depends_on:
-      - api-gateway
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./infrastructure/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./infrastructure/traefik/dynamic:/etc/traefik/dynamic:ro
+      - traefik-letsencrypt:/letsencrypt
     networks:
       - htbase-network
+    labels:
+      - "traefik.enable=true"
+      # Dashboard (optional - access via traefik.${DOMAIN})
+      - "traefik.http.routers.traefik-dashboard.rule=Host(`traefik.${DOMAIN:-localhost}`)"
+      - "traefik.http.routers.traefik-dashboard.service=api@internal"
+      - "traefik.http.routers.traefik-dashboard.entrypoints=websecure"
+      - "traefik.http.routers.traefik-dashboard.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.traefik-dashboard.middlewares=monitoring-auth@file"
     profiles:
       - proxy
 
@@ -398,7 +438,5 @@ volumes:
       device: ${ARTIFACTS_PATH:-./data/artifacts}
   flower-data:
     driver: local
-  caddy-data:
-    driver: local
-  caddy-config:
+  traefik-letsencrypt:
     driver: local

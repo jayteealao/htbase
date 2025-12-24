@@ -1,0 +1,75 @@
+# =============================================================================
+# Traefik Dynamic Configuration for HT Base
+# =============================================================================
+# Middlewares, rate limiting, and additional routing rules
+# =============================================================================
+
+http:
+  middlewares:
+    # Rate limiting for API endpoints
+    api-ratelimit:
+      rateLimit:
+        average: 100
+        burst: 50
+        period: 1m
+
+    # Security headers
+    security-headers:
+      headers:
+        browserXssFilter: true
+        contentTypeNosniff: true
+        forceSTSHeader: true
+        stsIncludeSubdomains: true
+        stsPreload: true
+        stsSeconds: 31536000
+        customFrameOptionsValue: "SAMEORIGIN"
+
+    # Compress responses
+    gzip-compress:
+      compress:
+        excludedContentTypes:
+          - text/event-stream
+
+    # Basic auth for monitoring endpoints
+    monitoring-auth:
+      basicAuth:
+        users:
+          # Generate with: htpasswd -nb admin password
+          # Default: admin:admin (CHANGE IN PRODUCTION)
+          - "admin:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/"
+
+    # Strip prefix for flower
+    strip-flower:
+      stripPrefix:
+        prefixes:
+          - "/flower"
+
+    # Strip prefix for redis-commander
+    strip-redis:
+      stripPrefix:
+        prefixes:
+          - "/redis"
+
+    # Retry middleware for transient failures
+    retry:
+      retry:
+        attempts: 3
+        initialInterval: 100ms
+
+    # Circuit breaker for backend protection
+    circuit-breaker:
+      circuitBreaker:
+        expression: "NetworkErrorRatio() > 0.30 || ResponseCodeRatio(500, 600, 0, 600) > 0.25"
+
+  # Services defined here can be referenced by routers
+  # (Docker labels handle most service definitions automatically)
+
+  routers:
+    # Health check endpoint (no auth, no rate limit)
+    health:
+      rule: "Path(`/health`) || Path(`/api/health`)"
+      service: api-gateway
+      entryPoints:
+        - websecure
+      tls:
+        certResolver: letsencrypt

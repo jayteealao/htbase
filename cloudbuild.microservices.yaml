@@ -1,0 +1,485 @@
+# =============================================================================
+# Cloud Build Configuration for HT Base - Microservices Cloud Run Deployment
+# =============================================================================
+# This file defines the CI/CD pipeline for building and deploying
+# HT Base microservices to Google Cloud Run.
+#
+# Usage:
+#   # Deploy all services
+#   gcloud builds submit --config=cloudbuild.microservices.yaml \
+#     --substitutions=_ENVIRONMENT=production,_REGION=us-central1
+#
+#   # Deploy specific service
+#   gcloud builds submit --config=cloudbuild.microservices.yaml \
+#     --substitutions=_SERVICE=api-gateway,_ENVIRONMENT=production
+#
+# Required substitutions (set via trigger or command line):
+#   _REDIS_HOST: Memorystore Redis IP
+#   _DB_CONNECTION_NAME: Cloud SQL connection name (project:region:instance)
+#   _GCS_BUCKET: GCS bucket name for archives
+#   _VPC_CONNECTOR: VPC connector name
+#
+# Required IAM roles for Cloud Build service account:
+#   - Cloud Run Admin (roles/run.admin)
+#   - Service Account User (roles/iam.serviceAccountUser)
+#   - Storage Admin (roles/storage.admin)
+#   - Secret Manager Secret Accessor (roles/secretmanager.secretAccessor)
+#   - Artifact Registry Writer (roles/artifactregistry.writer)
+# =============================================================================
+
+substitutions:
+  _REGION: us-central1
+  _ENVIRONMENT: production
+  _SERVICE: all  # all, api-gateway, archive-worker, summarization-worker, storage-worker
+  _REDIS_HOST: ""
+  _DB_CONNECTION_NAME: ""
+  _GCS_BUCKET: ""
+  _VPC_CONNECTOR: "htbase-connector"
+  _SERVICE_ACCOUNT: ""
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
+  dynamic_substitutions: true
+
+# =============================================================================
+# Build Steps
+# =============================================================================
+
+steps:
+  # ---------------------------------------------------------------------------
+  # Step 0: Print build info
+  # ---------------------------------------------------------------------------
+  - id: "info"
+    name: "gcr.io/cloud-builders/gcloud"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        echo "╔═══════════════════════════════════════════════════════════════╗"
+        echo "║           HT Base Microservices - Cloud Build                 ║"
+        echo "╠═══════════════════════════════════════════════════════════════╣"
+        echo "║ Project:     ${PROJECT_ID}"
+        echo "║ Region:      ${_REGION}"
+        echo "║ Environment: ${_ENVIRONMENT}"
+        echo "║ Service:     ${_SERVICE}"
+        echo "║ Commit:      ${SHORT_SHA:-local}"
+        echo "║ Branch:      ${BRANCH_NAME:-unknown}"
+        echo "╚═══════════════════════════════════════════════════════════════╝"
+
+  # ---------------------------------------------------------------------------
+  # Step 1: Build API Gateway image
+  # ---------------------------------------------------------------------------
+  - id: "build-api-gateway"
+    name: "gcr.io/cloud-builders/docker"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        if [ "${_SERVICE}" = "all" ] || [ "${_SERVICE}" = "api-gateway" ]; then
+          echo "Building API Gateway..."
+          docker build \
+            -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/htbase/api-gateway:${SHORT_SHA} \
+            -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/htbase/api-gateway:${_ENVIRONMENT} \
+            -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/htbase/api-gateway:latest \
+            -f services/api-gateway/Dockerfile \
+            .
+        else
+          echo "Skipping API Gateway build"
+        fi
+    waitFor: ["info"]
+    timeout: 900s
+
+  # ---------------------------------------------------------------------------
+  # Step 2: Build Archive Worker image
+  # ---------------------------------------------------------------------------
+  - id: "build-archive-worker"
+    name: "gcr.io/cloud-builders/docker"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        if [ "${_SERVICE}" = "all" ] || [ "${_SERVICE}" = "archive-worker" ]; then
+          echo "Building Archive Worker..."
+          docker build \
+            -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/htbase/archive-worker:${SHORT_SHA} \
+            -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/htbase/archive-worker:${_ENVIRONMENT} \
+            -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/htbase/archive-worker:latest \
+            -f services/archive-worker/Dockerfile \
+            .
+        else
+          echo "Skipping Archive Worker build"
+        fi
+    waitFor: ["info"]
+    timeout: 1200s  # Longer timeout for Chrome installation
+
+  # ---------------------------------------------------------------------------
+  # Step 3: Build Summarization Worker image
+  # ---------------------------------------------------------------------------
+  - id: "build-summarization-worker"
+    name: "gcr.io/cloud-builders/docker"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        if [ "${_SERVICE}" = "all" ] || [ "${_SERVICE}" = "summarization-worker" ]; then
+          echo "Building Summarization Worker..."
+          docker build \
+            -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/htbase/summarization-worker:${SHORT_SHA} \
+            -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/htbase/summarization-worker:${_ENVIRONMENT} \
+            -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/htbase/summarization-worker:latest \
+            -f services/summarization-worker/Dockerfile \
+            .
+        else
+          echo "Skipping Summarization Worker build"
+        fi
+    waitFor: ["info"]
+    timeout: 600s
+
+  # ---------------------------------------------------------------------------
+  # Step 4: Build Storage Worker image
+  # ---------------------------------------------------------------------------
+  - id: "build-storage-worker"
+    name: "gcr.io/cloud-builders/docker"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        if [ "${_SERVICE}" = "all" ] || [ "${_SERVICE}" = "storage-worker" ]; then
+          echo "Building Storage Worker..."
+          docker build \
+            -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/htbase/storage-worker:${SHORT_SHA} \
+            -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/htbase/storage-worker:${_ENVIRONMENT} \
+            -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/htbase/storage-worker:latest \
+            -f services/storage-worker/Dockerfile \
+            .
+        else
+          echo "Skipping Storage Worker build"
+        fi
+    waitFor: ["info"]
+    timeout: 600s
+
+  # ---------------------------------------------------------------------------
+  # Step 5: Push all images to Artifact Registry
+  # ---------------------------------------------------------------------------
+  - id: "push-images"
+    name: "gcr.io/cloud-builders/docker"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        echo "Pushing images to Artifact Registry..."
+
+        if [ "${_SERVICE}" = "all" ] || [ "${_SERVICE}" = "api-gateway" ]; then
+          docker push ${_REGION}-docker.pkg.dev/${PROJECT_ID}/htbase/api-gateway:${SHORT_SHA}
+          docker push ${_REGION}-docker.pkg.dev/${PROJECT_ID}/htbase/api-gateway:${_ENVIRONMENT}
+          docker push ${_REGION}-docker.pkg.dev/${PROJECT_ID}/htbase/api-gateway:latest
+        fi
+
+        if [ "${_SERVICE}" = "all" ] || [ "${_SERVICE}" = "archive-worker" ]; then
+          docker push ${_REGION}-docker.pkg.dev/${PROJECT_ID}/htbase/archive-worker:${SHORT_SHA}
+          docker push ${_REGION}-docker.pkg.dev/${PROJECT_ID}/htbase/archive-worker:${_ENVIRONMENT}
+          docker push ${_REGION}-docker.pkg.dev/${PROJECT_ID}/htbase/archive-worker:latest
+        fi
+
+        if [ "${_SERVICE}" = "all" ] || [ "${_SERVICE}" = "summarization-worker" ]; then
+          docker push ${_REGION}-docker.pkg.dev/${PROJECT_ID}/htbase/summarization-worker:${SHORT_SHA}
+          docker push ${_REGION}-docker.pkg.dev/${PROJECT_ID}/htbase/summarization-worker:${_ENVIRONMENT}
+          docker push ${_REGION}-docker.pkg.dev/${PROJECT_ID}/htbase/summarization-worker:latest
+        fi
+
+        if [ "${_SERVICE}" = "all" ] || [ "${_SERVICE}" = "storage-worker" ]; then
+          docker push ${_REGION}-docker.pkg.dev/${PROJECT_ID}/htbase/storage-worker:${SHORT_SHA}
+          docker push ${_REGION}-docker.pkg.dev/${PROJECT_ID}/htbase/storage-worker:${_ENVIRONMENT}
+          docker push ${_REGION}-docker.pkg.dev/${PROJECT_ID}/htbase/storage-worker:latest
+        fi
+
+        echo "Push complete!"
+    waitFor:
+      - "build-api-gateway"
+      - "build-archive-worker"
+      - "build-summarization-worker"
+      - "build-storage-worker"
+
+  # ---------------------------------------------------------------------------
+  # Step 6: Deploy API Gateway to Cloud Run
+  # ---------------------------------------------------------------------------
+  - id: "deploy-api-gateway"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        if [ "${_SERVICE}" = "all" ] || [ "${_SERVICE}" = "api-gateway" ]; then
+          echo "Deploying API Gateway..."
+          gcloud run deploy htbase-api-gateway-${_ENVIRONMENT} \
+            --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/htbase/api-gateway:${SHORT_SHA} \
+            --region=${_REGION} \
+            --platform=managed \
+            --allow-unauthenticated \
+            --min-instances=1 \
+            --max-instances=20 \
+            --cpu=1 \
+            --memory=512Mi \
+            --timeout=300s \
+            --concurrency=100 \
+            --service-account=${_SERVICE_ACCOUNT} \
+            --set-env-vars="^::^ENVIRONMENT=${_ENVIRONMENT}::LOG_LEVEL=INFO::LOG_FORMAT=json::REDIS_URL=redis://${_REDIS_HOST}:6379::CELERY_BROKER_URL=redis://${_REDIS_HOST}:6379/0::CELERY_RESULT_BACKEND=redis://${_REDIS_HOST}:6379/1::GCS_BUCKET=${_GCS_BUCKET}::GCS_PROJECT_ID=${PROJECT_ID}::DEFAULT_ARCHIVERS=singlefile,monolith,readability,pdf,screenshot::ENABLE_SUMMARIZATION=true" \
+            --set-secrets="DATABASE_PASSWORD=htbase-database-password-${_ENVIRONMENT}:latest" \
+            --add-cloudsql-instances=${_DB_CONNECTION_NAME} \
+            --vpc-connector=${_VPC_CONNECTOR}-${_ENVIRONMENT} \
+            --vpc-egress=all-traffic \
+            --labels="app=htbase,environment=${_ENVIRONMENT},service=api-gateway,commit=${SHORT_SHA}"
+        fi
+    waitFor: ["push-images"]
+
+  # ---------------------------------------------------------------------------
+  # Step 7: Deploy Archive Workers to Cloud Run
+  # ---------------------------------------------------------------------------
+  - id: "deploy-archive-singlefile"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        if [ "${_SERVICE}" = "all" ] || [ "${_SERVICE}" = "archive-worker" ]; then
+          echo "Deploying Archive Worker - SingleFile..."
+          gcloud run deploy htbase-archive-singlefile-${_ENVIRONMENT} \
+            --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/htbase/archive-worker:${SHORT_SHA} \
+            --region=${_REGION} \
+            --platform=managed \
+            --no-allow-unauthenticated \
+            --min-instances=0 \
+            --max-instances=20 \
+            --cpu=2 \
+            --memory=4Gi \
+            --timeout=900s \
+            --concurrency=2 \
+            --service-account=${_SERVICE_ACCOUNT} \
+            --set-env-vars="^::^ENVIRONMENT=${_ENVIRONMENT}::WORKER_QUEUES=archive.singlefile::WORKER_CONCURRENCY=2::ARCHIVER_TYPE=singlefile::ARCHIVER_TIMEOUT=300::REDIS_URL=redis://${_REDIS_HOST}:6379::CELERY_BROKER_URL=redis://${_REDIS_HOST}:6379/0::GCS_BUCKET=${_GCS_BUCKET}" \
+            --set-secrets="DATABASE_PASSWORD=htbase-database-password-${_ENVIRONMENT}:latest" \
+            --add-cloudsql-instances=${_DB_CONNECTION_NAME} \
+            --vpc-connector=${_VPC_CONNECTOR}-${_ENVIRONMENT} \
+            --vpc-egress=all-traffic \
+            --labels="app=htbase,environment=${_ENVIRONMENT},service=archive-worker,archiver=singlefile"
+        fi
+    waitFor: ["push-images"]
+
+  - id: "deploy-archive-monolith"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        if [ "${_SERVICE}" = "all" ] || [ "${_SERVICE}" = "archive-worker" ]; then
+          echo "Deploying Archive Worker - Monolith..."
+          gcloud run deploy htbase-archive-monolith-${_ENVIRONMENT} \
+            --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/htbase/archive-worker:${SHORT_SHA} \
+            --region=${_REGION} \
+            --platform=managed \
+            --no-allow-unauthenticated \
+            --min-instances=0 \
+            --max-instances=20 \
+            --cpu=2 \
+            --memory=4Gi \
+            --timeout=900s \
+            --concurrency=3 \
+            --service-account=${_SERVICE_ACCOUNT} \
+            --set-env-vars="^::^ENVIRONMENT=${_ENVIRONMENT}::WORKER_QUEUES=archive.monolith::WORKER_CONCURRENCY=3::ARCHIVER_TYPE=monolith::ARCHIVER_TIMEOUT=300::REDIS_URL=redis://${_REDIS_HOST}:6379::CELERY_BROKER_URL=redis://${_REDIS_HOST}:6379/0::GCS_BUCKET=${_GCS_BUCKET}" \
+            --set-secrets="DATABASE_PASSWORD=htbase-database-password-${_ENVIRONMENT}:latest" \
+            --add-cloudsql-instances=${_DB_CONNECTION_NAME} \
+            --vpc-connector=${_VPC_CONNECTOR}-${_ENVIRONMENT} \
+            --vpc-egress=all-traffic \
+            --labels="app=htbase,environment=${_ENVIRONMENT},service=archive-worker,archiver=monolith"
+        fi
+    waitFor: ["push-images"]
+
+  - id: "deploy-archive-readability"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        if [ "${_SERVICE}" = "all" ] || [ "${_SERVICE}" = "archive-worker" ]; then
+          echo "Deploying Archive Worker - Readability..."
+          gcloud run deploy htbase-archive-readability-${_ENVIRONMENT} \
+            --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/htbase/archive-worker:${SHORT_SHA} \
+            --region=${_REGION} \
+            --platform=managed \
+            --no-allow-unauthenticated \
+            --min-instances=0 \
+            --max-instances=20 \
+            --cpu=1 \
+            --memory=2Gi \
+            --timeout=300s \
+            --concurrency=5 \
+            --service-account=${_SERVICE_ACCOUNT} \
+            --set-env-vars="^::^ENVIRONMENT=${_ENVIRONMENT}::WORKER_QUEUES=archive.readability::WORKER_CONCURRENCY=5::ARCHIVER_TYPE=readability::ARCHIVER_TIMEOUT=120::REDIS_URL=redis://${_REDIS_HOST}:6379::CELERY_BROKER_URL=redis://${_REDIS_HOST}:6379/0::GCS_BUCKET=${_GCS_BUCKET}" \
+            --set-secrets="DATABASE_PASSWORD=htbase-database-password-${_ENVIRONMENT}:latest" \
+            --add-cloudsql-instances=${_DB_CONNECTION_NAME} \
+            --vpc-connector=${_VPC_CONNECTOR}-${_ENVIRONMENT} \
+            --vpc-egress=all-traffic \
+            --labels="app=htbase,environment=${_ENVIRONMENT},service=archive-worker,archiver=readability"
+        fi
+    waitFor: ["push-images"]
+
+  - id: "deploy-archive-pdf"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        if [ "${_SERVICE}" = "all" ] || [ "${_SERVICE}" = "archive-worker" ]; then
+          echo "Deploying Archive Worker - PDF..."
+          gcloud run deploy htbase-archive-pdf-${_ENVIRONMENT} \
+            --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/htbase/archive-worker:${SHORT_SHA} \
+            --region=${_REGION} \
+            --platform=managed \
+            --no-allow-unauthenticated \
+            --min-instances=0 \
+            --max-instances=10 \
+            --cpu=1 \
+            --memory=2Gi \
+            --timeout=180s \
+            --concurrency=3 \
+            --service-account=${_SERVICE_ACCOUNT} \
+            --set-env-vars="^::^ENVIRONMENT=${_ENVIRONMENT}::WORKER_QUEUES=archive.pdf::WORKER_CONCURRENCY=3::ARCHIVER_TYPE=pdf::ARCHIVER_TIMEOUT=60::REDIS_URL=redis://${_REDIS_HOST}:6379::CELERY_BROKER_URL=redis://${_REDIS_HOST}:6379/0::GCS_BUCKET=${_GCS_BUCKET}" \
+            --set-secrets="DATABASE_PASSWORD=htbase-database-password-${_ENVIRONMENT}:latest" \
+            --add-cloudsql-instances=${_DB_CONNECTION_NAME} \
+            --vpc-connector=${_VPC_CONNECTOR}-${_ENVIRONMENT} \
+            --vpc-egress=all-traffic \
+            --labels="app=htbase,environment=${_ENVIRONMENT},service=archive-worker,archiver=pdf"
+        fi
+    waitFor: ["push-images"]
+
+  - id: "deploy-archive-screenshot"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        if [ "${_SERVICE}" = "all" ] || [ "${_SERVICE}" = "archive-worker" ]; then
+          echo "Deploying Archive Worker - Screenshot..."
+          gcloud run deploy htbase-archive-screenshot-${_ENVIRONMENT} \
+            --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/htbase/archive-worker:${SHORT_SHA} \
+            --region=${_REGION} \
+            --platform=managed \
+            --no-allow-unauthenticated \
+            --min-instances=0 \
+            --max-instances=10 \
+            --cpu=1 \
+            --memory=2Gi \
+            --timeout=180s \
+            --concurrency=3 \
+            --service-account=${_SERVICE_ACCOUNT} \
+            --set-env-vars="^::^ENVIRONMENT=${_ENVIRONMENT}::WORKER_QUEUES=archive.screenshot::WORKER_CONCURRENCY=3::ARCHIVER_TYPE=screenshot::ARCHIVER_TIMEOUT=60::REDIS_URL=redis://${_REDIS_HOST}:6379::CELERY_BROKER_URL=redis://${_REDIS_HOST}:6379/0::GCS_BUCKET=${_GCS_BUCKET}" \
+            --set-secrets="DATABASE_PASSWORD=htbase-database-password-${_ENVIRONMENT}:latest" \
+            --add-cloudsql-instances=${_DB_CONNECTION_NAME} \
+            --vpc-connector=${_VPC_CONNECTOR}-${_ENVIRONMENT} \
+            --vpc-egress=all-traffic \
+            --labels="app=htbase,environment=${_ENVIRONMENT},service=archive-worker,archiver=screenshot"
+        fi
+    waitFor: ["push-images"]
+
+  # ---------------------------------------------------------------------------
+  # Step 8: Deploy Summarization Worker to Cloud Run
+  # ---------------------------------------------------------------------------
+  - id: "deploy-summarization-worker"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        if [ "${_SERVICE}" = "all" ] || [ "${_SERVICE}" = "summarization-worker" ]; then
+          echo "Deploying Summarization Worker..."
+          gcloud run deploy htbase-summarization-${_ENVIRONMENT} \
+            --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/htbase/summarization-worker:${SHORT_SHA} \
+            --region=${_REGION} \
+            --platform=managed \
+            --no-allow-unauthenticated \
+            --min-instances=0 \
+            --max-instances=10 \
+            --cpu=1 \
+            --memory=1Gi \
+            --timeout=300s \
+            --concurrency=5 \
+            --service-account=${_SERVICE_ACCOUNT} \
+            --set-env-vars="^::^ENVIRONMENT=${_ENVIRONMENT}::WORKER_QUEUES=summarization::WORKER_CONCURRENCY=5::REDIS_URL=redis://${_REDIS_HOST}:6379::CELERY_BROKER_URL=redis://${_REDIS_HOST}:6379/0::GCS_BUCKET=${_GCS_BUCKET}::CHUNK_SIZE=4000::CHUNK_OVERLAP=200" \
+            --set-secrets="DATABASE_PASSWORD=htbase-database-password-${_ENVIRONMENT}:latest,HUGGINGFACE_API_KEY=htbase-huggingface-api-key-${_ENVIRONMENT}:latest,OPENAI_API_KEY=htbase-openai-api-key-${_ENVIRONMENT}:latest" \
+            --add-cloudsql-instances=${_DB_CONNECTION_NAME} \
+            --vpc-connector=${_VPC_CONNECTOR}-${_ENVIRONMENT} \
+            --vpc-egress=all-traffic \
+            --labels="app=htbase,environment=${_ENVIRONMENT},service=summarization-worker"
+        fi
+    waitFor: ["push-images"]
+
+  # ---------------------------------------------------------------------------
+  # Step 9: Deploy Storage Worker to Cloud Run
+  # ---------------------------------------------------------------------------
+  - id: "deploy-storage-worker"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        if [ "${_SERVICE}" = "all" ] || [ "${_SERVICE}" = "storage-worker" ]; then
+          echo "Deploying Storage Worker..."
+          gcloud run deploy htbase-storage-${_ENVIRONMENT} \
+            --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/htbase/storage-worker:${SHORT_SHA} \
+            --region=${_REGION} \
+            --platform=managed \
+            --no-allow-unauthenticated \
+            --min-instances=0 \
+            --max-instances=15 \
+            --cpu=1 \
+            --memory=1Gi \
+            --timeout=300s \
+            --concurrency=10 \
+            --service-account=${_SERVICE_ACCOUNT} \
+            --set-env-vars="^::^ENVIRONMENT=${_ENVIRONMENT}::WORKER_QUEUES=storage::WORKER_CONCURRENCY=10::STORAGE_PROVIDER=gcs::COMPRESSION_ENABLED=true::CLEANUP_AFTER_UPLOAD=true::REDIS_URL=redis://${_REDIS_HOST}:6379::CELERY_BROKER_URL=redis://${_REDIS_HOST}:6379/0::GCS_BUCKET=${_GCS_BUCKET}::GCS_PROJECT_ID=${PROJECT_ID}" \
+            --set-secrets="DATABASE_PASSWORD=htbase-database-password-${_ENVIRONMENT}:latest" \
+            --add-cloudsql-instances=${_DB_CONNECTION_NAME} \
+            --vpc-connector=${_VPC_CONNECTOR}-${_ENVIRONMENT} \
+            --vpc-egress=all-traffic \
+            --labels="app=htbase,environment=${_ENVIRONMENT},service=storage-worker"
+        fi
+    waitFor: ["push-images"]
+
+  # ---------------------------------------------------------------------------
+  # Step 10: Print deployment summary
+  # ---------------------------------------------------------------------------
+  - id: "summary"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        echo ""
+        echo "╔═══════════════════════════════════════════════════════════════╗"
+        echo "║                  Deployment Complete                          ║"
+        echo "╚═══════════════════════════════════════════════════════════════╝"
+        echo ""
+        echo "Deployed services:"
+        gcloud run services list \
+          --region=${_REGION} \
+          --filter="labels.app=htbase AND labels.environment=${_ENVIRONMENT}" \
+          --format="table(name,url,status.latestReadyRevisionName)"
+        echo ""
+        echo "Image tags deployed:"
+        echo "  ${_REGION}-docker.pkg.dev/${PROJECT_ID}/htbase/*:${SHORT_SHA}"
+        echo ""
+    waitFor:
+      - "deploy-api-gateway"
+      - "deploy-archive-singlefile"
+      - "deploy-archive-monolith"
+      - "deploy-archive-readability"
+      - "deploy-archive-pdf"
+      - "deploy-archive-screenshot"
+      - "deploy-summarization-worker"
+      - "deploy-storage-worker"
+
+# =============================================================================
+# Build timeout (max 2 hours for full deployment)
+# =============================================================================
+
+timeout: 7200s

@@ -1,19 +1,45 @@
 # =============================================================================
-# Terraform Outputs
+# Terraform Outputs for GKE Deployment
 # =============================================================================
 
 # =============================================================================
-# API Gateway
+# GKE Cluster
 # =============================================================================
 
-output "api_gateway_url" {
-  description = "URL of the API Gateway"
-  value       = google_cloud_run_v2_service.api_gateway.uri
+output "gke_cluster_name" {
+  description = "Name of the GKE cluster"
+  value       = google_container_cluster.htbase.name
 }
 
-output "api_gateway_name" {
-  description = "Name of the API Gateway service"
-  value       = google_cloud_run_v2_service.api_gateway.name
+output "gke_cluster_endpoint" {
+  description = "GKE cluster endpoint"
+  value       = google_container_cluster.htbase.endpoint
+  sensitive   = true
+}
+
+output "gke_cluster_ca_certificate" {
+  description = "GKE cluster CA certificate"
+  value       = google_container_cluster.htbase.master_auth[0].cluster_ca_certificate
+  sensitive   = true
+}
+
+output "kubectl_config" {
+  description = "kubectl configuration command"
+  value       = "gcloud container clusters get-credentials ${google_container_cluster.htbase.name} --region ${var.region} --project ${var.project_id}"
+}
+
+# =============================================================================
+# Ingress / Load Balancer
+# =============================================================================
+
+output "load_balancer_ip" {
+  description = "External IP address of the load balancer"
+  value       = google_compute_global_address.htbase.address
+}
+
+output "api_gateway_url" {
+  description = "URL of the API Gateway (via ingress)"
+  value       = var.domain != "" ? "https://${var.domain}" : "http://${google_compute_global_address.htbase.address}"
 }
 
 # =============================================================================
@@ -36,7 +62,7 @@ output "database_instance_name" {
 }
 
 output "database_connection_name" {
-  description = "Cloud SQL connection name for Cloud Run"
+  description = "Cloud SQL connection name"
   value       = google_sql_database_instance.htbase.connection_name
 }
 
@@ -64,34 +90,23 @@ output "vpc_network" {
   value       = google_compute_network.htbase.name
 }
 
-output "vpc_connector" {
-  description = "VPC connector name"
-  value       = google_vpc_access_connector.htbase.name
+output "vpc_subnet" {
+  description = "VPC subnet name"
+  value       = google_compute_subnetwork.htbase.name
 }
 
 # =============================================================================
-# Worker Services
+# Kubernetes Resources
 # =============================================================================
 
-output "archive_worker_services" {
-  description = "Archive worker service URLs"
-  value = {
-    singlefile  = google_cloud_run_v2_service.archive_worker_singlefile.uri
-    monolith    = google_cloud_run_v2_service.archive_worker_monolith.uri
-    readability = google_cloud_run_v2_service.archive_worker_readability.uri
-    pdf         = google_cloud_run_v2_service.archive_worker_pdf.uri
-    screenshot  = google_cloud_run_v2_service.archive_worker_screenshot.uri
-  }
+output "kubernetes_namespace" {
+  description = "Kubernetes namespace for htbase"
+  value       = kubernetes_namespace.htbase.metadata[0].name
 }
 
-output "summarization_worker_url" {
-  description = "Summarization worker service URL"
-  value       = google_cloud_run_v2_service.summarization_worker.uri
-}
-
-output "storage_worker_url" {
-  description = "Storage worker service URL"
-  value       = google_cloud_run_v2_service.storage_worker.uri
+output "kubernetes_service_account" {
+  description = "Kubernetes service account name"
+  value       = kubernetes_service_account.htbase.metadata[0].name
 }
 
 # =============================================================================
@@ -99,7 +114,7 @@ output "storage_worker_url" {
 # =============================================================================
 
 output "service_account_email" {
-  description = "Service account email"
+  description = "GCP service account email"
   value       = google_service_account.htbase.email
 }
 
@@ -139,8 +154,22 @@ output "connection_info" {
   description = "Connection information for debugging"
   value = {
     redis_url    = "redis://${google_redis_instance.htbase.host}:${google_redis_instance.htbase.port}"
-    database_url = "postgresql://htbase@/${google_sql_database.htbase.name}?host=/cloudsql/${google_sql_database_instance.htbase.connection_name}"
+    database_url = "postgresql://htbase:***@${google_sql_database_instance.htbase.private_ip_address}:5432/${google_sql_database.htbase.name}"
     gcs_bucket   = "gs://${google_storage_bucket.archives.name}"
   }
-  sensitive = false
+}
+
+# =============================================================================
+# Deployment Commands
+# =============================================================================
+
+output "deployment_commands" {
+  description = "Useful deployment commands"
+  value = {
+    get_credentials = "gcloud container clusters get-credentials ${google_container_cluster.htbase.name} --region ${var.region} --project ${var.project_id}"
+    view_pods       = "kubectl get pods -n ${kubernetes_namespace.htbase.metadata[0].name}"
+    view_services   = "kubectl get services -n ${kubernetes_namespace.htbase.metadata[0].name}"
+    view_logs       = "kubectl logs -f -l app=htbase -n ${kubernetes_namespace.htbase.metadata[0].name}"
+    scale_workers   = "kubectl scale deployment archive-worker-singlefile --replicas=3 -n ${kubernetes_namespace.htbase.metadata[0].name}"
+  }
 }

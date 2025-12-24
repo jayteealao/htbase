@@ -1,11 +1,16 @@
 # =============================================================================
-# HT Base - Terraform Configuration for Google Cloud Run
+# HT Base - Terraform Configuration for GKE
 # =============================================================================
+# This configuration provisions a GKE cluster with all supporting infrastructure
+# (Redis, Cloud SQL, GCS) for the HT Base microservices architecture.
+#
 # Usage:
 #   cd infrastructure/terraform
 #   terraform init
 #   terraform plan -var-file="environments/production.tfvars"
 #   terraform apply -var-file="environments/production.tfvars"
+#
+# For Cloud Run deployment, use cloudbuild.microservices.yaml instead.
 # =============================================================================
 
 terraform {
@@ -19,6 +24,18 @@ terraform {
     google-beta = {
       source  = "hashicorp/google-beta"
       version = "~> 5.0"
+    }
+    kubernetes = {
+      source  = "hashicorp/kubernetes"
+      version = "~> 2.23"
+    }
+    helm = {
+      source  = "hashicorp/helm"
+      version = "~> 2.11"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.5"
     }
   }
 
@@ -72,13 +89,14 @@ locals {
 
 resource "google_project_service" "apis" {
   for_each = toset([
-    "run.googleapis.com",
-    "redis.googleapis.com",
-    "sqladmin.googleapis.com",
-    "secretmanager.googleapis.com",
-    "vpcaccess.googleapis.com",
+    "container.googleapis.com",     # GKE
+    "redis.googleapis.com",         # Memorystore
+    "sqladmin.googleapis.com",      # Cloud SQL
+    "secretmanager.googleapis.com", # Secret Manager
     "artifactregistry.googleapis.com",
     "cloudbuild.googleapis.com",
+    "compute.googleapis.com",       # VPC, Load Balancer
+    "servicenetworking.googleapis.com", # Private Service Access
   ])
 
   project            = var.project_id
@@ -99,26 +117,21 @@ resource "google_compute_network" "htbase" {
   depends_on = [google_project_service.apis]
 }
 
-# Subnet for Cloud Run VPC connector
-resource "google_compute_subnetwork" "htbase" {
-  name          = "htbase-subnet-${var.environment}"
-  ip_cidr_range = "10.0.0.0/24"
-  region        = var.region
-  network       = google_compute_network.htbase.id
+# Note: Subnet is defined in gke.tf with secondary ranges for pods/services
 
-  private_ip_google_access = true
+# Private Service Access for Cloud SQL
+resource "google_compute_global_address" "private_ip_address" {
+  name          = "htbase-private-ip-${var.environment}"
+  purpose       = "VPC_PEERING"
+  address_type  = "INTERNAL"
+  prefix_length = 16
+  network       = google_compute_network.htbase.id
 }
 
-# VPC Connector for Cloud Run to access Redis/Cloud SQL
-resource "google_vpc_access_connector" "htbase" {
-  name          = "htbase-connector-${var.environment}"
-  region        = var.region
-  network       = google_compute_network.htbase.name
-  ip_cidr_range = "10.8.0.0/28"
-  min_instances = 2
-  max_instances = 10
-
-  depends_on = [google_project_service.apis]
+resource "google_service_networking_connection" "private_vpc_connection" {
+  network                 = google_compute_network.htbase.id
+  service                 = "servicenetworking.googleapis.com"
+  reserved_peering_ranges = [google_compute_global_address.private_ip_address.name]
 }
 
 # =============================================================================
