@@ -1189,6 +1189,262 @@ htbase/
 
 ---
 
+## Deployment Profiles
+
+This section covers deployment configurations for different environments.
+
+### Profile 1: VPS / Docker Compose (Self-Hosted)
+
+For VPS or bare-metal deployments, use Docker Compose with all services running on a single machine or small cluster.
+
+**File**: `docker-compose.microservices.yml`
+
+```bash
+# Start all services
+docker compose -f docker-compose.microservices.yml up -d
+
+# Start with monitoring (Flower + Redis Commander)
+docker compose -f docker-compose.microservices.yml --profile monitoring up -d
+
+# Start with SSL reverse proxy
+docker compose -f docker-compose.microservices.yml --profile proxy up -d
+
+# Scale specific workers
+docker compose -f docker-compose.microservices.yml up -d --scale archive-worker-singlefile=3
+```
+
+**Architecture on VPS**:
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         VPS / Server                            │
+├─────────────────────────────────────────────────────────────────┤
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │
+│  │   Caddy     │  │   Redis     │  │      PostgreSQL         │  │
+│  │  (proxy)    │  │  (queue)    │  │      (database)         │  │
+│  └──────┬──────┘  └──────┬──────┘  └───────────┬─────────────┘  │
+│         │                │                     │                │
+│  ┌──────▼────────────────▼─────────────────────▼──────────────┐ │
+│  │                    Docker Network                          │ │
+│  └────────────────────────────────────────────────────────────┘ │
+│         │                                                       │
+│  ┌──────▼──────┐  ┌────────────────┐  ┌─────────────────────┐  │
+│  │ API Gateway │  │ Archive Workers│  │ Storage/Summary     │  │
+│  │  (FastAPI)  │  │ (5 containers) │  │    Workers          │  │
+│  └─────────────┘  └────────────────┘  └─────────────────────┘  │
+│                                                                 │
+│  Local Volumes:  /data/artifacts  /data/postgres  /data/redis  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Configuration**:
+- Copy `.env.microservices.example` to `.env.microservices`
+- Set `STORAGE_PROVIDER=local` for local-only storage, or configure GCS
+- Mount `/data/artifacts` for persistent archive storage
+- Configure worker concurrency based on available RAM
+
+**Resource Requirements (Minimum)**:
+| Component | CPU | RAM |
+|-----------|-----|-----|
+| API Gateway | 0.5 | 512MB |
+| Archive Workers (5) | 4 | 12GB |
+| Summarization Worker | 0.5 | 512MB |
+| Storage Worker | 0.5 | 256MB |
+| Redis | 0.25 | 512MB |
+| PostgreSQL | 0.5 | 1GB |
+| **Total** | **6.25** | **~15GB** |
+
+---
+
+### Profile 2: Kubernetes / Cloud Run (Managed)
+
+For production deployments on GCP, use Terraform to provision Cloud Run services with Memorystore Redis and Cloud SQL PostgreSQL.
+
+**Files**: `infrastructure/terraform/`
+
+```bash
+cd infrastructure/terraform
+
+# Initialize Terraform
+terraform init
+
+# Plan deployment
+terraform plan -var-file="environments/production.tfvars"
+
+# Apply
+terraform apply -var-file="environments/production.tfvars"
+```
+
+**Architecture on GCP**:
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Google Cloud Platform                        │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│   ┌─────────────────┐        ┌─────────────────────────────┐   │
+│   │  Cloud Load     │        │     Artifact Registry       │   │
+│   │  Balancer       │        │     (Container Images)      │   │
+│   └────────┬────────┘        └─────────────────────────────┘   │
+│            │                                                    │
+│   ┌────────▼────────┐                                          │
+│   │   Cloud Run     │◄─── Auto-scaling (0-N instances)         │
+│   │   API Gateway   │                                          │
+│   └────────┬────────┘                                          │
+│            │                                                    │
+│   ┌────────▼────────┐    ┌─────────────────────────────────┐   │
+│   │   VPC           │    │        Memorystore              │   │
+│   │   Connector     │───►│        (Redis)                  │   │
+│   └────────┬────────┘    └─────────────────────────────────┘   │
+│            │                                                    │
+│   ┌────────▼────────────────────────────────────────────────┐  │
+│   │              Cloud Run Workers (Auto-scaled)            │  │
+│   │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────────┐ │  │
+│   │  │SingleFile│ │ Monolith │ │   PDF    │ │ Screenshot │ │  │
+│   │  │ 0-20     │ │  0-20    │ │  0-10    │ │   0-10     │ │  │
+│   │  └──────────┘ └──────────┘ └──────────┘ └────────────┘ │  │
+│   │  ┌──────────┐ ┌──────────┐ ┌──────────┐                │  │
+│   │  │Readability│ │ Summary │ │ Storage  │                │  │
+│   │  │  0-20    │ │  0-10    │ │  0-15    │                │  │
+│   │  └──────────┘ └──────────┘ └──────────┘                │  │
+│   └─────────────────────────────────────────────────────────┘  │
+│            │                                                    │
+│   ┌────────▼────────┐    ┌─────────────────────────────────┐   │
+│   │   Cloud SQL     │    │     Cloud Storage               │   │
+│   │   (PostgreSQL)  │    │     (Archives Bucket)           │   │
+│   └─────────────────┘    └─────────────────────────────────┘   │
+│                                                                 │
+│   ┌─────────────────────────────────────────────────────────┐  │
+│   │                   Secret Manager                        │  │
+│   │   (DB Password, API Keys)                               │  │
+│   └─────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Key Features**:
+- **Scale to Zero**: Workers scale down when idle, reducing costs
+- **Auto-scaling**: Up to 20 instances per worker type based on queue depth
+- **Managed Services**: Redis and PostgreSQL fully managed by GCP
+- **VPC Connector**: Secure private networking between services
+- **Secret Manager**: Secure credential storage
+
+**Terraform Resources Created**:
+| Resource | Purpose |
+|----------|---------|
+| `google_redis_instance` | Celery broker and result backend |
+| `google_sql_database_instance` | PostgreSQL database |
+| `google_storage_bucket` | Archive file storage |
+| `google_cloud_run_v2_service` | API Gateway and workers |
+| `google_vpc_access_connector` | Private network access |
+| `google_secret_manager_secret` | API keys and passwords |
+
+---
+
+### Profile 3: Local Development
+
+For local development and testing, use the development override which:
+- Uses a single combined archive worker
+- Enables hot-reload for code changes
+- Uses mock LLM provider (no API costs)
+- Disables compression for faster iteration
+- Includes pgAdmin for database management
+
+**Files**: `docker-compose.local.yml`
+
+```bash
+# Start local development environment
+docker compose -f docker-compose.microservices.yml -f docker-compose.local.yml up
+
+# Start specific services for focused development
+docker compose -f docker-compose.microservices.yml -f docker-compose.local.yml up api-gateway archive-worker
+
+# Run with real LLM provider
+LLM_PROVIDER=openai docker compose -f docker-compose.microservices.yml -f docker-compose.local.yml up
+```
+
+**Local Development Stack**:
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Local Development                            │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐ │
+│  │   Redis     │  │  PostgreSQL │  │       pgAdmin           │ │
+│  │   :6379     │  │    :5432    │  │        :5050            │ │
+│  └─────────────┘  └─────────────┘  └─────────────────────────┘ │
+│                                                                 │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │                 API Gateway                             │   │
+│  │                   :8080                                 │   │
+│  │              (hot-reload enabled)                       │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                                                                 │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │          Combined Archive Worker                        │   │
+│  │   (handles all queues: singlefile, monolith, etc.)     │   │
+│  │              (hot-reload enabled)                       │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                                                                 │
+│  ┌──────────────┐  ┌───────────────┐  ┌───────────────────┐   │
+│  │ Summarization│  │    Storage    │  │      Flower       │   │
+│  │    Worker    │  │    Worker     │  │      :5555        │   │
+│  │ (mock LLM)   │  │ (local only)  │  │ (task monitor)    │   │
+│  └──────────────┘  └───────────────┘  └───────────────────┘   │
+│                                                                 │
+│  Mounted Volumes:                                               │
+│    ./services/*/app → /app/app  (source code)                  │
+│    ./data/artifacts → /app/artifacts  (output files)           │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Development URLs**:
+| Service | URL |
+|---------|-----|
+| API Gateway | http://localhost:8080 |
+| Flower (Celery monitor) | http://localhost:5555 |
+| Redis Commander | http://localhost:8081 |
+| pgAdmin | http://localhost:5050 |
+
+**Testing Endpoints**:
+```bash
+# Health check
+curl http://localhost:8080/health
+
+# Submit archive task
+curl -X POST http://localhost:8080/api/v2/archive \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com", "archivers": ["readability"]}'
+
+# Check task status
+curl http://localhost:8080/api/v2/tasks/{task_id}
+```
+
+---
+
+### Comparison of Deployment Profiles
+
+| Feature | VPS/Docker Compose | Cloud Run/GKE | Local Dev |
+|---------|-------------------|---------------|-----------|
+| Cost | Fixed (VPS rental) | Pay-per-use | Free |
+| Scaling | Manual | Automatic | N/A |
+| Setup Time | 30 min | 1-2 hours | 5 min |
+| Maintenance | Self-managed | Managed | None |
+| SSL/TLS | Caddy (Let's Encrypt) | Automatic | None |
+| Best For | Small-medium loads | Variable/high loads | Development |
+
+---
+
+### Environment Configuration Reference
+
+| Variable | VPS | Cloud Run | Local |
+|----------|-----|-----------|-------|
+| `STORAGE_PROVIDER` | `gcs` or `local` | `gcs` | `local` |
+| `LLM_PROVIDER` | `huggingface`/`openai` | `huggingface`/`openai` | `mock` |
+| `COMPRESSION_ENABLED` | `true` | `true` | `false` |
+| `CLEANUP_AFTER_UPLOAD` | `true` | `true` | `false` |
+| `LOG_FORMAT` | `json` | `json` | `pretty` |
+| `LOG_LEVEL` | `INFO` | `INFO` | `DEBUG` |
+
+---
+
 ## Next Steps
 
 1. **Review and approve this architecture plan**
