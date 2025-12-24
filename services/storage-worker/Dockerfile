@@ -18,8 +18,11 @@ COPY services/storage-worker /app/services/storage-worker
 COPY requirements.txt /app/
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install GCS client
-RUN pip install --no-cache-dir google-cloud-storage
+# Install GCS and Firestore clients
+RUN pip install --no-cache-dir \
+    google-cloud-storage \
+    google-cloud-firestore \
+    psycopg[binary]
 
 # Set Python path
 ENV PYTHONPATH=/app:/app/services/storage-worker

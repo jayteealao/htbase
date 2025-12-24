@@ -19,7 +19,10 @@ COPY requirements.txt /app/
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Install additional dependencies for summarization
-RUN pip install --no-cache-dir httpx
+RUN pip install --no-cache-dir \
+    httpx \
+    pydantic \
+    chonkie
 
 # Set Python path
 ENV PYTHONPATH=/app:/app/services/summarization-worker

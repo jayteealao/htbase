@@ -18,6 +18,13 @@ COPY services/api-gateway /app/services/api-gateway
 COPY requirements.txt /app/
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Install additional dependencies for API Gateway
+RUN pip install --no-cache-dir \
+    psycopg[binary] \
+    google-cloud-firestore \
+    google-cloud-storage \
+    httpx
+
 # Set Python path
 ENV PYTHONPATH=/app:/app/services/api-gateway
 
