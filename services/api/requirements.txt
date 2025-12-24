@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+celery
+redis
+python-multipart
+requests
+pydantic
+pydantic-settings
+google-cloud-storage
+google-cloud-firestore
+psycopg2-binary
+sqlalchemy
+alembic
+tenacity

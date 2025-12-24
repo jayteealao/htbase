@@ -1,0 +1,482 @@
+from __future__ import annotations
+
+from functools import lru_cache
+from pathlib import Path
+from typing import Optional
+from urllib.parse import quote_plus
+
+from pydantic import AliasChoices, BaseModel, Field, SecretStr, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class DatabaseSettings(BaseModel):
+    path: Path | None = Field(
+        default=None,
+        validation_alias=AliasChoices("DB_PATH", "DATABASE__PATH"),
+    )
+    host: str = Field(
+        default="192.168.1.12",
+        validation_alias=AliasChoices("DB_HOST", "DATABASE__HOST"),
+    )
+    port: int = Field(
+        default=5432,
+        validation_alias=AliasChoices("DB_PORT", "DATABASE__PORT"),
+    )
+    name: str = Field(
+        default="htbase",
+        validation_alias=AliasChoices("DB_NAME", "DATABASE__NAME"),
+    )
+    user: str = Field(
+        default="postgres",
+        validation_alias=AliasChoices("DB_USER", "DATABASE__USER"),
+    )
+    password: SecretStr = Field(
+        default=SecretStr("your_password"),
+        validation_alias=AliasChoices("DB_PASSWORD", "DATABASE__PASSWORD"),
+    )
+
+    def sqlalchemy_url(self) -> str:
+        user = quote_plus(self.user)
+        pwd = quote_plus(self.password.get_secret_value())
+        return f"postgresql+psycopg://{user}:{pwd}@{self.host}:{self.port}/{self.name}"
+
+    def resolved_path(self, data_dir: Path) -> Path:
+        """Get resolved database path with fallback to data_dir/app.db."""
+        return self.path or (data_dir / "app.db")
+
+
+class ChromiumSettings(BaseModel):
+    enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("USE_CHROMIUM", "CHROMIUM__ENABLED"),
+    )
+    binary: str = Field(
+        default="/usr/bin/chromium",
+        validation_alias=AliasChoices("CHROMIUM_BIN", "CHROMIUM__BIN"),
+    )
+    user_data_dir: Path | None = Field(
+        default=None,
+        validation_alias=AliasChoices("CHROMIUM_USER_DATA_DIR", "CHROMIUM__USER_DATA_DIR"),
+    )
+    profile_directory: str = Field(
+        default="Default",
+        validate_default=True,
+        validation_alias=AliasChoices(
+            "CHROMIUM_PROFILE_DIRECTORY",
+            "CHROMIUM__PROFILE_DIRECTORY",
+        ),
+    )
+
+    @field_validator("profile_directory", mode="before")
+    @classmethod
+    def _normalize_profile_directory(cls, value: str | Path | None) -> str:
+        if value is None:
+            return "Default"
+        profile = str(value).strip()
+        return profile or "Default"
+
+    def resolved_user_data_dir(self, data_dir: Path) -> Path:
+        """Get resolved chromium user data directory with fallback to data_dir/chromium-user-data."""
+        return self.user_data_dir or (data_dir / "chromium-user-data")
+
+
+class HuggingFaceProviderSettings(BaseModel):
+    """HuggingFace TGI provider configuration."""
+
+    api_base: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "SUMMARIZATION_API_BASE",
+            "SUMMARIZATION__HUGGINGFACE__API_BASE",
+        ),
+    )
+    api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "SUMMARIZATION_API_KEY",
+            "SUMMARIZATION__HUGGINGFACE__API_KEY",
+        ),
+    )
+    max_concurrency: int = Field(
+        default=4,
+        validation_alias=AliasChoices(
+            "SUMMARY_MAX_CONCURRENCY",
+            "SUMMARIZATION__HUGGINGFACE__MAX_CONCURRENCY",
+        ),
+    )
+
+
+class OpenAIProviderSettings(BaseModel):
+    """OpenAI API provider configuration."""
+
+    api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "OPENAI_API_KEY",
+            "SUMMARIZATION__OPENAI__API_KEY",
+        ),
+    )
+    model: str = Field(
+        default="gpt-4o-mini",
+        validation_alias=AliasChoices(
+            "OPENAI_MODEL",
+            "SUMMARIZATION__OPENAI__MODEL",
+        ),
+    )
+    temperature: float = Field(
+        default=0.2,
+        validation_alias=AliasChoices(
+            "OPENAI_TEMPERATURE",
+            "SUMMARIZATION__OPENAI__TEMPERATURE",
+        ),
+    )
+    max_tokens: int = Field(
+        default=400,
+        validation_alias=AliasChoices(
+            "OPENAI_MAX_TOKENS",
+            "SUMMARIZATION__OPENAI__MAX_TOKENS",
+        ),
+    )
+
+
+class SummarizationSettings(BaseModel):
+
+    enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("ENABLE_SUMMARIZATION", "SUMMARIZATION__ENABLED"),
+    )
+    providers: list[str] = Field(
+        default_factory=lambda: ["huggingface"],
+        validation_alias=AliasChoices("SUMMARY_PROVIDERS", "SUMMARIZATION__PROVIDERS"),
+    )
+    provider_sticky: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("SUMMARY_PROVIDER_STICKY", "SUMMARIZATION__PROVIDER_STICKY"),
+    )
+
+    # Provider-specific settings
+    huggingface: HuggingFaceProviderSettings = Field(
+        default_factory=HuggingFaceProviderSettings
+    )
+    openai: OpenAIProviderSettings = Field(
+        default_factory=OpenAIProviderSettings
+    )
+
+    # Legacy fields for backward compatibility
+    openrouter_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "OPENROUTER_API_KEY",
+            "SUMMARIZATION__OPENROUTER_API_KEY",
+        ),
+    )
+    model: str = Field(
+        default="openrouter/sonoma-sky-alpha",
+        validation_alias=AliasChoices("SUMMARIZATION_MODEL", "SUMMARIZATION__MODEL"),
+    )
+
+    # Orchestration settings
+    chunk_size: int = Field(
+        default=1200,
+        validation_alias=AliasChoices("SUMMARY_CHUNK_SIZE", "SUMMARIZATION__CHUNK_SIZE"),
+    )
+    max_bullets: int = Field(
+        default=6,
+        validation_alias=AliasChoices("SUMMARY_MAX_BULLETS", "SUMMARIZATION__MAX_BULLETS"),
+    )
+    source_archivers: list[str] = Field(
+        default_factory=lambda: ["readability"],
+        validation_alias=AliasChoices(
+            "SUMMARY_SOURCE_ARCHIVERS",
+            "SUMMARIZATION__SOURCE_ARCHIVERS",
+        ),
+    )
+    tag_whitelist: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices(
+            "SUMMARY_TAG_WHITELIST",
+            "SUMMARY_TAG_WHITELIST_INTERNAL",
+            "SUMMARIZATION__TAG_WHITELIST",
+        ),
+    )
+
+    @field_validator("providers", mode="before")
+    @classmethod
+    def _parse_providers(cls, value):
+        if value is None:
+            return ["huggingface"]
+        if isinstance(value, str):
+            items = [item.strip() for item in value.split(",") if item.strip()]
+            return items or ["huggingface"]
+        if isinstance(value, (list, tuple, set)):
+            items = [str(item).strip() for item in value if str(item).strip()]
+            return items or ["huggingface"]
+        return ["huggingface"]
+
+    @field_validator("source_archivers", mode="before")
+    @classmethod
+    def _parse_source_archivers(cls, value):
+        if value is None:
+            return ["readability"]
+        if isinstance(value, str):
+            items = [item.strip() for item in value.split(",") if item.strip()]
+            return items or ["readability"]
+        if isinstance(value, (list, tuple, set)):
+            items = [str(item).strip() for item in value if str(item).strip()]
+            return items or ["readability"]
+        return ["readability"]
+
+    @field_validator("tag_whitelist", mode="before")
+    @classmethod
+    def _parse_tag_whitelist(cls, value):
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        if isinstance(value, (list, tuple, set)):
+            return [str(item).strip() for item in value if str(item).strip()]
+        return []
+
+
+class GcsSettings(BaseSettings):
+    """Google Cloud Storage configuration."""
+
+    bucket: str = Field(
+        default="htbase-archives-standard",
+        validation_alias=AliasChoices("GCS_BUCKET", "STORAGE__GCS_BUCKET"),
+        description="Google Cloud Storage bucket name for archive storage"
+    )
+
+    project_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("GCS_PROJECT_ID", "STORAGE__GCS_PROJECT_ID"),
+        description="Google Cloud project ID for GCS authentication"
+    )
+
+    credentials_path: Path | None = Field(
+        default=None,
+        validation_alias=AliasChoices("GCS_CREDENTIALS_PATH", "STORAGE__GCS_CREDENTIALS_PATH"),
+        description="Path to GCP service account JSON credentials file"
+    )
+
+    application_credentials: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            "STORAGE__GCS_APPLICATION_CREDENTIALS"
+        ),
+        description="GCP service account credentials JSON string or file path"
+    )
+
+    fallback_to_local: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("STORAGE_FALLBACK_TO_LOCAL", "STORAGE__FALLBACK_TO_LOCAL"),
+        description="Fallback to local storage if cloud storage fails"
+    )
+
+    retention_days: int = Field(
+        default=365,
+        validation_alias=AliasChoices("STORAGE_RETENTION_DAYS", "STORAGE__RETENTION_DAYS"),
+        description="Default retention period for stored files in days"
+    )
+
+    def is_configured(self) -> bool:
+        """Check if GCS is properly configured.
+
+        Returns:
+            True if bucket name is set (minimum requirement)
+        """
+        return bool(self.bucket)
+
+    model_config = SettingsConfigDict(
+        extra="allow",
+    )
+
+
+class FirestoreSettings(BaseSettings):
+    """Firebase Firestore configuration."""
+
+    project_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "FIRESTORE_PROJECT_ID",
+            "DATABASE__FIRESTORE_PROJECT_ID"
+        ),
+        description="Firebase project ID for Firestore backend"
+    )
+
+    credentials_path: Path | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "FIRESTORE_CREDENTIALS_PATH",
+            "DATABASE__FIRESTORE_CREDENTIALS_PATH"
+        ),
+        description="Path to Firebase service account JSON credentials file"
+    )
+
+    application_credentials: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "FIREBASE_APPLICATION_CREDENTIALS",
+            "DATABASE__FIRESTORE_APPLICATION_CREDENTIALS"
+        ),
+        description="Firebase service account credentials JSON string or file path"
+    )
+
+    def is_configured(self) -> bool:
+        """Check if Firestore is properly configured.
+
+        Returns:
+            True if project_id is set (required for Firestore client)
+        """
+        return bool(self.project_id)
+
+    model_config = SettingsConfigDict(
+        extra="allow",
+    )
+
+
+class AppSettings(BaseSettings):
+    """Application configuration loaded from environment variables.
+
+    Uses pydantic-settings to support .env and environment overrides.
+    """
+
+    data_dir: Path = Field(default=Path("/data"), validation_alias=AliasChoices("DATA_DIR"))
+    database: DatabaseSettings = Field(default_factory=DatabaseSettings)
+    ht_bin: str = Field(default="/usr/local/bin/ht", validation_alias=AliasChoices("HT_BIN"))
+    monolith_bin: str = Field(
+        default="/usr/local/bin/monolith",
+        validation_alias=AliasChoices("MONOLITH_BIN"),
+    )
+    chromium: ChromiumSettings = Field(default_factory=ChromiumSettings)
+    monolith_flags: str = Field(default="", validation_alias=AliasChoices("MONOLITH_FLAGS"))
+    singlefile_bin: str = Field(
+        default="/usr/local/bin/single-file",
+        validation_alias=AliasChoices("SINGLEFILE_BIN"),
+    )
+    singlefile_flags: str = Field(
+        default="", validation_alias=AliasChoices("SINGLEFILE_FLAGS"),
+    )
+    ht_listen: str = Field(default="localhost:7681", validation_alias=AliasChoices("HT_LISTEN"))
+    start_ht: bool = Field(default=True, validation_alias=AliasChoices("START_HT"))
+    ht_log_file: Path = Field(
+        default=Path("/data/ht.log"),
+        validation_alias=AliasChoices("HT_LOG_FILE"),
+    )
+    log_level: str = Field(default="INFO", validation_alias=AliasChoices("LOG_LEVEL"))
+    skip_existing_saves: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("SKIP_EXISTING_SAVES"),
+    )
+    summarization: SummarizationSettings = Field(default_factory=SummarizationSettings)
+
+    # Storage integration configuration
+    enable_storage_integration: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("ENABLE_STORAGE_INTEGRATION", "STORAGE__ENABLE_INTEGRATION"),
+        description="Enable archive_with_storage for automatic file/db storage integration"
+    )
+
+    # Backend selection (controls which providers are initialized)
+    storage_backend: str = Field(
+        default="local",
+        validation_alias=AliasChoices("STORAGE_BACKEND", "STORAGE__BACKEND"),
+        description="File storage backend: 'local' or 'gcs'"
+    )
+
+    database_backend: str = Field(
+        default="postgres",
+        validation_alias=AliasChoices("DATABASE_BACKEND", "DATABASE__BACKEND"),
+        description="Database storage backend: 'postgres' or 'firestore'"
+    )
+
+    # Multi-provider storage configuration
+    storage_providers_raw: str = Field(
+        default="local",
+        validation_alias=AliasChoices("STORAGE_PROVIDERS", "STORAGE__PROVIDERS"),
+        description="Comma-separated list of storage providers to use (local, gcs)"
+    )
+
+    @property
+    def storage_providers(self) -> list[str]:
+        """Get storage providers as list."""
+        return self._parse_storage_providers(self.storage_providers_raw)
+
+    # File lifecycle management
+    local_workspace_retention_hours: int = Field(
+        default=24,
+        validation_alias=AliasChoices("LOCAL_WORKSPACE_RETENTION_HOURS", "STORAGE__RETENTION_HOURS"),
+        description="Hours to keep local workspace files after successful upload to all providers"
+    )
+
+    failed_output_retention_days: int = Field(
+        default=7,
+        validation_alias=AliasChoices("FAILED_OUTPUT_RETENTION_DAYS", "STORAGE__FAILED_RETENTION_DAYS"),
+        description="Days to keep failed archival outputs before cleanup"
+    )
+
+    enable_local_cleanup: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("ENABLE_LOCAL_CLEANUP", "STORAGE__ENABLE_CLEANUP"),
+        description="Enable automatic cleanup of local files after cloud upload"
+    )
+
+    # Local backup storage (when using multiple providers)
+    local_backup_dir: Optional[Path] = Field(
+        default=None,
+        validation_alias=AliasChoices("LOCAL_BACKUP_DIR", "STORAGE__LOCAL_BACKUP_DIR"),
+        description="Directory for local backup storage provider (optional)"
+    )
+
+    # Nested storage configuration
+    gcs: GcsSettings = Field(default_factory=GcsSettings)
+    firestore: FirestoreSettings = Field(default_factory=FirestoreSettings)
+
+    # Dual database persistence configuration
+    enable_dual_persistence: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("ENABLE_DUAL_PERSISTENCE", "DATABASE__ENABLE_DUAL"),
+        description="Enable dual PostgreSQL + Firestore writes for mobile app sync"
+    )
+
+    dual_write_failure_mode: str = Field(
+        default="fail_fast",
+        validation_alias=AliasChoices("DUAL_WRITE_FAILURE_MODE", "DATABASE__DUAL_FAILURE_MODE"),
+        description="Behavior when Firestore write fails: fail_fast (fail entire operation), log_and_continue (log and proceed), queue_retry (queue for retry)"
+    )
+
+    enable_lazy_migration: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("ENABLE_LAZY_MIGRATION", "DATABASE__ENABLE_LAZY_MIGRATION"),
+        description="Enable lazy migration of existing PostgreSQL articles to Firestore on access"
+    )
+
+    @staticmethod
+    def _parse_storage_providers(value: str) -> list[str]:
+        """Parse comma-separated storage providers string into list."""
+        if not value or value.strip() == "":
+            return ["local"]
+        if isinstance(value, str):
+            items = [item.strip() for item in value.split(",") if item.strip()]
+            return items or ["local"]
+        return ["local"]
+
+    # Properties for backward compatibility
+    @property
+    def database_url(self) -> str:
+        """Get database connection string."""
+        return self.database.sqlalchemy_url()
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_prefix="",
+        case_sensitive=False,
+        extra="ignore",
+        env_nested_delimiter="__",
+    )
+
+
+@lru_cache
+def get_settings() -> AppSettings:
+    return AppSettings()

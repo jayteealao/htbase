@@ -1,0 +1,14 @@
+celery
+redis
+requests
+pydantic
+pydantic-settings
+psycopg2-binary
+sqlalchemy
+tenacity
+beautifulsoup4
+lxml
+openai
+langchain
+chonkie
+huggingface_hub

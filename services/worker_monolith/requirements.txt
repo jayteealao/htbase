@@ -1,0 +1,10 @@
+celery
+redis
+requests
+pydantic
+pydantic-settings
+google-cloud-storage
+google-cloud-firestore
+psycopg2-binary
+sqlalchemy
+tenacity
