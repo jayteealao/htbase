@@ -142,7 +142,7 @@ class OpenAIProviderSettings(BaseModel):
 class SummarizationSettings(BaseModel):
 
     enabled: bool = Field(
-        default=False,
+        default=True,
         validation_alias=AliasChoices("ENABLE_SUMMARIZATION", "SUMMARIZATION__ENABLED"),
     )
     providers: list[str] = Field(
@@ -336,6 +336,39 @@ class FirestoreSettings(BaseSettings):
     )
 
 
+class CelerySettings(BaseModel):
+    enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("USE_CELERY", "CELERY__ENABLED"),
+        description="Enable Celery dispatch for archiver tasks",
+    )
+    broker_url: str = Field(
+        default="memory://",
+        validation_alias=AliasChoices("CELERY_BROKER_URL", "CELERY__BROKER_URL"),
+        description="Celery broker URL (Redis/AMQP/memory)",
+    )
+    result_backend: str = Field(
+        default="cache+memory://",
+        validation_alias=AliasChoices("CELERY_RESULT_BACKEND", "CELERY__RESULT_BACKEND"),
+        description="Celery result backend",
+    )
+    task_always_eager: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("CELERY_TASK_ALWAYS_EAGER", "CELERY__TASK_ALWAYS_EAGER"),
+        description="Execute tasks eagerly in-process (useful for local/dev)",
+    )
+    default_queue: str = Field(
+        default="archive.default",
+        validation_alias=AliasChoices("CELERY_DEFAULT_QUEUE", "CELERY__DEFAULT_QUEUE"),
+        description="Default Celery queue name",
+    )
+    archive_queue_prefix: str = Field(
+        default="archive",
+        validation_alias=AliasChoices("CELERY_ARCHIVE_QUEUE_PREFIX", "CELERY__ARCHIVE_QUEUE_PREFIX"),
+        description="Prefix for archiver-specific queues (e.g., archive.monolith)",
+    )
+
+
 class AppSettings(BaseSettings):
     """Application configuration loaded from environment variables.
 
@@ -370,6 +403,7 @@ class AppSettings(BaseSettings):
         validation_alias=AliasChoices("SKIP_EXISTING_SAVES"),
     )
     summarization: SummarizationSettings = Field(default_factory=SummarizationSettings)
+    celery: CelerySettings = Field(default_factory=CelerySettings)
 
     # Storage integration configuration
     enable_storage_integration: bool = Field(
@@ -391,6 +425,20 @@ class AppSettings(BaseSettings):
         description="Database storage backend: 'postgres' or 'firestore'"
     )
 
+    # Service role configuration (monolith vs decomposed services)
+    service_role: str = Field(
+        default="all-in-one",
+        validation_alias=AliasChoices("SERVICE_ROLE", "APP__SERVICE_ROLE"),
+        description="Service role for this process: api-gateway, archiver-worker, summary-worker, or all-in-one",
+    )
+
+    # Archiver registry (used by API gateway when archivers are remote workers)
+    archivers_raw: str = Field(
+        default="readability,monolith,singlefile-cli,pdf,screenshot",
+        validation_alias=AliasChoices("ARCHIVERS", "APP__ARCHIVERS"),
+        description="Comma-separated list of enabled archiver names",
+    )
+
     # Multi-provider storage configuration
     storage_providers_raw: str = Field(
         default="local",
@@ -402,6 +450,18 @@ class AppSettings(BaseSettings):
     def storage_providers(self) -> list[str]:
         """Get storage providers as list."""
         return self._parse_storage_providers(self.storage_providers_raw)
+
+    @property
+    def archivers(self) -> list[str]:
+        """List of configured archivers."""
+        values = [part.strip() for part in self.archivers_raw.split(",") if part.strip()]
+        return values or [
+            "readability",
+            "monolith",
+            "singlefile-cli",
+            "pdf",
+            "screenshot",
+        ]
 
     # File lifecycle management
     local_workspace_retention_hours: int = Field(
