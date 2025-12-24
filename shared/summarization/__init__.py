@@ -13,7 +13,10 @@ from .providers import (
     SummaryProvider,
     ProviderHealth,
     ProviderChain,
+    HTTPProvider,
+    HuggingFaceProvider,
 )
+from .service import SummaryService, create_summary_service
 
 __all__ = [
     "ArticleChunker",
@@ -24,4 +27,8 @@ __all__ = [
     "SummaryProvider",
     "ProviderHealth",
     "ProviderChain",
+    "HTTPProvider",
+    "HuggingFaceProvider",
+    "SummaryService",
+    "create_summary_service",
 ]

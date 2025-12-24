@@ -377,6 +377,249 @@ async def archive_workflow(
     )
 
 
+@router.post("/archive/{archiver}", response_model=TaskAccepted)
+async def archive_with_archiver(
+    archiver: str,
+    request: SaveRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Archive a URL with a specific archiver.
+
+    This endpoint archives using only the specified archiver.
+    """
+    if archiver not in AVAILABLE_ARCHIVERS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid archiver: {archiver}. Valid options: {AVAILABLE_ARCHIVERS}",
+        )
+
+    url = str(request.url)
+    item_id = request.id
+
+    logger.info(
+        "Archive request with specific archiver",
+        extra={"url": url, "item_id": item_id, "archiver": archiver},
+    )
+
+    # Get or create archived URL
+    existing = db.query(ArchivedUrl).filter(ArchivedUrl.url == url).first()
+    if existing:
+        archived_url_id = existing.id
+    else:
+        archived_url = ArchivedUrl(url=url, item_id=item_id)
+        db.add(archived_url)
+        db.flush()
+        archived_url_id = archived_url.id
+
+    # Check for existing successful artifact
+    existing_artifact = (
+        db.query(ArchiveArtifact)
+        .filter(
+            ArchiveArtifact.archived_url_id == archived_url_id,
+            ArchiveArtifact.archiver == archiver,
+            ArchiveArtifact.success == True,
+        )
+        .first()
+    )
+
+    if existing_artifact:
+        return TaskAccepted(
+            task_id="existing",
+            count=0,
+            message=f"Archive already exists for archiver: {archiver}",
+        )
+
+    # Create artifact record
+    task_id = uuid.uuid4().hex
+    artifact = ArchiveArtifact(
+        archived_url_id=archived_url_id,
+        archiver=archiver,
+        status="pending",
+        task_id=task_id,
+    )
+    db.add(artifact)
+    db.flush()
+
+    fetch_url = rewrite_paywalled_url(url)
+
+    db.commit()
+
+    # Dispatch task
+    task_name = f"services.archive_worker.tasks.archive_{archiver}"
+    celery_app.send_task(
+        task_name,
+        kwargs={
+            "item_id": item_id,
+            "url": fetch_url,
+            "archived_url_id": archived_url_id,
+            "artifact_id": artifact.id,
+        },
+        queue=f"archive.{archiver}",
+    )
+
+    logger.info(
+        "Archive task dispatched",
+        extra={"task_id": task_id, "archiver": archiver, "item_id": item_id},
+    )
+
+    return TaskAccepted(
+        task_id=task_id,
+        count=1,
+        message=f"Archive task dispatched for {archiver}",
+    )
+
+
+@router.post("/archive/{archiver}/batch", response_model=TaskAccepted)
+async def archive_batch_with_archiver(
+    archiver: str,
+    request: BatchSaveRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Archive multiple URLs with a specific archiver.
+
+    This endpoint archives all URLs using only the specified archiver.
+    """
+    if archiver not in AVAILABLE_ARCHIVERS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid archiver: {archiver}. Valid options: {AVAILABLE_ARCHIVERS}",
+        )
+
+    batch_id = uuid.uuid4().hex
+    tasks_created = 0
+
+    logger.info(
+        "Batch archive request with specific archiver",
+        extra={
+            "batch_id": batch_id,
+            "archiver": archiver,
+            "item_count": len(request.items),
+        },
+    )
+
+    all_tasks = []
+
+    for item in request.items:
+        url = str(item.url)
+        item_id = item.id
+
+        # Get or create archived URL
+        existing = db.query(ArchivedUrl).filter(ArchivedUrl.url == url).first()
+        if existing:
+            archived_url_id = existing.id
+        else:
+            archived_url = ArchivedUrl(url=url, item_id=item_id)
+            db.add(archived_url)
+            db.flush()
+            archived_url_id = archived_url.id
+
+        # Check for existing successful artifact
+        existing_artifact = (
+            db.query(ArchiveArtifact)
+            .filter(
+                ArchiveArtifact.archived_url_id == archived_url_id,
+                ArchiveArtifact.archiver == archiver,
+                ArchiveArtifact.success == True,
+            )
+            .first()
+        )
+
+        if existing_artifact:
+            continue
+
+        # Create artifact record
+        artifact = ArchiveArtifact(
+            archived_url_id=archived_url_id,
+            archiver=archiver,
+            status="pending",
+            task_id=batch_id,
+        )
+        db.add(artifact)
+        db.flush()
+
+        fetch_url = rewrite_paywalled_url(url)
+
+        task_name = f"services.archive_worker.tasks.archive_{archiver}"
+        all_tasks.append(
+            celery_app.signature(
+                task_name,
+                kwargs={
+                    "item_id": item_id,
+                    "url": fetch_url,
+                    "archived_url_id": archived_url_id,
+                    "artifact_id": artifact.id,
+                },
+                queue=f"archive.{archiver}",
+            )
+        )
+        tasks_created += 1
+
+    db.commit()
+
+    if all_tasks:
+        task_group = group(all_tasks)
+        task_group.apply_async()
+
+    logger.info(
+        "Batch archive tasks dispatched",
+        extra={"batch_id": batch_id, "archiver": archiver, "task_count": tasks_created},
+    )
+
+    return TaskAccepted(
+        task_id=batch_id,
+        count=tasks_created,
+        message=f"Batch archive tasks dispatched for {archiver} ({tasks_created} tasks)",
+    )
+
+
+@router.get("/archive/{item_id}/size")
+async def get_archive_size(
+    item_id: str,
+    archiver: str = Query("all", description="Archiver name"),
+    db: Session = Depends(get_db),
+):
+    """
+    Get the size of archived artifacts for an item.
+
+    Returns size information for all or specific archivers.
+    """
+    archived_url = (
+        db.query(ArchivedUrl).filter(ArchivedUrl.item_id == item_id).first()
+    )
+
+    if not archived_url:
+        raise HTTPException(status_code=404, detail="Archive not found")
+
+    query = db.query(ArchiveArtifact).filter(
+        ArchiveArtifact.archived_url_id == archived_url.id,
+        ArchiveArtifact.success == True,
+    )
+
+    if archiver != "all":
+        query = query.filter(ArchiveArtifact.archiver == archiver)
+
+    artifacts = query.all()
+
+    if not artifacts:
+        raise HTTPException(status_code=404, detail="No successful archives found")
+
+    total_size = sum(a.size_bytes or 0 for a in artifacts)
+
+    return {
+        "item_id": item_id,
+        "total_size_bytes": total_size,
+        "archivers": {
+            a.archiver: {
+                "size_bytes": a.size_bytes,
+                "saved_path": a.saved_path,
+            }
+            for a in artifacts
+        },
+    }
+
+
 @router.get("/retrieve")
 async def retrieve_archive(
     id: Optional[str] = Query(None, description="Item ID"),
