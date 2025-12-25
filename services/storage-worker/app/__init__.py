@@ -1,0 +1,1 @@
+"""Storage Worker application package."""
