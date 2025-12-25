@@ -124,7 +124,7 @@ def archive_singlefile(
 
     try:
         archiver = _get_archiver("singlefile")
-        result = archiver.archive(url=url, item_id=item_id)
+        result = archiver.archive_with_storage(url=url, item_id=item_id)
 
         # Calculate file size
         size_bytes = None
@@ -182,7 +182,7 @@ def archive_monolith(
 
     try:
         archiver = _get_archiver("monolith")
-        result = archiver.archive(url=url, item_id=item_id)
+        result = archiver.archive_with_storage(url=url, item_id=item_id)
 
         size_bytes = None
         if result.success and result.saved_path:
@@ -230,7 +230,7 @@ def archive_readability(
 
     try:
         archiver = _get_archiver("readability")
-        result = archiver.archive(url=url, item_id=item_id)
+        result = archiver.archive_with_storage(url=url, item_id=item_id)
 
         size_bytes = None
         if result.success and result.saved_path:
@@ -283,7 +283,7 @@ def archive_pdf(
 
     try:
         archiver = _get_archiver("pdf")
-        result = archiver.archive(url=url, item_id=item_id)
+        result = archiver.archive_with_storage(url=url, item_id=item_id)
 
         size_bytes = None
         if result.success and result.saved_path:
@@ -331,7 +331,7 @@ def archive_screenshot(
 
     try:
         archiver = _get_archiver("screenshot")
-        result = archiver.archive(url=url, item_id=item_id)
+        result = archiver.archive_with_storage(url=url, item_id=item_id)
 
         size_bytes = None
         if result.success and result.saved_path:

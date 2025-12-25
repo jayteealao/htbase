@@ -161,6 +161,7 @@ class ArticleSummary(Base):
     )
     summary_type = Column(String(length=50), nullable=False, server_default="default")
     summary_text = Column(Text, nullable=False)
+    lede = Column(Text, nullable=True)
     bullet_points = Column(JSONB, nullable=True)
     model_name = Column(String, nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=sa_text("now()"))

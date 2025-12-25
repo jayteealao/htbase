@@ -90,6 +90,7 @@ class ArticleSummarySchema(BaseModel):
     archived_url_id: int
     summary_type: str
     summary_text: str
+    lede: Optional[str] = None
     bullet_points: Optional[list[Any]] = None
     model_name: Optional[str] = None
     created_at: Optional[datetime] = None

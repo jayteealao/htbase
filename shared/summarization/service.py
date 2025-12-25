@@ -181,7 +181,7 @@ class SummaryService:
             .first()
         )
 
-        if not metadata or not (metadata.text_content and metadata.text_content.strip()):
+        if not metadata or not (metadata.text and metadata.text.strip()):
             logger.warning(
                 "Skipping summarization: no metadata text",
                 extra={"archived_url_id": archived_url_id},
@@ -194,7 +194,7 @@ class SummaryService:
             published=None,  # Not stored in current schema
         )
 
-        base_text = metadata.text_content.strip()
+        base_text = metadata.text.strip()
         return summary_inputs, base_text
 
     def _generate_outputs(

@@ -109,11 +109,11 @@ def _build_firestore_document(
         doc["metadata"] = {
             "title": metadata.title,
             "byline": metadata.byline,
-            "excerpt": metadata.excerpt,
-            "text_content": metadata.text_content[:5000] if metadata.text_content else None,
+            "description": metadata.description,
+            "text": metadata.text[:5000] if metadata.text else None,
             "word_count": metadata.word_count,
             "site_name": metadata.site_name,
-            "lang": metadata.lang,
+            "language": metadata.language,
         }
 
     # Add summary if available
@@ -127,7 +127,7 @@ def _build_firestore_document(
     # Add entities
     if entities:
         doc["entities"] = [
-            {"type": e.entity_type, "value": e.value}
+            {"type": e.entity_type, "value": e.entity}
             for e in entities
         ]
 
