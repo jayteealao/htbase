@@ -1,4 +1,4 @@
-from core.utils import sanitize_filename
+from app.core.utils import sanitize_filename
 
 
 def test_sanitize_filename_basic():

@@ -80,3 +80,10 @@ SESSION_SUMMARY.md
 sharded-strolling-ocean.md
 test_firestore_workflow.py
 TESTING_PLAN.md
+.firebaserc
+CLOUD_RUN_DEPLOY.md
+firebase.json
+firestore.indexes.json
+firestore.rules
+ui.md
+verify_gcs_firestore.py

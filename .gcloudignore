@@ -1,0 +1,102 @@
+# .gcloudignore - Files to exclude from Cloud Build uploads
+# This reduces upload time and build context size
+
+#!include:.gitignore
+
+# CRITICAL: Exclude large data directory
+data/
+
+# BUT include app/scripts (needed by Dockerfile)
+!app/scripts/
+
+# Git
+.git
+.gitignore
+.github/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+ENV/
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Node.js
+node_modules/
+npm-debug.log
+yarn-error.log
+package-lock.json
+yarn.lock
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Documentation
+*.md
+!README.md
+docs/
+CLAUDE.md
+SESSION_SUMMARY.md
+INTEGRATION_PLAN.md
+FIREBASE_GCS_ARCHITECTURE.md
+DEPENDENCY_INJECTION_REFACTORING.md
+TESTING_PLAN.md
+sharded-strolling-ocean.md
+ui.md
+TODO.md
+
+# Test files (tests run in CI, not in Cloud Build)
+tests/
+test_*.py
+*_test.py
+pytest.ini
+.pytest_cache/
+
+# Local data and configuration (CRITICAL - exclude large archived files)
+data/
+*.db
+*.sqlite
+*.log
+.env.local
+.env.development
+.env.production.local
+
+# Firebase
+.firebase/
+.firebaserc
+firebase-debug.log
+firebase-debug.*.log
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+.cache/
+
+# Claude Code
+.claude/
+
+# Docker (we build with cloudbuild.yaml)
+docker-compose.yml
+docker-compose.*.yml
+Dockerfile.dev
+
+# CI/CD (handled by GitHub Actions)
+.github/workflows/
