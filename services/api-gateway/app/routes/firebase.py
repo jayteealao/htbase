@@ -202,7 +202,7 @@ async def add_pocket_article(
             archived_url_id=archived_url.id,
             title=data.pocket_data.get("title"),
             byline=data.pocket_data.get("author"),
-            excerpt=data.pocket_data.get("excerpt"),
+            description=data.pocket_data.get("excerpt"),  # Map excerpt to description column
             word_count=data.pocket_data.get("word_count"),
         )
         db.add(metadata)
@@ -403,7 +403,7 @@ async def save_article(
                 archived_url_id=archived_url.id,
                 title=data.metadata.get("title"),
                 byline=data.metadata.get("author"),
-                excerpt=data.metadata.get("excerpt"),
+                description=data.metadata.get("excerpt"),  # Map excerpt to description column
             )
             db.add(metadata)
 

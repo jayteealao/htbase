@@ -403,7 +403,7 @@ async def sync_firestore_to_postgres(
                     archived_url_id=archived_url.id,
                     title=pocket_data.get("title"),
                     byline=pocket_data.get("author"),
-                    excerpt=pocket_data.get("excerpt"),
+                    description=pocket_data.get("excerpt"),  # Map excerpt to description column
                 )
                 db.add(metadata)
 
