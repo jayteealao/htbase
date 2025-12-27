@@ -9,7 +9,14 @@ from pydantic import AliasChoices, BaseModel, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class DatabaseSettings(BaseModel):
+class DatabaseSettings(BaseSettings):
+    """Database connection settings.
+
+    Inherits from BaseSettings (not BaseModel) so that validation_alias
+    properly reads from environment variables. This allows both DB_HOST
+    and DATABASE__HOST formats to work correctly.
+    """
+
     path: Path | None = Field(
         default=None,
         validation_alias=AliasChoices("DB_PATH", "DATABASE__PATH"),
@@ -33,6 +40,12 @@ class DatabaseSettings(BaseModel):
     password: SecretStr = Field(
         default=SecretStr("your_password"),
         validation_alias=AliasChoices("DB_PASSWORD", "DATABASE__PASSWORD"),
+    )
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        extra="ignore",
+        populate_by_name=True,
     )
 
     def sqlalchemy_url(self) -> str:
@@ -290,6 +303,7 @@ class GcsSettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         extra="allow",
+        populate_by_name=True,
     )
 
 
@@ -333,6 +347,7 @@ class FirestoreSettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         extra="allow",
+        populate_by_name=True,
     )
 
 

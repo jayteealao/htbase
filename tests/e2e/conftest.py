@@ -15,9 +15,9 @@ from typing import Generator, Dict, Any
 # Test URLs that should be consistently available
 TEST_URLS = [
     "https://httpbin.org/html",  # Simple HTML page
-    "https://httpbin.org/json",   # JSON response
+    "https://www.iana.org/help/example-domains",   # JSON response
     "https://example.com",        # Basic HTML
-    "https://httpbin.org/robots.txt",  # Text file
+    "https://www.iana.org/numbers",  # Text file
 ]
 
 
@@ -49,23 +49,24 @@ def htbase_service(e2e_settings) -> Generator[Dict[str, Any], None, None]:
     base_url = e2e_settings["base_url"]
     timeout = e2e_settings["timeout"]
 
-    # Wait for service to be ready
+    # Wait for service to be ready - use /healthz (the actual endpoint)
     start_time = time.time()
     while time.time() - start_time < timeout:
         try:
-            response = requests.get(f"{base_url}/health", timeout=5)
+            response = requests.get(f"{base_url}/healthz", timeout=5)
             if response.status_code == 200:
                 print(f"HTBase service is ready at {base_url}")
-                return {
+                yield {
                     "base_url": base_url,
                     "healthy": True,
                     "startup_time": time.time() - start_time
                 }
+                return
         except requests.exceptions.RequestException:
             time.sleep(2)
             continue
 
-    raise pytest.fail(f"HTBase service not ready after {timeout} seconds at {base_url}")
+    pytest.fail(f"HTBase service not ready after {timeout} seconds at {base_url}")
 
 
 @pytest.fixture(scope="session")
@@ -112,8 +113,14 @@ def e2e_sample_items():
 
 @pytest.fixture
 def e2e_test_archivers():
-    """List of archivers to test in E2E."""
-    return ["monolith", "readability"]  # Focus on most reliable archivers
+    """List of archivers to test in E2E - all 5 production archivers."""
+    return ["readability", "monolith", "singlefile-cli", "screenshot", "pdf"]
+
+
+@pytest.fixture
+def e2e_reliable_archivers():
+    """Subset of archivers that are most reliable for quick tests."""
+    return ["monolith", "readability"]
 
 
 @pytest.fixture
@@ -320,9 +327,604 @@ def e2e_network_conditions():
 def e2e_real_world_urls():
     """Real-world URLs that should work in E2E tests."""
     return [
-        "https://www.wikipedia.org/wiki/Main_Page",
         "https://httpbin.org/html",
         "https://example.com",
-        "https://httpbin.org/json",
-        "https://www.iana.org/domains/example"
+        "https://www.iana.org/help/example-domains",
     ]
+
+
+@pytest.fixture
+def e2e_wait_for_task():
+    """Helper to wait for a task to complete by polling /tasks/{task_id}."""
+    def _wait_for_task(base_url: str, task_id: str, timeout: int = 120) -> Dict[str, Any]:
+        """
+        Poll task status until completion or timeout.
+
+        Returns:
+            Task status response with items and overall status
+        """
+        start_time = time.time()
+
+        while time.time() - start_time < timeout:
+            try:
+                response = requests.get(
+                    f"{base_url}/tasks/{task_id}",
+                    timeout=10
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    status = data.get("status", "pending")
+                    if status in ["success", "failed"]:
+                        return data
+                elif response.status_code == 404:
+                    # Task not found yet, keep polling
+                    pass
+            except requests.exceptions.RequestException:
+                pass
+
+            time.sleep(2)
+
+        raise TimeoutError(f"Task {task_id} did not complete within {timeout} seconds")
+
+    return _wait_for_task
+
+
+@pytest.fixture
+def e2e_api_client():
+    """Enhanced API client with helper methods for common operations."""
+    class E2EAPIClient:
+        def __init__(self, base_url: str):
+            self.base_url = base_url
+            self.session = requests.Session()
+            self.session.headers.update({
+                "User-Agent": "HTBase-E2E-Tests/1.0",
+                "Content-Type": "application/json"
+            })
+
+        def healthz(self) -> bool:
+            """Check if service is healthy."""
+            try:
+                resp = self.session.get(f"{self.base_url}/healthz", timeout=5)
+                return resp.status_code == 200
+            except requests.exceptions.RequestException:
+                return False
+
+        def save(self, item_id: str, url: str) -> Dict[str, Any]:
+            """Submit async save request via POST /save."""
+            resp = self.session.post(
+                f"{self.base_url}/save",
+                json={"id": item_id, "url": url},
+                timeout=30
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+        def save_batch(self, items: list) -> Dict[str, Any]:
+            """Submit batch save request via POST /save/batch."""
+            resp = self.session.post(
+                f"{self.base_url}/save/batch",
+                json={"items": items},
+                timeout=30
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+        def archive(self, archiver: str, item_id: str, url: str) -> Dict[str, Any]:
+            """Submit archive request via POST /archive/{archiver}."""
+            resp = self.session.post(
+                f"{self.base_url}/archive/{archiver}",
+                json={"id": item_id, "url": url},
+                timeout=60
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+        def archive_batch(self, archiver: str, items: list) -> Dict[str, Any]:
+            """Submit batch archive request via POST /archive/{archiver}/batch."""
+            resp = self.session.post(
+                f"{self.base_url}/archive/{archiver}/batch",
+                json={"items": items},
+                timeout=30
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+        def get_task_status(self, task_id: str) -> Dict[str, Any]:
+            """Get task status via GET /tasks/{task_id}."""
+            resp = self.session.get(
+                f"{self.base_url}/tasks/{task_id}",
+                timeout=10
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+        def list_saves(self, limit: int = 100, offset: int = 0) -> list:
+            """List saves via GET /saves."""
+            resp = self.session.get(
+                f"{self.base_url}/saves",
+                params={"limit": limit, "offset": offset},
+                timeout=10
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+        def list_archivers(self) -> list:
+            """List available archivers via GET /archivers."""
+            resp = self.session.get(
+                f"{self.base_url}/archivers",
+                timeout=10
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+        def retrieve(self, item_id: str = None, url: str = None, archiver: str = "all"):
+            """Retrieve archived content via POST /archive/retrieve."""
+            payload = {"archiver": archiver}
+            if item_id:
+                payload["id"] = item_id
+            if url:
+                payload["url"] = url
+            resp = self.session.post(
+                f"{self.base_url}/archive/retrieve",
+                json=payload,
+                timeout=30
+            )
+            return resp
+
+        def delete_by_item(self, item_id: str, remove_files: bool = False) -> Dict[str, Any]:
+            """Delete saves by item_id via DELETE /saves/by-item/{item_id}."""
+            resp = self.session.delete(
+                f"{self.base_url}/saves/by-item/{item_id}",
+                params={"remove_files": remove_files},
+                timeout=10
+            )
+            if resp.status_code == 404:
+                return {"deleted_count": 0, "ok": True}
+            resp.raise_for_status()
+            return resp.json()
+
+        def delete_by_url(self, url: str, remove_files: bool = False) -> Dict[str, Any]:
+            """Delete saves by URL via DELETE /saves/by-url."""
+            resp = self.session.delete(
+                f"{self.base_url}/saves/by-url",
+                params={"url": url, "remove_files": remove_files},
+                timeout=10
+            )
+            if resp.status_code == 404:
+                return {"deleted_count": 0, "ok": True}
+            resp.raise_for_status()
+            return resp.json()
+
+        def requeue(self, artifact_ids: list = None, status: str = None, include_all: bool = False) -> Dict[str, Any]:
+            """Requeue failed/pending saves via POST /saves/requeue."""
+            payload = {"include_all": include_all}
+            if artifact_ids:
+                payload["artifact_ids"] = artifact_ids
+            if status:
+                payload["status"] = status
+            resp = self.session.post(
+                f"{self.base_url}/saves/requeue",
+                json=payload,
+                timeout=30
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+        def summarize(self, rowid: int = None, item_id: str = None, url: str = None) -> Dict[str, Any]:
+            """Trigger summarization via POST /summarize."""
+            payload = {}
+            if rowid:
+                payload["rowid"] = rowid
+            if item_id:
+                payload["item_id"] = item_id
+            if url:
+                payload["url"] = url
+            resp = self.session.post(
+                f"{self.base_url}/summarize",
+                json=payload,
+                timeout=30
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+        def get_archive_size(self, archived_url_id: int) -> Dict[str, Any]:
+            """Get archive size via GET /archive/{archived_url_id}/size."""
+            resp = self.session.get(
+                f"{self.base_url}/archive/{archived_url_id}/size",
+                timeout=10
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+        # Command history endpoints
+        def list_executions(self, archived_url_id: int = None, archiver: str = None, limit: int = 100) -> list:
+            """List command executions via GET /commands/executions."""
+            params = {"limit": limit}
+            if archived_url_id:
+                params["archived_url_id"] = archived_url_id
+            if archiver:
+                params["archiver"] = archiver
+            resp = self.session.get(
+                f"{self.base_url}/commands/executions",
+                params=params,
+                timeout=10
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+        def get_execution_detail(self, execution_id: int) -> Dict[str, Any]:
+            """Get execution detail via GET /commands/executions/{id}."""
+            resp = self.session.get(
+                f"{self.base_url}/commands/executions/{execution_id}",
+                timeout=10
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+        # Firebase endpoints
+        def firebase_add_pocket_article(self, user_id: str, url: str, pocket_data: dict = None, archiver: str = "all") -> Dict[str, Any]:
+            """Add Pocket article via POST /firebase/add-pocket-article."""
+            resp = self.session.post(
+                f"{self.base_url}/firebase/add-pocket-article",
+                json={
+                    "user_id": user_id,
+                    "url": url,
+                    "pocket_data": pocket_data or {},
+                    "archiver": archiver
+                },
+                timeout=30
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+        def firebase_download_url(self, item_id: str, archiver: str, expiration_hours: int = 24) -> Dict[str, Any]:
+            """Get download URL via GET /firebase/download/{item_id}/{archiver}."""
+            resp = self.session.get(
+                f"{self.base_url}/firebase/download/{item_id}/{archiver}",
+                params={"expiration_hours": expiration_hours},
+                timeout=10
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+        def firebase_save(self, url: str, archiver: str = "all", metadata: dict = None) -> Dict[str, Any]:
+            """Save article via POST /firebase/save."""
+            resp = self.session.post(
+                f"{self.base_url}/firebase/save",
+                json={
+                    "url": url,
+                    "archiver": archiver,
+                    "metadata": metadata or {}
+                },
+                timeout=30
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+        def firebase_archive(self, item_id: str, url: str, archiver: str = "all") -> Dict[str, Any]:
+            """Archive article via POST /firebase/archive."""
+            resp = self.session.post(
+                f"{self.base_url}/firebase/archive",
+                json={
+                    "item_id": item_id,
+                    "url": url,
+                    "archiver": archiver
+                },
+                timeout=30
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+        # Sync endpoints
+        def sync_postgres_to_firestore(self, article_id: str = None, limit: int = 100) -> Dict[str, Any]:
+            """Sync PostgreSQL to Firestore via POST /sync/postgres-to-firestore."""
+            payload = {"limit": limit}
+            if article_id:
+                payload["article_id"] = article_id
+            resp = self.session.post(
+                f"{self.base_url}/sync/postgres-to-firestore",
+                json=payload,
+                timeout=60
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+        def sync_firestore_to_postgres(self, item_id: str) -> Dict[str, Any]:
+            """Sync Firestore to PostgreSQL via POST /sync/firestore-to-postgres."""
+            resp = self.session.post(
+                f"{self.base_url}/sync/firestore-to-postgres",
+                json={"item_id": item_id},
+                timeout=30
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    def _create_client(base_url: str) -> E2EAPIClient:
+        return E2EAPIClient(base_url)
+
+    return _create_client
+
+
+# =============================================================================
+# Firestore and GCS Integration Fixtures
+# =============================================================================
+
+@pytest.fixture(scope="session")
+def firestore_client():
+    """
+    Create Firestore client for integration tests.
+
+    Requires:
+    - GOOGLE_APPLICATION_CREDENTIALS or FIRESTORE_PROJECT_ID env var
+    - Valid GCP credentials
+
+    Skips tests if Firestore is not available.
+    """
+    try:
+        from google.cloud import firestore
+
+        project_id = os.getenv('FIRESTORE_PROJECT_ID') or os.getenv('GCP_PROJECT_ID')
+        if not project_id:
+            pytest.skip("FIRESTORE_PROJECT_ID not set - skipping Firestore tests")
+
+        client = firestore.Client(project=project_id)
+
+        # Test connection by listing collections (will fail if not authenticated)
+        try:
+            list(client.collections())
+        except Exception as e:
+            pytest.skip(f"Firestore connection failed: {e}")
+
+        yield client
+
+    except ImportError:
+        pytest.skip("google-cloud-firestore not installed")
+    except Exception as e:
+        pytest.skip(f"Firestore client creation failed: {e}")
+
+
+@pytest.fixture(scope="session")
+def gcs_client():
+    """
+    Create GCS client for integration tests.
+
+    Requires:
+    - GOOGLE_APPLICATION_CREDENTIALS or GCS_PROJECT_ID env var
+    - GCS_BUCKET env var
+    - Valid GCP credentials
+
+    Skips tests if GCS is not available.
+    """
+    try:
+        from google.cloud import storage
+
+        project_id = os.getenv('GCS_PROJECT_ID') or os.getenv('GCP_PROJECT_ID')
+        bucket_name = os.getenv('GCS_BUCKET')
+
+        if not project_id:
+            pytest.skip("GCS_PROJECT_ID not set - skipping GCS tests")
+        if not bucket_name:
+            pytest.skip("GCS_BUCKET not set - skipping GCS tests")
+
+        client = storage.Client(project=project_id)
+        bucket = client.bucket(bucket_name)
+
+        # Test connection
+        try:
+            bucket.exists()
+        except Exception as e:
+            pytest.skip(f"GCS connection failed: {e}")
+
+        yield {
+            "client": client,
+            "bucket": bucket,
+            "bucket_name": bucket_name,
+            "project_id": project_id
+        }
+
+    except ImportError:
+        pytest.skip("google-cloud-storage not installed")
+    except Exception as e:
+        pytest.skip(f"GCS client creation failed: {e}")
+
+
+@pytest.fixture
+def firestore_test_user_id():
+    """Get test user ID for Firestore tests."""
+    return os.getenv('FIRESTORE_TEST_USER_ID', 'e2e_test_user')
+
+
+@pytest.fixture
+def firestore_test_collection():
+    """Get test collection name for Firestore tests."""
+    return os.getenv('FIRESTORE_TEST_COLLECTION', 'articles')
+
+
+@pytest.fixture
+def e2e_firestore_article(firestore_client, firestore_test_user_id):
+    """
+    Create a test article in Firestore and clean up after test.
+
+    Yields:
+        dict with article_id, user_id, url, and doc_ref
+    """
+    import uuid
+
+    article_id = f"e2e_test_{uuid.uuid4().hex[:12]}"
+    test_url = "https://example.com"
+
+    # Create article in user's subcollection
+    doc_ref = (
+        firestore_client
+        .collection('users')
+        .document(firestore_test_user_id)
+        .collection('articles')
+        .document(article_id)
+    )
+
+    article_data = {
+        "url": test_url,
+        "title": "E2E Test Article",
+        "created_at": time.time(),
+        "status": "pending",
+        "archives": {}
+    }
+
+    doc_ref.set(article_data)
+
+    yield {
+        "article_id": article_id,
+        "user_id": firestore_test_user_id,
+        "url": test_url,
+        "doc_ref": doc_ref,
+        "data": article_data
+    }
+
+    # Cleanup
+    try:
+        doc_ref.delete()
+    except Exception:
+        pass
+
+    # Also cleanup from main articles collection if it was synced there
+    try:
+        main_ref = firestore_client.collection('articles').document(article_id)
+        if main_ref.get().exists:
+            main_ref.delete()
+    except Exception:
+        pass
+
+
+@pytest.fixture
+def e2e_gcs_cleanup(gcs_client):
+    """
+    Helper to clean up GCS files created during tests.
+
+    Returns a function that takes a prefix and deletes all matching blobs.
+    """
+    prefixes_to_cleanup = []
+
+    def _register_cleanup(prefix: str):
+        """Register a prefix for cleanup after test."""
+        prefixes_to_cleanup.append(prefix)
+
+    yield _register_cleanup
+
+    # Cleanup all registered prefixes
+    bucket = gcs_client["bucket"]
+    for prefix in prefixes_to_cleanup:
+        try:
+            blobs = list(bucket.list_blobs(prefix=prefix))
+            for blob in blobs:
+                try:
+                    blob.delete()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+
+@pytest.fixture
+def e2e_wait_for_firestore_archive(firestore_client):
+    """
+    Helper to wait for archive status in Firestore to update.
+
+    Polls the Firestore document until archives field is updated.
+    """
+    def _wait_for_archive(
+        article_id: str,
+        archiver: str = None,
+        timeout: int = 180,
+        collection: str = "articles"
+    ) -> Dict[str, Any]:
+        """
+        Wait for archive to appear in Firestore document.
+
+        Args:
+            article_id: The article ID to check
+            archiver: Specific archiver to wait for (or None for any)
+            timeout: Max wait time in seconds
+            collection: Firestore collection to check
+
+        Returns:
+            The archives dict from Firestore
+        """
+        start_time = time.time()
+
+        while time.time() - start_time < timeout:
+            try:
+                doc_ref = firestore_client.collection(collection).document(article_id)
+                doc = doc_ref.get()
+
+                if doc.exists:
+                    data = doc.to_dict()
+                    archives = data.get("archives", {})
+
+                    if archiver:
+                        # Wait for specific archiver
+                        if archiver in archives:
+                            archive_data = archives[archiver]
+                            if archive_data.get("status") in ["success", "failed"]:
+                                return archives
+                    else:
+                        # Wait for any archive with completed status
+                        for arch_name, arch_data in archives.items():
+                            if arch_data.get("status") in ["success", "failed"]:
+                                return archives
+
+            except Exception as e:
+                print(f"Error checking Firestore: {e}")
+
+            time.sleep(5)
+
+        raise TimeoutError(f"Archive status not updated within {timeout} seconds")
+
+    return _wait_for_archive
+
+
+@pytest.fixture
+def e2e_verify_gcs_files(gcs_client):
+    """
+    Helper to verify files exist in GCS.
+
+    Returns a function that checks for files matching a pattern.
+    """
+    def _verify_files(item_id: str, archivers: list = None) -> Dict[str, bool]:
+        """
+        Verify files exist in GCS for the given item.
+
+        Args:
+            item_id: The item ID to check
+            archivers: List of archivers to check (or None for all)
+
+        Returns:
+            Dict mapping archiver name to bool (True if files found)
+        """
+        if archivers is None:
+            archivers = ["readability", "monolith", "singlefile-cli", "screenshot", "pdf"]
+
+        bucket = gcs_client["bucket"]
+        results = {}
+
+        for archiver in archivers:
+            # Check common path patterns
+            prefixes = [
+                f"archives/{item_id}/{archiver}/",
+                f"{item_id}/{archiver}/",
+            ]
+
+            found = False
+            for prefix in prefixes:
+                try:
+                    blobs = list(bucket.list_blobs(prefix=prefix, max_results=1))
+                    if blobs:
+                        found = True
+                        break
+                except Exception:
+                    pass
+
+            results[archiver] = found
+
+        return results
+
+    return _verify_files

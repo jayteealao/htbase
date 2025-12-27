@@ -6,7 +6,6 @@ to final response, using real database and simplified components.
 """
 
 import json
-import tempfile
 from pathlib import Path
 from unittest.mock import patch, Mock
 
@@ -106,21 +105,21 @@ class TestAPIIntegration:
 
     def test_batch_archive_workflow(self, integration_client, integration_settings, real_repositories):
         """Test batch archive endpoint workflow."""
+        # Use the correct endpoint: /archive/{archiver}/batch
         payload = {
-            "archiver": "monolith",
             "items": [
-                {"item_id": "batch1", "url": "https://example.com/batch1"},
-                {"item_id": "batch2", "url": "https://example.com/batch2"},
-                {"item_id": "batch3", "url": "https://example.com/batch3"}
+                {"id": "batch1", "url": "https://example.com/batch1"},
+                {"id": "batch2", "url": "https://example.com/batch2"},
+                {"id": "batch3", "url": "https://example.com/batch3"}
             ]
         }
 
-        response = integration_client.post("/tasks/batch-create", json=payload)
+        response = integration_client.post("/archive/monolith/batch", json=payload)
 
-        assert response.status_code == 200
+        assert response.status_code == 202
         data = response.json()
         assert "task_id" in data
-        assert data["item_count"] == 3
+        assert data["count"] == 3
 
         # Verify database records
         for item_id in ["batch1", "batch2", "batch3"]:
@@ -190,8 +189,8 @@ class TestAPIIntegration:
         import time
         time.sleep(0.3)
 
-        # Test list saves
-        response = integration_client.get("/admin/saves")
+        # Test list saves (endpoint is /saves, not /admin/saves)
+        response = integration_client.get("/saves")
         assert response.status_code == 200
 
         if response.status_code == 200:
@@ -214,12 +213,12 @@ class TestAPIIntegration:
         artifacts = real_repositories["artifact"].list_by_item_id("requeue123")
 
         if artifacts:
-            # Test requeue
+            # Test requeue (endpoint is /saves/requeue, not /admin/saves/requeue)
             requeue_payload = {
                 "artifact_ids": [artifacts[0].id],
                 "include_all": False
             }
-            response = integration_client.post("/admin/saves/requeue", json=requeue_payload)
+            response = integration_client.post("/saves/requeue", json=requeue_payload)
 
             if response.status_code == 200:
                 data = response.json()
@@ -246,8 +245,8 @@ class TestAPIIntegration:
         if artifacts:
             artifact = artifacts[0]
 
-            # Test delete by rowid
-            response = integration_client.delete(f"/admin/saves/{artifact.id}")
+            # Test delete by rowid (endpoint is /saves/{id}, not /admin/saves/{id})
+            response = integration_client.delete(f"/saves/{artifact.id}")
 
             if response.status_code == 200:
                 data = response.json()
@@ -361,9 +360,10 @@ class TestAPIIntegration:
     def test_api_response_format_consistency(self, integration_client):
         """Test API response format consistency across endpoints."""
         # Test different endpoints have consistent response formats
+        # Note: Endpoints are /archivers and /saves (not /admin/ prefix)
         endpoints = [
-            ("/admin/archivers", "GET"),
-            ("/admin/saves", "GET"),
+            ("/archivers", "GET"),
+            ("/saves", "GET"),
         ]
 
         for endpoint, method in endpoints:
@@ -430,12 +430,13 @@ class TestAPIIntegration:
     def test_api_error_message_quality(self, integration_client):
         """Test API error message quality and consistency."""
         # Test various error scenarios
+        # Note: Endpoints are /saves/{id} not /admin/saves/{id}
         error_scenarios = [
             ("/archive/nonexistent", "POST", {"id": "test", "url": "https://example.com"}),
             ("/archive/monolith", "POST", {"id": "test"}),  # Missing URL
             ("/archive/monolith", "POST", {"url": "https://example.com"}),  # Missing ID
-            ("/admin/saves/999999", "DELETE", None),
-            ("/archive/nonexistent/size", "GET", None),
+            ("/saves/999999", "DELETE", None),
+            ("/archive/999999/size", "GET", None),
         ]
 
         for endpoint, method, payload in error_scenarios:
@@ -462,8 +463,8 @@ class TestAPIIntegration:
         response = integration_client.options("/archive/monolith")
         # Should handle OPTIONS appropriately
 
-        # Test actual request headers
-        response = integration_client.get("/admin/archivers")
+        # Test actual request headers (endpoint is /archivers not /admin/archivers)
+        response = integration_client.get("/archivers")
         if response.status_code == 200:
             # Check for security headers if implemented
             headers = response.headers

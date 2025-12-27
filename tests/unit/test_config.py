@@ -20,8 +20,8 @@ def clear_settings_cache(monkeypatch, tmp_path):
         "STORAGE_RETENTION_DAYS", "FIRESTORE_PROJECT_ID",
         "FIRESTORE_CREDENTIALS_PATH", "FIREBASE_APPLICATION_CREDENTIALS",
         "STORAGE_BACKEND", "DATABASE_BACKEND", "STORAGE_PROVIDERS",
-        "ENABLE_STORAGE_INTEGRATION", "DATA_DIR", "DB_HOST", "DB_PORT",
-        "DB_NAME", "DB_USER", "DB_PASSWORD", "START_HT",
+        "ENABLE_STORAGE_INTEGRATION", "DATA_DIR", "DATABASE__HOST", "DATABASE__PORT",
+        "DATABASE__NAME", "DATABASE__USER", "DATABASE__PASSWORD", "START_HT",
         "STORAGE__GCS_BUCKET", "STORAGE__GCS_PROJECT_ID",
         "DATABASE__FIRESTORE_PROJECT_ID", "STORAGE__PROVIDERS"
     ]
@@ -378,11 +378,11 @@ class TestConfigurationValidation:
 
         Verifies database URL building from individual components.
         """
-        clean_env.setenv("DB_HOST", "localhost")
-        clean_env.setenv("DB_PORT", "5432")
-        clean_env.setenv("DB_NAME", "testdb")
-        clean_env.setenv("DB_USER", "testuser")
-        clean_env.setenv("DB_PASSWORD", "testpass")
+        clean_env.setenv("DATABASE__HOST", "localhost")
+        clean_env.setenv("DATABASE__PORT", "5432")
+        clean_env.setenv("DATABASE__NAME", "testdb")
+        clean_env.setenv("DATABASE__USER", "testuser")
+        clean_env.setenv("DATABASE__PASSWORD", "testpass")
 
 
         settings = AppSettings()
