@@ -358,16 +358,24 @@ class PostgresStorage(DatabaseStorageProvider):
         status: ArchiveStatus,
         **kwargs
     ) -> bool:
-        """Update artifact status and related fields."""
+        """Update artifact status and related fields. Creates artifact if it doesn't exist (upsert)."""
         try:
             with get_session(self.db_path) as session:
+                # Get or create archived URL
                 au = session.execute(
                     select(ArchivedUrl).where(ArchivedUrl.item_id == item_id)
                 ).scalars().first()
 
                 if not au:
-                    return False
+                    # Create archived URL if it doesn't exist
+                    au = ArchivedUrl(
+                        item_id=item_id,
+                        url=""  # URL will be updated later if needed
+                    )
+                    session.add(au)
+                    session.flush()
 
+                # Get or create artifact
                 art = session.execute(
                     select(DBArchiveArtifact).where(
                         DBArchiveArtifact.archived_url_id == au.id,
@@ -376,12 +384,24 @@ class PostgresStorage(DatabaseStorageProvider):
                 ).scalars().first()
 
                 if not art:
-                    return False
-
-                # Update status
-                art.status = status.value
-                art.success = (status == ArchiveStatus.SUCCESS)
-                art.updated_at = datetime.utcnow()
+                    # Create artifact if it doesn't exist
+                    art = DBArchiveArtifact(
+                        archived_url_id=au.id,
+                        archiver=archiver,
+                        status=status.value,
+                        success=(status == ArchiveStatus.SUCCESS),
+                        exit_code=kwargs.get("exit_code", 0),
+                        saved_path=None,
+                        size_bytes=kwargs.get("file_size"),
+                        created_at=datetime.utcnow(),
+                        updated_at=datetime.utcnow()
+                    )
+                    session.add(art)
+                else:
+                    # Update existing artifact
+                    art.status = status.value
+                    art.success = (status == ArchiveStatus.SUCCESS)
+                    art.updated_at = datetime.utcnow()
 
                 # Update additional fields
                 for key, value in kwargs.items():

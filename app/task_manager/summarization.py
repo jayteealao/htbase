@@ -107,8 +107,8 @@ class SummarizationCoordinator:
 
         resolved_reason = reason or "unspecified"
         try:
-            artifact_repo = ArchiveArtifactRepository(self.settings.database.resolved_path(settings.data_dir))
-            metadata_repo = UrlMetadataRepository(self.settings.database.resolved_path(settings.data_dir))
+            artifact_repo = ArchiveArtifactRepository(self.settings.database.resolved_path(self.settings.data_dir))
+            metadata_repo = UrlMetadataRepository(self.settings.database.resolved_path(self.settings.data_dir))
 
             target_id = archived_url_id
             if target_id is None and rowid is not None:
