@@ -340,6 +340,8 @@ class DualDatabaseStorage(DatabaseStorageProvider):
                 file_size=kwargs.get('file_size'),
             )
 
+            # Remove status from filtered_kwargs since it's passed as positional arg
+            filtered_kwargs.pop('status', None)
             fs_success = self.firestore.update_artifact_status(
                 item_id, archiver, status, **filtered_kwargs
             )

@@ -310,19 +310,6 @@ def _archive_with(
     )
 
 
-@router.post("/archive/{archiver}", response_model=SaveResponse)
-def archive_with(
-    archiver: str,
-    payload: SaveRequest,
-    request: Request,
-    settings: AppSettings = Depends(get_settings),
-):
-    logger.info(f"/archive/{archiver} invoked")
-    response = _archive_with(archiver, payload, request, settings)
-    logger.info(f"/archive/{archiver} response | ok={response.ok} exit_code={response.exit_code} rowid={response.db_rowid}")
-    return response
-
-
 @router.post("/archive/retrieve")
 def retrieve_archive(
     payload: ArchiveRetrieveRequest,
@@ -498,6 +485,19 @@ def retrieve_archive(
                 temp_file.unlink(missing_ok=True)
             except Exception as e:
                 logger.warning(f"Failed to cleanup temp file {temp_file}: {e}")
+
+
+@router.post("/archive/{archiver}", response_model=SaveResponse)
+def archive_with(
+    archiver: str,
+    payload: SaveRequest,
+    request: Request,
+    settings: AppSettings = Depends(get_settings),
+):
+    logger.info(f"/archive/{archiver} invoked")
+    response = _archive_with(archiver, payload, request, settings)
+    logger.info(f"/archive/{archiver} response | ok={response.ok} exit_code={response.exit_code} rowid={response.db_rowid}")
+    return response
 
 
 @router.post("/save", response_model=TaskAccepted, status_code=202)
