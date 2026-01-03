@@ -281,7 +281,7 @@ class FirestoreStorage(DatabaseStorageProvider):
         status: ArchiveStatus,
         **kwargs
     ) -> bool:
-        """Update artifact status and related fields."""
+        """Update artifact status and related fields. Creates document if it doesn't exist."""
         try:
             doc_ref = self.articles_ref.document(item_id)
 
@@ -295,7 +295,8 @@ class FirestoreStorage(DatabaseStorageProvider):
             for key, value in kwargs.items():
                 update_data[f"archives.{archiver}.{key}"] = value
 
-            doc_ref.update(update_data)
+            # Use set with merge=True to create document if it doesn't exist
+            doc_ref.set(update_data, merge=True)
             return True
 
         except Exception:
