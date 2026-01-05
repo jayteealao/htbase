@@ -81,11 +81,11 @@ jobs:
 
       - name: Run integration tests (excluding cloud)
         env:
-          DB_HOST: localhost
-          DB_PORT: 5432
-          DB_NAME: htbase_test
-          DB_USER: postgres
-          DB_PASSWORD: postgres
+          DATABASE__HOST: localhost
+          DATABASE__PORT: 5432
+          DATABASE__NAME: htbase_test
+          DATABASE__USER: postgres
+          DATABASE__PASSWORD: postgres
           START_HT: false
         run: |
           pytest tests/integration -v \
@@ -202,11 +202,11 @@ jobs:
 
       - name: Start HTBase server
         env:
-          DB_HOST: localhost
-          DB_PORT: 5432
-          DB_NAME: htbase
-          DB_USER: postgres
-          DB_PASSWORD: postgres
+          DATABASE__HOST: localhost
+          DATABASE__PORT: 5432
+          DATABASE__NAME: htbase
+          DATABASE__USER: postgres
+          DATABASE__PASSWORD: postgres
           START_HT: false
         run: |
           python -m app.server &

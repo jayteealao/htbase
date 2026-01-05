@@ -76,21 +76,21 @@ jobs:
 
       - name: Run DB migrations
         env:
-          DB_HOST: 127.0.0.1
-          DB_PORT: '5432'
-          DB_NAME: htbase
-          DB_USER: postgres
-          DB_PASSWORD: postgres
+          DATABASE__HOST: 127.0.0.1
+          DATABASE__PORT: '5432'
+          DATABASE__NAME: htbase
+          DATABASE__USER: postgres
+          DATABASE__PASSWORD: postgres
         run: alembic -c alembic.ini upgrade head
 
       - name: Run integration tests
         env:
           START_HT: 'false'
-          DB_HOST: 127.0.0.1
-          DB_PORT: '5432'
-          DB_NAME: htbase
-          DB_USER: postgres
-          DB_PASSWORD: postgres
+          DATABASE__HOST: 127.0.0.1
+          DATABASE__PORT: '5432'
+          DATABASE__NAME: htbase
+          DATABASE__USER: postgres
+          DATABASE__PASSWORD: postgres
         run: |
           # Run only integration tests that are expected to pass with current API
           # If you want full suite, change path to `tests`.
