@@ -1,0 +1,81 @@
+services:
+  htbase:
+    image: ghcr.io/jayteealao/htbase:sha-28df369
+    container_name: htbase
+    restart: unless-stopped
+
+    environment:
+      # Database Configuration (using your existing PostgreSQL)
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: postgres
+      DB_USER: "${DB_USER}"
+      DB_PASSWORD: ${DB_PASSWORD}
+
+      # Storage Backend Configuration
+      STORAGE_BACKEND: gcs
+      STORAGE_PROVIDERS: gcs
+
+      # GCS Configuration
+      GCS_BUCKET: htbase-archives-standard
+      GCS_PROJECT_ID: trails-414917
+
+      # Firestore Configuration (for dual persistence)
+      FIRESTORE_PROJECT_ID: trails-e428e
+
+      # Feature Flags
+      ENABLE_STORAGE_INTEGRATION: "true"
+      ENABLE_DUAL_PERSISTENCE: "true"
+
+      # Application Settings
+      DATA_DIR: /data
+      START_HT: "false"
+      LOG_LEVEL: INFO
+
+      # Google Cloud Credentials
+      GOOGLE_APPLICATION_CREDENTIALS: /app/credentials/firebase-credentials.json
+      FIREBASE_APPLICATION_CREDENTIALS: /app/credentials/firebase-credentials.json
+
+    volumes:
+      # Data directory for local file storage
+      - ./data:/data
+
+      # Firebase/GCP credentials (update path as needed)
+      - ./firebase-credentials.json:/app/credentials/firebase-credentials.json:ro
+
+    networks:
+      - default  # Uses the default network from main docker-compose.yml
+
+    labels:
+      # Enable Traefik
+      - "traefik.enable=true"
+
+      # HTTP Router - using your domain pattern
+      - "traefik.http.routers.htbase.rule=Host(`htbase.archivist.lol`)"
+      - "traefik.http.routers.htbase.entrypoints=web,websecure"
+
+      # TLS Configuration - using your existing certresolver
+      - "traefik.http.routers.htbase.tls=true"
+      - "traefik.http.routers.htbase.tls.certresolver=myresolver"
+
+      # Service Configuration
+      - "traefik.http.services.htbase.loadbalancer.server.port=8080"
+
+      # CrowdSec Middleware (matching your pattern)
+      - "traefik.http.routers.htbase.middlewares=crowdsec-htbase@docker"
+      - "traefik.http.middlewares.crowdsec-htbase.plugin.crowdsec-bouncer.enabled=true"
+      - "traefik.http.middlewares.crowdsec-htbase.plugin.crowdsec-bouncer.crowdseclapikey=${CROWDSEC_API_KEY}"
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+# Use default network from main docker-compose.yml
+# This allows htbase to connect to postgres, traefik, etc.
+networks:
+  default:
+    name: archivebox_default
+    external: true
