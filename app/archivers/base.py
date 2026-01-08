@@ -341,12 +341,16 @@ class BaseArchiver(abc.ABC):
 
             # Update specific archiver status in archives map
             gcs_path = None
+            gcs_bucket = None
             for upload in upload_results:
                 if upload.get('success') and upload.get('storage_uri'):
-                    # Extract GCS path from storage URI
+                    # Extract GCS bucket and path from storage URI
                     uri = upload.get('storage_uri', '')
                     if uri.startswith('gs://'):
-                        gcs_path = uri.replace('gs://', '').split('/', 1)[1]
+                        parts = uri[5:].split('/', 1)
+                        if len(parts) == 2:
+                            gcs_bucket = parts[0]
+                            gcs_path = parts[1]
                         break
 
             # Update artifact status
@@ -355,7 +359,8 @@ class BaseArchiver(abc.ABC):
                 item_id=item_id,
                 archiver=self.name,
                 status=ArchiveStatus.SUCCESS if result.success else ArchiveStatus.FAILED,
-                gcs_path=gcs_path
+                gcs_path=gcs_path,
+                gcs_bucket=gcs_bucket
             )
 
             # Update article metadata with completion status
