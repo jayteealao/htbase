@@ -87,3 +87,6 @@ firestore.indexes.json
 firestore.rules
 ui.md
 verify_gcs_firestore.py
+
+# Windows artifacts
+NUL
