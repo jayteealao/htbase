@@ -1,6 +1,6 @@
 services:
   htbase:
-    image: ghcr.io/jayteealao/htbase:sha-28df369
+    image: ghcr.io/jayteealao/htbase:main
     container_name: htbase
     restart: unless-stopped
 
