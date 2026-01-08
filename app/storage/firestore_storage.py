@@ -300,17 +300,26 @@ class FirestoreStorage(DatabaseStorageProvider):
         try:
             doc_ref = self.articles_ref.document(item_id)
 
+            # Build the nested artifact data
+            artifact_data = {
+                "status": status.value,
+                "updated_at": firestore.SERVER_TIMESTAMP,
+            }
+
+            # Add any additional fields (gcs_path, gcs_bucket, file_size, etc.)
+            for key, value in kwargs.items():
+                if value is not None:
+                    artifact_data[key] = value
+
+            # Use set with merge=True with proper nested structure
+            # This ensures archives.{archiver} is a proper nested map
             update_data = {
-                f"archives.{archiver}.status": status.value,
-                f"archives.{archiver}.updated_at": firestore.SERVER_TIMESTAMP,
+                "archives": {
+                    archiver: artifact_data
+                },
                 "updated_at": firestore.SERVER_TIMESTAMP
             }
 
-            # Add any additional fields
-            for key, value in kwargs.items():
-                update_data[f"archives.{archiver}.{key}"] = value
-
-            # Use set with merge=True to create document if it doesn't exist
             doc_ref.set(update_data, merge=True)
             return True
 
