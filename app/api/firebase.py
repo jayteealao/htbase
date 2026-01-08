@@ -248,21 +248,8 @@ async def generate_download_url(
             )
 
         # Get storage path from artifact
-        storage_uploads = artifact.get('storage_uploads', [])
-        gcs_path = None
-
-        # Find GCS upload in storage_uploads list
-        for upload in storage_uploads:
-            if upload.get('success') and upload.get('storage_uri'):
-                # Extract GCS path from storage URI
-                uri = upload.get('storage_uri', '')
-                if uri.startswith('gs://'):
-                    gcs_path = uri.replace('gs://', '').split('/', 1)[1]  # Remove bucket, keep path
-                    break
-
-        if not gcs_path:
-            # Fallback to old gcs_path field
-            gcs_path = artifact.get('gcs_path')
+        # artifact is an ArchiveArtifact dataclass, use attribute access
+        gcs_path = artifact.gcs_path
 
         if not gcs_path:
             raise HTTPException(
