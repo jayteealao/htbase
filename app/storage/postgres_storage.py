@@ -403,21 +403,21 @@ class PostgresStorage(DatabaseStorageProvider):
                     art.success = (status == ArchiveStatus.SUCCESS)
                     art.updated_at = datetime.utcnow()
 
-                # Update additional fields
-                for key, value in kwargs.items():
-                    if key == "gcs_path":
-                        art.saved_path = value
-                    elif key == "gcs_bucket":
-                        # Store as gs:// URL
-                        if value and kwargs.get("gcs_path"):
-                            art.saved_path = f"gs://{value}/{kwargs['gcs_path']}"
-                    elif key == "error_message":
-                        # No error_message column in current schema
-                        pass
-                    elif key == "file_size":
-                        art.size_bytes = value
-                    elif key == "exit_code":
-                        art.exit_code = value
+                # Update additional fields - extract values first
+                gcs_path = kwargs.get("gcs_path")
+                gcs_bucket = kwargs.get("gcs_bucket")
+
+                # Build saved_path from GCS info if available
+                if gcs_bucket and gcs_path:
+                    art.saved_path = f"gs://{gcs_bucket}/{gcs_path}"
+                elif gcs_path:
+                    art.saved_path = gcs_path
+
+                # Update other fields
+                if "file_size" in kwargs and kwargs["file_size"] is not None:
+                    art.size_bytes = kwargs["file_size"]
+                if "exit_code" in kwargs and kwargs["exit_code"] is not None:
+                    art.exit_code = kwargs["exit_code"]
 
                 session.commit()
                 return True
