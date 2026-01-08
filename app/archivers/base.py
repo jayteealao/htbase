@@ -248,8 +248,8 @@ class BaseArchiver(abc.ABC):
             primary_result = upload_results[0] if upload_results else {}
             self.update_database_storage(item_id, primary_result)
 
-            # 6. Update Firestore article status if using Firestore backend
-            if self.db_storage and self.db_storage.provider_name == "firestore":
+            # 6. Update Firestore article status if using Firestore or dual backend
+            if self.db_storage and self.db_storage.provider_name in ("firestore", "dual"):
                 self._update_firestore_article_status(item_id, result, upload_results)
 
             # 7. Schedule cleanup only if ALL uploads succeeded
