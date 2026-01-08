@@ -34,8 +34,10 @@ class ScreenshotArchiver(BaseArchiver, ChromiumArchiverMixin):
 
         # Default viewport to attempt near-full-page captures for common pages
         self.viewport_width = 1920
-        # Height large enough for many pages; CLI screenshot doesn't truly do full-page
-        self.viewport_height = 8000
+        # Height large enough for many pages; reduced from 8000 to improve reliability
+        self.viewport_height = 4000
+        # Timeout for screenshot rendering (increased from 30s to handle large pages)
+        self.timeout = 90.0
 
     def archive(self, *, url: str, item_id: str) -> ArchiveResult:
         out_dir, out_path = self.get_output_path(item_id)
@@ -57,7 +59,7 @@ class ScreenshotArchiver(BaseArchiver, ChromiumArchiverMixin):
         # Execute command (archived_url_id context should be set by caller if needed)
         result = self.command_runner.execute(
             command=cmd,
-            timeout=30.0,
+            timeout=self.timeout,
             archived_url_id=None,  # Could be passed from caller
             archiver=self.name,
         )
