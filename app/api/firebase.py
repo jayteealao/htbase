@@ -472,3 +472,58 @@ async def archive_article(
             status_code=500,
             detail=f"Failed to archive article: {str(e)}"
         )
+
+
+@router.get("/debug/article/{item_id}")
+async def debug_get_article(
+    request: Request,
+    item_id: str
+) -> dict:
+    """
+    Debug endpoint to retrieve raw article data from Firestore.
+
+    Returns the raw Firestore document for inspection.
+    """
+    db_storage = request.app.state.db_storage
+
+    # Check if we have access to Firestore storage
+    firestore_storage = None
+    if hasattr(db_storage, 'firestore'):
+        # DualDatabaseStorage
+        firestore_storage = db_storage.firestore
+    elif db_storage.provider_name == "firestore":
+        # Direct FirestoreStorage
+        firestore_storage = db_storage
+
+    if not firestore_storage:
+        raise HTTPException(
+            status_code=503,
+            detail="Firestore storage not available (provider: " + db_storage.provider_name + ")"
+        )
+
+    try:
+        # Get raw Firestore document
+        doc_ref = firestore_storage.articles_ref.document(item_id)
+        doc = doc_ref.get()
+
+        if not doc.exists:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Article not found in Firestore: {item_id}"
+            )
+
+        # Return raw document data
+        return {
+            "item_id": item_id,
+            "firestore_data": doc.to_dict(),
+            "provider": db_storage.provider_name
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get Firestore article: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get Firestore article: {str(e)}"
+        )
