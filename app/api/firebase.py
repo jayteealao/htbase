@@ -144,27 +144,32 @@ async def add_pocket_article(
             from task_manager.archiver import BatchItem, BatchTask
             import uuid
 
-            # Create batch items (need rowid from database)
-            # For now, use a placeholder rowid (task manager will handle it)
-            batch_items = [BatchItem(
-                item_id=item_id,
-                url=data.url,
-                rowid=0,  # Placeholder
-                archiver_name=data.archiver
-            )]
+            # Handle "all" archiver - expand to individual archivers
+            if data.archiver == "all":
+                archiver_names = list(request.app.state.archivers.keys())
+            else:
+                archiver_names = [data.archiver]
 
-            # Create and submit batch task
-            task = BatchTask(
-                task_id=str(uuid.uuid4()),
-                archiver_name=data.archiver,
-                items=batch_items
-            )
+            # Create and submit a task for each archiver
+            for archiver_name in archiver_names:
+                batch_items = [BatchItem(
+                    item_id=item_id,
+                    url=data.url,
+                    rowid=0,  # Placeholder
+                    archiver_name=archiver_name
+                )]
 
-            request.app.state.archiver_task_manager.submit(task)
+                task = BatchTask(
+                    task_id=str(uuid.uuid4()),
+                    archiver_name=archiver_name,
+                    items=batch_items
+                )
+
+                request.app.state.archiver_task_manager.submit(task)
 
             logger.info(
                 f"Queuing archival for Pocket article",
-                extra={"item_id": item_id, "archiver": data.archiver}
+                extra={"item_id": item_id, "archiver": data.archiver, "tasks_queued": len(archiver_names)}
             )
 
             return AddPocketArticleResponse(
