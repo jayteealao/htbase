@@ -192,14 +192,24 @@ class BaseArchiver(abc.ABC):
         try:
             from storage.database_storage import ArchiveArtifact, ArchiveStatus
 
+            # Parse storage_uri into gcs_bucket and gcs_path
+            gcs_path = None
+            gcs_bucket = None
+            storage_uri = archive_result.get('storage_uri', '')
+            if storage_uri.startswith('gs://'):
+                parts = storage_uri[5:].split('/', 1)
+                if len(parts) == 2:
+                    gcs_bucket = parts[0]
+                    gcs_path = parts[1]
+
             # Update artifact status with storage metadata
             self.db_storage.update_artifact_status(
                 item_id=item_id,
                 archiver=self.name,
                 status=ArchiveStatus.SUCCESS,
-                gcs_path=archive_result.get('gcs_path'),
-                gcs_bucket=archive_result.get('gcs_bucket'),
-                file_size=archive_result.get('compressed_size'),
+                gcs_path=gcs_path,
+                gcs_bucket=gcs_bucket,
+                file_size=archive_result.get('stored_size'),
                 compression_ratio=archive_result.get('compression_ratio')
             )
         except Exception as e:
