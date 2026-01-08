@@ -6,7 +6,7 @@ services:
 
     environment:
       # Database Configuration (using your existing PostgreSQL)
-      DB_HOST: postgres
+      DB_HOST: postgres.archivist.lol
       DB_PORT: 5432
       DB_NAME: postgres
       DB_USER: "${DB_USER}"
