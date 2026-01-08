@@ -5,12 +5,12 @@ services:
     restart: unless-stopped
 
     environment:
-      # Database Configuration (using your existing PostgreSQL)
-      DB_HOST: postgres.archivist.lol
-      DB_PORT: 5432
-      DB_NAME: postgres
+      # Database Configuration (passed via Portainer environment)
+      DB_HOST: "${DB_HOST}"
+      DB_PORT: "${DB_PORT:-5432}"
+      DB_NAME: "${DB_NAME:-postgres}"
       DB_USER: "${DB_USER}"
-      DB_PASSWORD: ${DB_PASSWORD}
+      DB_PASSWORD: "${DB_PASSWORD}"
 
       # Storage Backend Configuration
       STORAGE_BACKEND: gcs
