@@ -5,11 +5,15 @@ Stores article metadata and related data in Google Cloud Firestore.
 Optimized for real-time sync with mobile clients.
 """
 
+import base64
+import json
+import os
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 from google.cloud import firestore
 from google.api_core.exceptions import NotFound
+from google.oauth2 import service_account
 
 from .database_storage import (
     DatabaseStorageProvider,
@@ -52,8 +56,19 @@ class FirestoreStorage(DatabaseStorageProvider):
 
         Args:
             project_id: GCP project ID
+
+        Supports credentials via:
+        - FIREBASE_CREDENTIALS_BASE64 env var (base64-encoded JSON)
+        - GOOGLE_APPLICATION_CREDENTIALS env var (file path)
+        - Default application credentials
         """
-        self.client = firestore.Client(project=project_id)
+        creds_b64 = os.getenv("FIREBASE_CREDENTIALS_BASE64")
+        if creds_b64:
+            creds_json = json.loads(base64.b64decode(creds_b64))
+            credentials = service_account.Credentials.from_service_account_info(creds_json)
+            self.client = firestore.Client(project=project_id, credentials=credentials)
+        else:
+            self.client = firestore.Client(project=project_id)
         self.articles_ref = self.client.collection("articles")
 
     # ==================== Article Operations ====================

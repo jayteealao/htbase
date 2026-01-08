@@ -32,16 +32,13 @@ services:
       START_HT: "false"
       LOG_LEVEL: INFO
 
-      # Google Cloud Credentials
-      GOOGLE_APPLICATION_CREDENTIALS: /app/credentials/firebase-credentials.json
-      FIREBASE_APPLICATION_CREDENTIALS: /app/credentials/firebase-credentials.json
+      # Google Cloud Credentials (base64-encoded for Portainer deployment)
+      FIREBASE_CREDENTIALS_BASE64: "${FIREBASE_CREDENTIALS_BASE64}"
+      GCS_CREDENTIALS_BASE64: "${GCS_CREDENTIALS_BASE64}"
 
     volumes:
       # Data directory for local file storage
       - ./data:/data
-
-      # Firebase/GCP credentials (update path as needed)
-      - ./firebase-credentials.json:/app/credentials/firebase-credentials.json:ro
 
     networks:
       - default  # Uses the default network from main docker-compose.yml

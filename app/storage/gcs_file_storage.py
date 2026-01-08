@@ -5,13 +5,17 @@ Stores files in Google Cloud Storage with compression,
 lifecycle policies, and signed URL support.
 """
 
+import base64
 import gzip
+import json
+import os
 import shutil
 from pathlib import Path
 from typing import Optional, BinaryIO
 from datetime import datetime, timedelta
 
 from google.cloud import storage
+from google.oauth2 import service_account
 
 from .file_storage import (
     FileStorageProvider,
@@ -42,8 +46,19 @@ class GCSFileStorage(FileStorageProvider):
         Args:
             bucket_name: GCS bucket name
             project_id: Optional GCP project ID
+
+        Supports credentials via:
+        - GCS_CREDENTIALS_BASE64 env var (base64-encoded JSON)
+        - GOOGLE_APPLICATION_CREDENTIALS env var (file path)
+        - Default application credentials
         """
-        self.client = storage.Client(project=project_id)
+        creds_b64 = os.getenv("GCS_CREDENTIALS_BASE64")
+        if creds_b64:
+            creds_json = json.loads(base64.b64decode(creds_b64))
+            credentials = service_account.Credentials.from_service_account_info(creds_json)
+            self.client = storage.Client(project=project_id, credentials=credentials)
+        else:
+            self.client = storage.Client(project=project_id)
         self.bucket = self.client.bucket(bucket_name)
         self.bucket_name = bucket_name
 
