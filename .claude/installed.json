@@ -1,0 +1,59 @@
+{
+  "version": "1.0.0",
+  "installedAt": "2026-01-08T11:13:16.801Z",
+  "updatedAt": "2026-01-08T11:13:16.826Z",
+  "plugins": [
+    {
+      "name": "compound-engineering",
+      "version": "2.25.0",
+      "sourcePath": "C:\\Users\\jayte\\Documents\\dev\\compound-engineering-plugin",
+      "installedAt": "2026-01-08T11:13:16.801Z",
+      "components": {
+        "agents": 27,
+        "commands": 21,
+        "skills": 14,
+        "mcpServers": 2,
+        "variants": 0
+      }
+    },
+    {
+      "name": "coding-tutor",
+      "version": "1.2.1",
+      "sourcePath": "C:\\Users\\jayte\\Documents\\dev\\compound-engineering-plugin",
+      "installedAt": "2026-01-08T11:13:16.809Z",
+      "components": {
+        "agents": 0,
+        "commands": 3,
+        "skills": 1,
+        "mcpServers": 0,
+        "variants": 0
+      }
+    },
+    {
+      "name": "dev-browser",
+      "version": "1.0.1",
+      "sourcePath": "C:\\Users\\jayte\\Documents\\dev\\dev-browser",
+      "installedAt": "2026-01-08T11:13:16.819Z",
+      "components": {
+        "agents": 0,
+        "commands": 0,
+        "skills": 1,
+        "mcpServers": 0,
+        "variants": 0
+      }
+    },
+    {
+      "name": "daily-carry",
+      "version": "1.0.0",
+      "sourcePath": "C:\\Users\\jayte\\Documents\\dev\\agent-skills",
+      "installedAt": "2026-01-08T11:13:16.826Z",
+      "components": {
+        "agents": 0,
+        "commands": 0,
+        "skills": 2,
+        "mcpServers": 0,
+        "variants": 0
+      }
+    }
+  ]
+}
