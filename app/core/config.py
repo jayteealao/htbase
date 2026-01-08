@@ -358,7 +358,7 @@ class AppSettings(BaseSettings):
     """
 
     data_dir: Path = Field(default=Path("/data"), validation_alias=AliasChoices("DATA_DIR"))
-    database: DatabaseSettings = Field(default_factory=DatabaseSettings)
+    database: DatabaseSettings = DatabaseSettings()
     ht_bin: str = Field(default="/usr/local/bin/ht", validation_alias=AliasChoices("HT_BIN"))
     monolith_bin: str = Field(
         default="/usr/local/bin/monolith",
