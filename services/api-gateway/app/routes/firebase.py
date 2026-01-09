@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import uuid
 from datetime import timedelta
 from typing import Optional
@@ -35,28 +36,6 @@ def get_db():
 # Request/Response Models
 
 
-class AddPocketArticleRequest(BaseModel):
-    """Request model for adding a Pocket article."""
-
-    user_id: str = Field(..., description="User identifier")
-    url: str = Field(..., description="Article URL to archive")
-    pocket_data: dict = Field(
-        default_factory=dict, description="Pocket metadata (title, excerpt, tags, etc.)"
-    )
-    archiver: str = Field(
-        default="all", description="Archiver to use (monolith, singlefile, all, etc.)"
-    )
-
-
-class AddPocketArticleResponse(BaseModel):
-    """Response model for adding a Pocket article."""
-
-    article_id: str = Field(..., description="Created article identifier")
-    status: str = Field(..., description="Status (queued, processing, completed)")
-    message: str = Field(..., description="Human-readable message")
-    task_id: Optional[str] = Field(None, description="Background task ID if queued")
-
-
 class DownloadURLResponse(BaseModel):
     """Response model for download URL generation."""
 
@@ -64,14 +43,6 @@ class DownloadURLResponse(BaseModel):
     expires_in: int = Field(..., description="URL expiration in seconds")
     archiver: str = Field(..., description="Archiver type")
     gcs_path: Optional[str] = Field(None, description="GCS storage path")
-
-
-class SaveArticleRequest(BaseModel):
-    """Request model for saving a basic article."""
-
-    url: str = Field(..., description="Article URL to archive")
-    archiver: str = Field(default="all", description="Archiver to use")
-    metadata: dict = Field(default_factory=dict, description="Optional metadata")
 
 
 class ArchiveArticleRequest(BaseModel):
@@ -93,6 +64,41 @@ class ArchiveArticleResponse(BaseModel):
     task_id: Optional[str] = Field(None, description="Background task ID if queued")
 
 
+class AddArticleRequest(BaseModel):
+    """
+    Consolidated request model for adding articles.
+
+    Replaces add-pocket-article and save endpoints.
+    Supports custom item_id, Pocket metadata, generic metadata, and Firestore sync.
+    """
+
+    # Core fields
+    url: str = Field(..., description="Article URL to archive")
+    archiver: str = Field(default="all", description="Archiver to use (all, monolith, readability, etc.)")
+
+    # NEW: Custom item_id support
+    item_id: Optional[str] = Field(None, description="Custom article identifier (alphanumeric, underscore, hyphen only)")
+
+    # From add-pocket-article
+    user_id: Optional[str] = Field(None, description="User identifier (for Pocket integration)")
+    pocket_data: Optional[dict] = Field(None, description="Pocket metadata (title, excerpt, tags, word_count, etc.)")
+
+    # From save (generic metadata)
+    metadata: Optional[dict] = Field(None, description="Generic metadata (title, author, excerpt)")
+
+    # Control Firestore sync
+    enable_firestore_sync: bool = Field(True, description="Enable Firestore write (default: true)")
+
+
+class AddArticleResponse(BaseModel):
+    """Response model for consolidated add-article endpoint."""
+
+    item_id: str = Field(..., description="Article identifier (user-provided or auto-generated)")
+    status: str = Field(..., description="Status (queued, exists, processing, completed)")
+    message: str = Field(..., description="Human-readable status message")
+    task_id: Optional[str] = Field(None, description="Background task ID if queued")
+
+
 # Available archivers
 AVAILABLE_ARCHIVERS = ["singlefile", "monolith", "readability", "pdf", "screenshot"]
 
@@ -101,6 +107,17 @@ def _generate_item_id(url: str, prefix: str = "pocket") -> str:
     """Generate item_id from URL hash."""
     url_hash = hashlib.sha256(url.encode()).hexdigest()[:12]
     return f"{prefix}_{url_hash}"
+
+
+def validate_item_id(item_id: str) -> bool:
+    """
+    Validate item_id format: alphanumeric + underscore/hyphen only, max 255 chars.
+
+    Returns True if valid, False otherwise.
+    """
+    if not item_id or len(item_id) > 255:
+        return False
+    return bool(re.match(r'^[a-zA-Z0-9_-]+$', item_id))
 
 
 def _dispatch_archive_tasks(
@@ -149,124 +166,6 @@ def _dispatch_archive_tasks(
 
     db.commit()
     return task_id, artifact_ids
-
-
-@router.post("/add-pocket-article", response_model=AddPocketArticleResponse, dependencies=[Depends(rate_limit_archive)])
-async def add_pocket_article(
-    data: AddPocketArticleRequest,
-    db: Session = Depends(get_db),
-) -> AddPocketArticleResponse:
-    """
-    Add a Pocket article to the archive system.
-
-    This endpoint:
-    1. Creates a database record with Pocket metadata
-    2. Creates article in Firestore (if configured)
-    3. Triggers archival via Celery workers
-    4. Returns article ID and status
-    """
-    from shared.config import get_settings
-    from shared.utils import sanitize_filename
-
-    settings = get_settings()
-
-    # Generate item_id from URL
-    item_id = _generate_item_id(data.url, "pocket")
-
-    try:
-        # Check if article already exists
-        existing = db.query(ArchivedUrl).filter(ArchivedUrl.item_id == item_id).first()
-
-        if existing:
-            # Article exists - check if we need to re-queue
-            logger.info(
-                "Article already exists",
-                extra={"item_id": item_id, "archived_url_id": existing.id},
-            )
-            return AddPocketArticleResponse(
-                article_id=item_id,
-                status="exists",
-                message="Article already exists in the system",
-                task_id=None,
-            )
-
-        # Create new archived URL record
-        archived_url = ArchivedUrl(
-            item_id=item_id,
-            url=data.url,
-            name=data.pocket_data.get("title", ""),
-        )
-        db.add(archived_url)
-        db.flush()
-
-        # Create metadata record
-        metadata = UrlMetadata(
-            archived_url_id=archived_url.id,
-            title=data.pocket_data.get("title"),
-            byline=data.pocket_data.get("author"),
-            description=data.pocket_data.get("excerpt"),  # Map excerpt to description column
-            word_count=data.pocket_data.get("word_count"),
-        )
-        db.add(metadata)
-
-        # Write to Firestore if configured
-        if settings.firestore.project_id:
-            try:
-                from shared.storage.firestore_storage import FirestoreStorage
-                from shared.storage.database_storage import ArticleMetadata
-
-                firestore_storage = FirestoreStorage(project_id=settings.firestore.project_id)
-                article_metadata = ArticleMetadata(
-                    item_id=item_id,
-                    url=data.url,
-                    title=data.pocket_data.get("title"),
-                    byline=data.pocket_data.get("author"),
-                    excerpt=data.pocket_data.get("excerpt"),
-                    word_count=data.pocket_data.get("word_count"),
-                )
-                firestore_storage.create_article(article_metadata)
-                logger.info("Created article in Firestore", extra={"item_id": item_id})
-            except Exception as e:
-                logger.warning(f"Failed to create Firestore document: {e}")
-
-        # Determine archivers to use
-        if data.archiver == "all":
-            archivers = AVAILABLE_ARCHIVERS
-        else:
-            archivers = [data.archiver]
-
-        # Dispatch archive tasks
-        task_id, artifact_ids = _dispatch_archive_tasks(
-            item_id=item_id,
-            url=data.url,
-            archived_url_id=archived_url.id,
-            archivers=archivers,
-            db=db,
-        )
-
-        logger.info(
-            "Pocket article queued for archival",
-            extra={
-                "item_id": item_id,
-                "user_id": data.user_id,
-                "archivers": archivers,
-                "task_id": task_id,
-            },
-        )
-
-        return AddPocketArticleResponse(
-            article_id=item_id,
-            status="queued",
-            message=f"Article queued for archival with {len(archivers)} archiver(s)",
-            task_id=task_id,
-        )
-
-    except Exception as e:
-        logger.error(f"Failed to add Pocket article: {e}", exc_info=True)
-        db.rollback()
-        raise HTTPException(
-            status_code=500, detail=f"Failed to add Pocket article: {str(e)}"
-        )
 
 
 @router.get("/download/{item_id}/{archiver}", response_model=DownloadURLResponse, dependencies=[Depends(rate_limit_download)])
@@ -365,85 +264,6 @@ async def generate_download_url(
         )
 
 
-@router.post("/save", response_model=AddPocketArticleResponse, dependencies=[Depends(rate_limit_archive)])
-async def save_article(
-    data: SaveArticleRequest,
-    db: Session = Depends(get_db),
-) -> AddPocketArticleResponse:
-    """
-    Save a basic article (non-Pocket).
-
-    Similar to add-pocket-article but with minimal metadata.
-    """
-    # Generate item_id from URL
-    item_id = _generate_item_id(data.url, "article")
-
-    try:
-        # Check if article already exists
-        existing = db.query(ArchivedUrl).filter(ArchivedUrl.item_id == item_id).first()
-
-        if existing:
-            return AddPocketArticleResponse(
-                article_id=item_id,
-                status="exists",
-                message="Article already exists in the system",
-                task_id=None,
-            )
-
-        # Create new archived URL record
-        archived_url = ArchivedUrl(
-            item_id=item_id,
-            url=data.url,
-            name=data.metadata.get("title", ""),
-        )
-        db.add(archived_url)
-        db.flush()
-
-        # Create metadata if provided
-        if data.metadata:
-            metadata = UrlMetadata(
-                archived_url_id=archived_url.id,
-                title=data.metadata.get("title"),
-                byline=data.metadata.get("author"),
-                description=data.metadata.get("excerpt"),  # Map excerpt to description column
-            )
-            db.add(metadata)
-
-        # Determine archivers to use
-        if data.archiver == "all":
-            archivers = AVAILABLE_ARCHIVERS
-        else:
-            archivers = [data.archiver]
-
-        # Dispatch archive tasks
-        task_id, artifact_ids = _dispatch_archive_tasks(
-            item_id=item_id,
-            url=data.url,
-            archived_url_id=archived_url.id,
-            archivers=archivers,
-            db=db,
-        )
-
-        logger.info(
-            "Article queued for archival",
-            extra={"item_id": item_id, "archivers": archivers, "task_id": task_id},
-        )
-
-        return AddPocketArticleResponse(
-            article_id=item_id,
-            status="queued",
-            message=f"Article queued for archival with {len(archivers)} archiver(s)",
-            task_id=task_id,
-        )
-
-    except Exception as e:
-        logger.error(f"Failed to save article: {e}", exc_info=True)
-        db.rollback()
-        raise HTTPException(
-            status_code=500, detail=f"Failed to save article: {str(e)}"
-        )
-
-
 @router.post("/archive", response_model=ArchiveArticleResponse, dependencies=[Depends(rate_limit_archive)])
 async def archive_article(
     data: ArchiveArticleRequest,
@@ -455,16 +275,26 @@ async def archive_article(
     This endpoint is called by the Firebase Cloud Function when a user saves
     an article and it doesn't exist in the shared collection yet.
 
+    Supports custom item_id (user-provided or auto-generated).
+
     Flow:
-    1. Create article record in database (if not exists)
-    2. Queue archival task via Celery
-    3. Return immediately (processing happens async)
+    1. Validate item_id format (if provided)
+    2. Create article record in database (if not exists)
+    3. Queue archival task via Celery
+    4. Return immediately (processing happens async)
     """
     from shared.config import get_settings
 
     settings = get_settings()
 
     try:
+        # Validate item_id format
+        if data.item_id and not validate_item_id(data.item_id):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid item_id format. Use alphanumeric, underscore, and hyphen only (max 255 chars)"
+            )
+
         # Check if article exists
         archived_url = (
             db.query(ArchivedUrl).filter(ArchivedUrl.item_id == data.item_id).first()
@@ -555,4 +385,165 @@ async def archive_article(
         db.rollback()
         raise HTTPException(
             status_code=500, detail=f"Failed to archive article: {str(e)}"
+        )
+
+
+@router.post("/add-article", response_model=AddArticleResponse, dependencies=[Depends(rate_limit_archive)])
+async def add_article(
+    data: AddArticleRequest,
+    db: Session = Depends(get_db),
+) -> AddArticleResponse:
+    """
+    Add article for archiving with optional custom item_id.
+
+    This consolidated endpoint replaces /add-pocket-article and /save.
+    Supports all features from both endpoints:
+    - Custom item_id (optional)
+    - Pocket metadata (title, excerpt, author, word_count, tags, etc.)
+    - Generic metadata (title, author, excerpt)
+    - User tracking (user_id for Pocket integration)
+    - Firestore sync (enabled by default, can be disabled)
+
+    Flow:
+    1. Validate and determine item_id (user-provided or auto-generated)
+    2. Check for existing article by URL (URL is unique constraint)
+    3. Create article record with metadata
+    4. Write to Firestore if enabled
+    5. Queue archival tasks
+    """
+    from shared.config import get_settings
+
+    settings = get_settings()
+
+    try:
+        # 1. Validate and determine item_id
+        if data.item_id:
+            # User provided custom item_id - validate it
+            if not validate_item_id(data.item_id):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid item_id format. Use alphanumeric, underscore, and hyphen only (max 255 chars)"
+                )
+            item_id = data.item_id
+        else:
+            # Auto-generate with prefix based on metadata source
+            prefix = "pocket" if data.pocket_data else "article"
+            item_id = _generate_item_id(data.url, prefix)
+
+        # 2. Check existing by URL (URL is unique constraint)
+        existing = db.query(ArchivedUrl).filter(ArchivedUrl.url == data.url).first()
+
+        if existing:
+            # Conflict resolution: use existing item_id
+            if data.item_id and data.item_id != existing.item_id:
+                logger.warning(
+                    f"item_id mismatch for url={data.url}: "
+                    f"requested={data.item_id}, existing={existing.item_id}. "
+                    f"Using existing item_id."
+                )
+            return AddArticleResponse(
+                item_id=existing.item_id,
+                status="exists",
+                message=f"Article already archived with item_id={existing.item_id}",
+                task_id=None,
+            )
+
+        # 3. Create article with item_id
+        title = None
+        if data.pocket_data:
+            title = data.pocket_data.get("title")
+        elif data.metadata:
+            title = data.metadata.get("title")
+
+        archived_url = ArchivedUrl(
+            item_id=item_id,
+            url=data.url,
+            name=title or "",
+        )
+        db.add(archived_url)
+        db.flush()  # Get ID for metadata
+
+        # 4. Add metadata if provided (Pocket or generic)
+        if data.pocket_data:
+            metadata = UrlMetadata(
+                archived_url_id=archived_url.id,
+                title=data.pocket_data.get("title"),
+                byline=data.pocket_data.get("author"),
+                description=data.pocket_data.get("excerpt"),
+                word_count=data.pocket_data.get("word_count"),
+            )
+            db.add(metadata)
+        elif data.metadata:
+            metadata = UrlMetadata(
+                archived_url_id=archived_url.id,
+                title=data.metadata.get("title"),
+                byline=data.metadata.get("author"),
+                description=data.metadata.get("excerpt"),
+            )
+            db.add(metadata)
+
+        # 5. Firestore sync (if enabled)
+        if data.enable_firestore_sync and settings.firestore.project_id:
+            try:
+                from shared.storage.firestore_storage import FirestoreStorage
+                from shared.storage.database_storage import ArticleMetadata
+
+                firestore_storage = FirestoreStorage(project_id=settings.firestore.project_id)
+
+                # Build article metadata for Firestore
+                article_metadata = ArticleMetadata(
+                    item_id=item_id,
+                    url=data.url,
+                    title=title,
+                    byline=data.pocket_data.get("author") if data.pocket_data else data.metadata.get("author") if data.metadata else None,
+                    excerpt=data.pocket_data.get("excerpt") if data.pocket_data else data.metadata.get("excerpt") if data.metadata else None,
+                    word_count=data.pocket_data.get("word_count") if data.pocket_data else None,
+                )
+
+                firestore_storage.create_article(article_metadata)
+                logger.info("Created article in Firestore", extra={"item_id": item_id})
+            except Exception as e:
+                logger.warning(f"Firestore sync failed for {item_id}: {e}")
+                # Continue - Firestore is best-effort
+
+        # 6. Queue archive tasks
+        if data.archiver == "all":
+            archivers = AVAILABLE_ARCHIVERS
+        else:
+            archivers = [data.archiver]
+
+        task_id, artifact_ids = _dispatch_archive_tasks(
+            item_id=item_id,
+            url=data.url,
+            archived_url_id=archived_url.id,
+            archivers=archivers,
+            db=db,
+        )
+
+        logger.info(
+            "Article queued for archival",
+            extra={
+                "item_id": item_id,
+                "user_id": data.user_id,
+                "archivers": archivers,
+                "task_id": task_id,
+                "custom_item_id": bool(data.item_id),
+            },
+        )
+
+        return AddArticleResponse(
+            item_id=item_id,
+            status="queued",
+            message=f"Article queued for archiving with {len(archivers)} archiver(s)",
+            task_id=task_id,
+        )
+
+    except HTTPException:
+        # Re-raise HTTP exceptions (validation errors, etc.)
+        raise
+    except Exception as e:
+        logger.error(f"Failed to add article: {e}", exc_info=True)
+        db.rollback()
+        raise HTTPException(
+            status_code=500, detail=f"Failed to add article: {str(e)}"
         )
