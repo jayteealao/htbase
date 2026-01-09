@@ -22,6 +22,7 @@ from core.logging import setup_logging
 from core.utils import cleanup_chromium_singleton_locks
 # init_db is deprecated - engine initialization happens automatically
 from core.command_runner import CommandRunner
+from celery_app import celery_app
 from services.summarizer import SummaryService
 from services.providers import ProviderFactory, ProviderChain
 from services.summarization import ArticleChunker, PromptBuilder, ResponseParser
@@ -44,7 +45,12 @@ settings = get_settings()
 setup_logging(settings.log_level)
 logger = logging.getLogger(__name__)
 
-command_runner = CommandRunner(debug=settings.log_level == "DEBUG")
+service_role = (settings.service_role or "all-in-one").strip().lower()
+is_api_gateway = service_role in {"api-gateway", "api"}
+
+celery_instance = celery_app if settings.celery.enabled else None
+if is_api_gateway and celery_instance is None:
+    raise RuntimeError("API gateway role requires Celery to dispatch work to workers")
 
 
 @asynccontextmanager
@@ -58,24 +64,30 @@ async def lifespan_context(app: FastAPI):
     user_data_dir.mkdir(parents=True, exist_ok=True)
     cleanup_chromium_singleton_locks(user_data_dir)
 
-    # Log chromium and monolith versions (best-effort)
-    try:
-        out = subprocess.check_output([settings.chromium.binary, "--version"], text=True).strip()
-        logger.info(f"Chromium: {out}")
-    except Exception:
-        logger.warning("Chromium: not available")
-    try:
-        out = subprocess.check_output([settings.monolith_bin, "--version"], text=True).strip()
-        logger.info(f"Monolith: {out}")
-    except Exception:
-        logger.warning("Monolith: not available")
-    try:
-        out = subprocess.check_output([settings.singlefile_bin, "--version"], text=True).strip()
-        logger.info(f"SingleFile CLI: {out}")
-    except Exception:
-        logger.warning("SingleFile CLI: not available")
+    command_runner: Optional[CommandRunner] = None
+    if not is_api_gateway:
+        command_runner = CommandRunner(debug=settings.log_level == "DEBUG")
+
+        # Log chromium and monolith versions (best-effort)
+        try:
+            out = subprocess.check_output([settings.chromium.binary, "--version"], text=True).strip()
+            logger.info(f"Chromium: {out}")
+        except Exception:
+            logger.warning("Chromium: not available")
+        try:
+            out = subprocess.check_output([settings.monolith_bin, "--version"], text=True).strip()
+            logger.info(f"Monolith: {out}")
+        except Exception:
+            logger.warning("Monolith: not available")
+        try:
+            out = subprocess.check_output([settings.singlefile_bin, "--version"], text=True).strip()
+            logger.info(f"SingleFile CLI: {out}")
+        except Exception:
+            logger.warning("SingleFile CLI: not available")
+        logger.info(f"CommandRunner debug mode: {command_runner.debug}")
+    else:
+        logger.info("API gateway role: skipping local archiver binary initialization")
     logger.info(f"Summarization enabled: {settings.summarization.enabled}")
-    logger.info(f"CommandRunner debug mode: {command_runner.debug}")
 
     # Initialize storage providers (support multiple)
     file_storage_providers: list[FileStorageProvider] = []
@@ -140,19 +152,35 @@ async def lifespan_context(app: FastAPI):
         db_storage = primary_db
         logger.info("Using PostgreSQL only (dual persistence disabled)")
 
-    # Register archivers using factory with storage providers
-    # Registration order matters when using the "all" pipeline
-    # Run readability first so its DOM dump can be reused by monolith.
-    factory = ArchiverFactory(settings, command_runner, file_storage_providers, db_storage)
-    factory.register("readability", ReadabilityArchiver)
-    factory.register("monolith", MonolithArchiver)
-    factory.register("singlefile-cli", SingleFileCLIArchiver)
-    # Run Chromium-derived captures last
-    factory.register("screenshot", ScreenshotArchiver)
-    factory.register("pdf", PDFArchiver)
+    archiver_registry = settings.archivers
+    if is_api_gateway:
+        logger.info(
+            "API gateway role: deferring archiver execution to workers",
+            extra={"archivers": archiver_registry},
+        )
+        app.state.archivers = {name: None for name in archiver_registry}
+        app.state.archiver_factory = None
+    else:
+        # Register archivers using factory with storage providers
+        # Registration order matters when using the "all" pipeline
+        # Run readability first so its DOM dump can be reused by monolith.
+        factory = ArchiverFactory(settings, command_runner, file_storage_providers, db_storage)
+        registry_map = {
+            "readability": ReadabilityArchiver,
+            "monolith": MonolithArchiver,
+            "singlefile-cli": SingleFileCLIArchiver,
+            "screenshot": ScreenshotArchiver,
+            "pdf": PDFArchiver,
+        }
+        for name in archiver_registry:
+            archiver_cls = registry_map.get(name)
+            if not archiver_cls:
+                logger.warning("Unknown archiver requested", extra={"archiver": name})
+                continue
+            factory.register(name, archiver_cls)
 
-    app.state.archivers = factory.create_all()
-    app.state.archiver_factory = factory  # Store factory for potential dynamic registration
+        app.state.archivers = factory.create_all()
+        app.state.archiver_factory = factory  # Store factory for potential dynamic registration
 
     # Store storage providers on app state for API access
     app.state.file_storage_providers = file_storage_providers
@@ -174,106 +202,120 @@ async def lifespan_context(app: FastAPI):
     app.state.command_runner = command_runner
 
     # Build summarization components using dependency injection
-    logger.info("Initializing summarization service components")
-
-    # Create provider chain
-    provider_factory = ProviderFactory(settings.summarization)
-    try:
-        providers = provider_factory.create_all_configured()
-        provider_chain = ProviderChain(
-            providers=providers,
-            sticky=settings.summarization.provider_sticky
-        )
-        logger.info(
-            "Created provider chain",
-            extra={
-                "provider_count": len(providers),
-                "provider_names": [p.name for p in providers],
-                "sticky": settings.summarization.provider_sticky,
-            }
-        )
-    except ValueError as e:
-        logger.error(f"Failed to create provider chain: {e}")
-        provider_chain = None
-
-    # Create orchestration components
-    chunker = ArticleChunker(chunk_size=settings.summarization.chunk_size)
-    prompt_builder = PromptBuilder()
-    response_parser = ResponseParser()
-
-    # Assemble SummaryService with all dependencies
-    if provider_chain and chunker.is_enabled:
-        app.state.summarizer = SummaryService(
-            provider=provider_chain,
-            prompt_builder=prompt_builder,
-            response_parser=response_parser,
-            chunker=chunker,
-            settings=settings,
-        )
-        logger.info("SummaryService initialized successfully")
-    else:
+    if is_api_gateway:
+        logger.info("API gateway role: delegating summaries to worker service")
         app.state.summarizer = None
-        logger.warning("SummaryService disabled: provider chain or chunker unavailable")
+        app.state.summarization_manager = None
+        app.state.summarizer_manager = None
+        app.state.summarization_queue = summarization_queue
+        app.state.summarization = None
+        app.state.summarization_coordinator = None
+    else:
+        logger.info("Initializing summarization service components")
 
-    app.state.summarization_manager = SummarizationTaskManager(
-        settings,
-        summarizer=app.state.summarizer,
-        task_queue=summarization_queue,
-    )
-    app.state.summarization_manager.start()
-    app.state.summarizer_manager = app.state.summarization_manager
-    app.state.summarization_queue = summarization_queue
-    app.state.summarization = SummarizationCoordinator(
-        settings,
-        summarizer=app.state.summarizer,
-        task_queue=summarization_queue,
-    )
-    app.state.summarization_coordinator = app.state.summarization
+        # Create provider chain
+        provider_factory = ProviderFactory(settings.summarization)
+        try:
+            providers = provider_factory.create_all_configured()
+            provider_chain = ProviderChain(
+                providers=providers,
+                sticky=settings.summarization.provider_sticky
+            )
+            logger.info(
+                "Created provider chain",
+                extra={
+                    "provider_count": len(providers),
+                    "provider_names": [p.name for p in providers],
+                    "sticky": settings.summarization.provider_sticky,
+                }
+            )
+        except ValueError as e:
+            logger.error(f"Failed to create provider chain: {e}")
+            provider_chain = None
+
+        # Create orchestration components
+        chunker = ArticleChunker(chunk_size=settings.summarization.chunk_size)
+        prompt_builder = PromptBuilder()
+        response_parser = ResponseParser()
+
+        # Assemble SummaryService with all dependencies
+        if provider_chain and chunker.is_enabled:
+            app.state.summarizer = SummaryService(
+                provider=provider_chain,
+                prompt_builder=prompt_builder,
+                response_parser=response_parser,
+                chunker=chunker,
+                settings=settings,
+            )
+            logger.info("SummaryService initialized successfully")
+        else:
+            app.state.summarizer = None
+            logger.warning("SummaryService disabled: provider chain or chunker unavailable")
+
+        app.state.summarization_manager = SummarizationTaskManager(
+            settings,
+            summarizer=app.state.summarizer,
+            task_queue=summarization_queue,
+        )
+        app.state.summarization_manager.start()
+        app.state.summarizer_manager = app.state.summarization_manager
+        app.state.summarization_queue = summarization_queue
+        app.state.summarization = SummarizationCoordinator(
+            settings,
+            summarizer=app.state.summarizer,
+            task_queue=summarization_queue,
+        )
+        app.state.summarization_coordinator = app.state.summarization
     # Inject archivers into task manager now that they exist
     app.state.task_manager = ArchiverTaskManager(
         settings,
         app.state.archivers,
         summarization=app.state.summarization,
+        celery_app=celery_instance,
+        celery_queue_prefix=settings.celery.archive_queue_prefix,
     )
     # Alias for Firebase integration compatibility
     app.state.archiver_task_manager = app.state.task_manager
 
-    try:
-        logger.info("Resuming any pending artifacts...")
-        resumed_tasks = app.state.task_manager.resume_pending_artifacts()
-        if resumed_tasks:
-            logger.info(
-                f"Recovered pending artifacts across {len(resumed_tasks)} task(s)."
-            )
-    except Exception as exc:
-        logger.error(f"Failed to resume pending artifacts: {exc}")
-
-    # Initialize and start cleanup task manager
-    app.state.cleanup_manager = CleanupTaskManager(settings)
-    app.state.cleanup_manager.start()
-    logger.info("Cleanup task manager started")
-
-    # Inject cleanup manager into all archivers
-    for archiver in app.state.archivers.values():
-        archiver._cleanup_manager = app.state.cleanup_manager
-
-    # Schedule periodic failed output cleanup (once per day)
-    import threading
-    import time
-    def periodic_failed_cleanup():
-        while True:
-            time.sleep(86400)  # 24 hours
-            try:
-                count = app.state.cleanup_manager.cleanup_failed_outputs(
-                    retention_days=settings.failed_output_retention_days
+    if not is_api_gateway:
+        try:
+            logger.info("Resuming any pending artifacts...")
+            resumed_tasks = app.state.task_manager.resume_pending_artifacts()
+            if resumed_tasks:
+                logger.info(
+                    f"Recovered pending artifacts across {len(resumed_tasks)} task(s)."
                 )
-                logger.info(f"Periodic cleanup removed {count} failed outputs")
-            except Exception as e:
-                logger.error(f"Periodic cleanup failed: {e}")
+        except Exception as exc:
+            logger.error(f"Failed to resume pending artifacts: {exc}")
 
-    cleanup_thread = threading.Thread(target=periodic_failed_cleanup, daemon=True)
-    cleanup_thread.start()
-    logger.info("Started periodic failed output cleanup thread")
+        # Initialize and start cleanup task manager
+        app.state.cleanup_manager = CleanupTaskManager(settings)
+        app.state.cleanup_manager.start()
+        logger.info("Cleanup task manager started")
+
+        # Inject cleanup manager into all archivers
+        for archiver in app.state.archivers.values():
+            if archiver is None:
+                continue
+            archiver._cleanup_manager = app.state.cleanup_manager
+
+        # Schedule periodic failed output cleanup (once per day)
+        import threading
+        import time
+        def periodic_failed_cleanup():
+            while True:
+                time.sleep(86400)  # 24 hours
+                try:
+                    count = app.state.cleanup_manager.cleanup_failed_outputs(
+                        retention_days=settings.failed_output_retention_days
+                    )
+                    logger.info(f"Periodic cleanup removed {count} failed outputs")
+                except Exception as e:
+                    logger.error(f"Periodic cleanup failed: {e}")
+
+        cleanup_thread = threading.Thread(target=periodic_failed_cleanup, daemon=True)
+        cleanup_thread.start()
+        logger.info("Started periodic failed output cleanup thread")
     try:
         yield
     finally:

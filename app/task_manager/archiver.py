@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import logging
 import uuid
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from threading import Event
 from typing import Any, Dict, List, Optional, Sequence
+
+from celery import Celery
 
 from core.config import AppSettings
 from core.utils import check_url_archivability, rewrite_paywalled_url, sanitize_filename, get_directory_size, extract_original_url
@@ -51,11 +53,15 @@ class ArchiverTaskManager(BackgroundTaskManager[BatchTask]):
         summarization: SummarizationCoordinator | None = None,
         requeue_priorities: Optional[Sequence[str]] = None,
         requeue_chunk_size: int = DEFAULT_REQUEUE_CHUNK_SIZE,
+        celery_app: Celery | None = None,
+        celery_queue_prefix: Optional[str] = None,
     ) -> None:
         super().__init__()
         self.settings = settings
         self.archivers = archivers
         self._summarization = summarization
+        self._celery_app = celery_app
+        self._celery_queue_prefix = (celery_queue_prefix or "archive").rstrip(".")
 
         # Repository instances
         self.artifact_repo = ArchiveArtifactRepository(settings.database.resolved_path(settings.data_dir))
@@ -153,8 +159,12 @@ class ArchiverTaskManager(BackgroundTaskManager[BatchTask]):
                     )
                 )
 
-        self.submit(BatchTask(task_id=task_id, archiver_name=archiver_name, items=batch_items))
-        logger.info("Task queued", extra={"task_id": task_id, "archiver": archiver_name, "item_count": len(batch_items)})
+        batch_task = BatchTask(task_id=task_id, archiver_name=archiver_name, items=batch_items)
+        self._dispatch_batch_task(batch_task, wait_for_completion=False)
+        logger.info(
+            "Task queued",
+            extra={"task_id": task_id, "archiver": archiver_name, "item_count": len(batch_items), "celery": bool(self._celery_app)},
+        )
         return task_id
 
     def enqueue_artifacts(
@@ -385,13 +395,14 @@ class ArchiverTaskManager(BackgroundTaskManager[BatchTask]):
                 continue
 
             event = Event() if wait_for_completion else None
-            self.submit(
+            self._dispatch_batch_task(
                 BatchTask(
                     task_id=task_id,
                     archiver_name=archiver_name,
                     items=batch_items,
                     completion_event=event,
-                )
+                ),
+                wait_for_completion=wait_for_completion,
             )
             logger.info(
                 "Requeue task submitted",
@@ -411,6 +422,30 @@ class ArchiverTaskManager(BackgroundTaskManager[BatchTask]):
             extra={"task_ids": task_ids, "wait": wait_for_completion}
         )
         return task_ids
+
+    def _dispatch_batch_task(self, task: BatchTask, *, wait_for_completion: bool) -> None:
+        if self._celery_app is None:
+            self.submit(task)
+            return
+
+        if wait_for_completion:
+            logger.warning(
+                "wait_for_completion requested but Celery dispatch does not support synchronous waiting",
+                extra={"task_id": task.task_id},
+            )
+
+        for item in task.items:
+            payload = {"task_id": task.task_id, "item": asdict(item)}
+            queue_name = f"{self._celery_queue_prefix}.{item.archiver_name}"
+            self._celery_app.send_task(
+                "htbase.archive.process_item",
+                args=[payload],
+                queue=queue_name,
+            )
+            logger.info(
+                "Dispatched archiver item to Celery",
+                extra={"task_id": task.task_id, "archiver": item.archiver_name, "queue": queue_name},
+            )
 
     def process(self, task: BatchTask) -> None:  # type: ignore[override]
         for item in task.items:
