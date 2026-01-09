@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import shlex
 
 from shared.models import ArchiveResult
 
@@ -42,10 +41,6 @@ class SingleFileArchiver(BaseArchiver):
         # Clean up Chromium singleton locks
         self._cleanup_chromium_locks(user_data_dir)
 
-        # Build command
-        url_q = shlex.quote(url)
-        out_q = shlex.quote(str(out_path))
-
         # Build browser args
         browser_args = [
             f"--user-data-dir={user_data_dir}",
@@ -55,11 +50,14 @@ class SingleFileArchiver(BaseArchiver):
         ]
         browser_args_json = json.dumps(browser_args)
 
-        cmd = (
-            f"{singlefile_bin} {url_q} {out_q} "
-            f"--browser-executable-path={chromium_bin} "
-            f"--browser-args={shlex.quote(browser_args_json)}"
-        )
+        # Build command as list (safe from command injection)
+        cmd = [
+            singlefile_bin,
+            url,
+            str(out_path),
+            f"--browser-executable-path={chromium_bin}",
+            f"--browser-args={browser_args_json}",
+        ]
 
         # Execute command
         result = self.command_runner.execute(

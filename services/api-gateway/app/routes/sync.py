@@ -13,6 +13,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from shared.auth import verify_api_key
+from shared.rate_limit import rate_limit_admin
 from shared.db import (
     get_session,
     ArchivedUrl,
@@ -138,7 +140,7 @@ def _build_firestore_document(
     return doc
 
 
-@router.post("/postgres-to-firestore", response_model=PostgresToFirestoreSyncResponse)
+@router.post("/postgres-to-firestore", response_model=PostgresToFirestoreSyncResponse, dependencies=[Depends(rate_limit_admin)])
 async def sync_postgres_to_firestore(
     data: PostgresToFirestoreSyncRequest,
     db: Session = Depends(get_db),
@@ -337,7 +339,7 @@ async def sync_postgres_to_firestore(
         )
 
 
-@router.post("/firestore-to-postgres", response_model=FirestoreToPostgresSyncResponse)
+@router.post("/firestore-to-postgres", response_model=FirestoreToPostgresSyncResponse, dependencies=[Depends(rate_limit_admin)])
 async def sync_firestore_to_postgres(
     data: FirestoreToPostgresSyncRequest,
     db: Session = Depends(get_db),

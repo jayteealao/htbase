@@ -32,6 +32,14 @@ class SaveRequest(BaseModel):
         le=10,
         description="Task priority (0=lowest, 10=highest)"
     )
+    webhook_url: Optional[HttpUrl] = Field(
+        default=None,
+        description="URL to receive webhook notifications when task completes"
+    )
+    webhook_secret: Optional[str] = Field(
+        default=None,
+        description="HMAC secret for webhook signature verification"
+    )
 
 
 class BatchSaveRequest(BaseModel):

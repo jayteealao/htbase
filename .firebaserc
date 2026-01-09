@@ -1,0 +1,7 @@
+{
+  "projects": {
+    "default": "trails-e428e",
+    "production": "trails-414917",
+    "firebase": "trails-e428e"
+  }
+}

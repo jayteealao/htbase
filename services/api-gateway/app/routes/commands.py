@@ -13,6 +13,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from shared.auth import verify_api_key
+from shared.rate_limit import rate_limit_status
 from shared.db import get_session, CommandExecution, CommandOutputLine
 
 logger = logging.getLogger(__name__)
@@ -60,7 +62,7 @@ class CommandExecutionDetailResponse(CommandExecutionResponse):
     output_lines: List[CommandOutputLineResponse]
 
 
-@router.get("/executions", response_model=List[CommandExecutionResponse])
+@router.get("/executions", response_model=List[CommandExecutionResponse], dependencies=[Depends(rate_limit_status)])
 async def list_executions(
     archived_url_id: Optional[int] = Query(
         None, description="Filter by archived URL ID"
@@ -111,7 +113,7 @@ async def list_executions(
     return results
 
 
-@router.get("/executions/{execution_id}", response_model=CommandExecutionDetailResponse)
+@router.get("/executions/{execution_id}", response_model=CommandExecutionDetailResponse, dependencies=[Depends(rate_limit_status)])
 async def get_execution_detail(
     execution_id: int,
     db: Session = Depends(get_db),
@@ -167,7 +169,7 @@ async def get_execution_detail(
     )
 
 
-@router.get("/executions/{execution_id}/replay")
+@router.get("/executions/{execution_id}/replay", dependencies=[Depends(rate_limit_status)])
 async def replay_execution(
     execution_id: int,
     db: Session = Depends(get_db),

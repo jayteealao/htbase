@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import logging
 import os
-import shlex
 
 from shared.models import ArchiveResult
 
@@ -36,13 +35,13 @@ class MonolithArchiver(BaseArchiver):
         monolith_bin = os.getenv("MONOLITH_BIN", "/usr/local/bin/monolith")
         monolith_flags = os.getenv("MONOLITH_FLAGS", "")
 
-        # Build command
-        url_q = shlex.quote(url)
-        out_q = shlex.quote(str(out_path))
+        # Build command as list (safe from command injection)
+        cmd = [monolith_bin, url, "-o", str(out_path)]
 
-        cmd = f"{monolith_bin} {url_q} -o {out_q}"
+        # Add optional flags if present
         if monolith_flags:
-            cmd += f" {monolith_flags}"
+            # Split flags by whitespace and add to command
+            cmd.extend(monolith_flags.split())
 
         # Execute command
         result = self.command_runner.execute(

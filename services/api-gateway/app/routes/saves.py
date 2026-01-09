@@ -14,8 +14,10 @@ from celery import chain, chord, group
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
+from shared.auth import verify_api_key
 from shared.celery_config import celery_app
 from shared.db import get_session_dependency, ArchivedUrl, ArchiveArtifact
+from shared.rate_limit import rate_limit_archive, rate_limit_batch, rate_limit_download
 from shared.models import (
     SaveRequest,
     BatchSaveRequest,
@@ -42,7 +44,7 @@ def get_db():
         yield session
 
 
-@router.post("/save", response_model=TaskAccepted)
+@router.post("/save", response_model=TaskAccepted, dependencies=[Depends(rate_limit_archive)])
 async def save_url(
     request: SaveRequest,
     db: Session = Depends(get_db),
@@ -92,6 +94,16 @@ async def save_url(
     tasks = []
 
     for archiver in archivers:
+        # Lock the archived_url row to prevent concurrent artifact creation
+        # This prevents race conditions where multiple requests try to create
+        # the same artifact simultaneously
+        locked_url = (
+            db.query(ArchivedUrl)
+            .filter(ArchivedUrl.id == archived_url_id)
+            .with_for_update()
+            .first()
+        )
+
         # Check for existing successful artifact
         existing_artifact = (
             db.query(ArchiveArtifact)
@@ -110,7 +122,7 @@ async def save_url(
             )
             continue
 
-        # Create or get artifact record
+        # Create or get artifact record (within locked transaction)
         artifact = (
             db.query(ArchiveArtifact)
             .filter(
@@ -156,9 +168,31 @@ async def save_url(
             message="All archives already exist",
         )
 
-    # Dispatch tasks as a group
+    # Build workflow with optional webhook callback
     task_group = group(tasks)
-    result = task_group.apply_async()
+
+    if request.webhook_url:
+        # Chain: archive tasks -> gather status -> notify webhook
+        workflow = chain(
+            task_group,
+            celery_app.signature(
+                "services.archive_worker.tasks.gather_status",
+                kwargs={"task_id": workflow_id},
+            ),
+            celery_app.signature(
+                "services.archive_worker.tasks.notify_webhook",
+                kwargs={
+                    "workflow_id": workflow_id,
+                    "webhook_url": str(request.webhook_url),
+                    "webhook_secret": request.webhook_secret,
+                    "event_type": "task.completed",
+                },
+            ),
+        )
+        result = workflow.apply_async()
+    else:
+        # Just run archive tasks without webhook
+        result = task_group.apply_async()
 
     logger.info(
         "Archive tasks dispatched",
@@ -166,6 +200,7 @@ async def save_url(
             "workflow_id": workflow_id,
             "task_count": len(tasks),
             "archivers": archivers,
+            "webhook_enabled": bool(request.webhook_url),
         },
     )
 
@@ -176,16 +211,21 @@ async def save_url(
     )
 
 
-@router.post("/save/batch", response_model=TaskAccepted)
+@router.post("/save/batch", response_model=TaskAccepted, dependencies=[Depends(rate_limit_batch)])
 async def save_batch(
     request: BatchSaveRequest,
     db: Session = Depends(get_db),
+    webhook_url: Optional[str] = None,
+    webhook_secret: Optional[str] = None,
 ):
     """
     Archive multiple URLs in batch.
 
     Dispatches archive tasks for all URLs and archivers.
     Returns a batch task ID for tracking overall progress.
+
+    Note: Webhook parameters are optional query parameters since
+    BatchSaveRequest doesn't include webhook fields.
     """
     batch_id = uuid.uuid4().hex
     total_tasks = 0
@@ -216,6 +256,14 @@ async def save_batch(
             archived_url_id = archived_url.id
 
         for archiver in archivers:
+            # Lock the archived_url row to prevent concurrent artifact creation
+            locked_url = (
+                db.query(ArchivedUrl)
+                .filter(ArchivedUrl.id == archived_url_id)
+                .with_for_update()
+                .first()
+            )
+
             # Skip existing successful artifacts
             existing_artifact = (
                 db.query(ArchiveArtifact)
@@ -230,15 +278,26 @@ async def save_batch(
             if existing_artifact:
                 continue
 
-            # Create artifact record
-            artifact = ArchiveArtifact(
-                archived_url_id=archived_url_id,
-                archiver=archiver,
-                status="pending",
-                task_id=batch_id,
+            # Check for existing artifact (within locked transaction)
+            artifact = (
+                db.query(ArchiveArtifact)
+                .filter(
+                    ArchiveArtifact.archived_url_id == archived_url_id,
+                    ArchiveArtifact.archiver == archiver,
+                )
+                .first()
             )
-            db.add(artifact)
-            db.flush()
+
+            if not artifact:
+                # Create artifact record
+                artifact = ArchiveArtifact(
+                    archived_url_id=archived_url_id,
+                    archiver=archiver,
+                    status="pending",
+                    task_id=batch_id,
+                )
+                db.add(artifact)
+                db.flush()
 
             fetch_url = rewrite_paywalled_url(url)
 
@@ -260,11 +319,36 @@ async def save_batch(
 
     if all_tasks:
         task_group = group(all_tasks)
-        task_group.apply_async()
+
+        # Add webhook callback if provided
+        if webhook_url:
+            workflow = chain(
+                task_group,
+                celery_app.signature(
+                    "services.archive_worker.tasks.gather_status",
+                    kwargs={"task_id": batch_id},
+                ),
+                celery_app.signature(
+                    "services.archive_worker.tasks.notify_webhook",
+                    kwargs={
+                        "workflow_id": batch_id,
+                        "webhook_url": webhook_url,
+                        "webhook_secret": webhook_secret,
+                        "event_type": "task.completed",
+                    },
+                ),
+            )
+            workflow.apply_async()
+        else:
+            task_group.apply_async()
 
     logger.info(
         "Batch archive tasks dispatched",
-        extra={"batch_id": batch_id, "task_count": total_tasks},
+        extra={
+            "batch_id": batch_id,
+            "task_count": total_tasks,
+            "webhook_enabled": bool(webhook_url),
+        },
     )
 
     return TaskAccepted(
@@ -274,10 +358,12 @@ async def save_batch(
     )
 
 
-@router.post("/workflow", response_model=TaskAccepted)
+@router.post("/workflow", response_model=TaskAccepted, dependencies=[Depends(rate_limit_archive)])
 async def archive_workflow(
     request: ArchiveWorkflowRequest,
     db: Session = Depends(get_db),
+    webhook_url: Optional[str] = None,
+    webhook_secret: Optional[str] = None,
 ):
     """
     Execute complete archive workflow.
@@ -286,6 +372,7 @@ async def archive_workflow(
     1. Archives URL with specified archivers
     2. Summarizes content (if enabled)
     3. Uploads to cloud storage (if enabled)
+    4. Sends webhook notification (if webhook_url provided)
     """
     workflow_id = uuid.uuid4().hex
     url = request.url
@@ -318,14 +405,33 @@ async def archive_workflow(
     fetch_url = rewrite_paywalled_url(url)
 
     for archiver in archivers:
-        artifact = ArchiveArtifact(
-            archived_url_id=archived_url_id,
-            archiver=archiver,
-            status="pending",
-            task_id=workflow_id,
+        # Lock the archived_url row to prevent concurrent artifact creation
+        locked_url = (
+            db.query(ArchivedUrl)
+            .filter(ArchivedUrl.id == archived_url_id)
+            .with_for_update()
+            .first()
         )
-        db.add(artifact)
-        db.flush()
+
+        # Check for existing artifact (within locked transaction)
+        artifact = (
+            db.query(ArchiveArtifact)
+            .filter(
+                ArchiveArtifact.archived_url_id == archived_url_id,
+                ArchiveArtifact.archiver == archiver,
+            )
+            .first()
+        )
+
+        if not artifact:
+            artifact = ArchiveArtifact(
+                archived_url_id=archived_url_id,
+                archiver=archiver,
+                status="pending",
+                task_id=workflow_id,
+            )
+            db.add(artifact)
+            db.flush()
 
         task_name = f"services.archive_worker.tasks.archive_{archiver}"
         archive_tasks.append(
@@ -367,8 +473,35 @@ async def archive_workflow(
         )
         workflow = chain(workflow, storage_task)
 
+    # Add webhook notification if enabled
+    if webhook_url:
+        webhook_chain = chain(
+            celery_app.signature(
+                "services.archive_worker.tasks.gather_status",
+                kwargs={"task_id": workflow_id},
+            ),
+            celery_app.signature(
+                "services.archive_worker.tasks.notify_webhook",
+                kwargs={
+                    "workflow_id": workflow_id,
+                    "webhook_url": webhook_url,
+                    "webhook_secret": webhook_secret,
+                    "event_type": "task.completed",
+                },
+            ),
+        )
+        workflow = chain(workflow, webhook_chain)
+
     # Execute workflow
     workflow.apply_async()
+
+    logger.info(
+        "Workflow started",
+        extra={
+            "workflow_id": workflow_id,
+            "webhook_enabled": bool(webhook_url),
+        },
+    )
 
     return TaskAccepted(
         task_id=workflow_id,
@@ -377,7 +510,7 @@ async def archive_workflow(
     )
 
 
-@router.post("/archive/{archiver}", response_model=TaskAccepted)
+@router.post("/archive/{archiver}", response_model=TaskAccepted, dependencies=[Depends(rate_limit_archive)])
 async def archive_with_archiver(
     archiver: str,
     request: SaveRequest,
@@ -412,6 +545,14 @@ async def archive_with_archiver(
         db.flush()
         archived_url_id = archived_url.id
 
+    # Lock the archived_url row to prevent concurrent artifact creation
+    locked_url = (
+        db.query(ArchivedUrl)
+        .filter(ArchivedUrl.id == archived_url_id)
+        .with_for_update()
+        .first()
+    )
+
     # Check for existing successful artifact
     existing_artifact = (
         db.query(ArchiveArtifact)
@@ -430,16 +571,27 @@ async def archive_with_archiver(
             message=f"Archive already exists for archiver: {archiver}",
         )
 
-    # Create artifact record
+    # Check for existing artifact (within locked transaction)
     task_id = uuid.uuid4().hex
-    artifact = ArchiveArtifact(
-        archived_url_id=archived_url_id,
-        archiver=archiver,
-        status="pending",
-        task_id=task_id,
+    artifact = (
+        db.query(ArchiveArtifact)
+        .filter(
+            ArchiveArtifact.archived_url_id == archived_url_id,
+            ArchiveArtifact.archiver == archiver,
+        )
+        .first()
     )
-    db.add(artifact)
-    db.flush()
+
+    if not artifact:
+        # Create artifact record
+        artifact = ArchiveArtifact(
+            archived_url_id=archived_url_id,
+            archiver=archiver,
+            status="pending",
+            task_id=task_id,
+        )
+        db.add(artifact)
+        db.flush()
 
     fetch_url = rewrite_paywalled_url(url)
 
@@ -470,7 +622,7 @@ async def archive_with_archiver(
     )
 
 
-@router.post("/archive/{archiver}/batch", response_model=TaskAccepted)
+@router.post("/archive/{archiver}/batch", response_model=TaskAccepted, dependencies=[Depends(rate_limit_batch)])
 async def archive_batch_with_archiver(
     archiver: str,
     request: BatchSaveRequest,
@@ -515,6 +667,14 @@ async def archive_batch_with_archiver(
             db.flush()
             archived_url_id = archived_url.id
 
+        # Lock the archived_url row to prevent concurrent artifact creation
+        locked_url = (
+            db.query(ArchivedUrl)
+            .filter(ArchivedUrl.id == archived_url_id)
+            .with_for_update()
+            .first()
+        )
+
         # Check for existing successful artifact
         existing_artifact = (
             db.query(ArchiveArtifact)
@@ -529,15 +689,26 @@ async def archive_batch_with_archiver(
         if existing_artifact:
             continue
 
-        # Create artifact record
-        artifact = ArchiveArtifact(
-            archived_url_id=archived_url_id,
-            archiver=archiver,
-            status="pending",
-            task_id=batch_id,
+        # Check for existing artifact (within locked transaction)
+        artifact = (
+            db.query(ArchiveArtifact)
+            .filter(
+                ArchiveArtifact.archived_url_id == archived_url_id,
+                ArchiveArtifact.archiver == archiver,
+            )
+            .first()
         )
-        db.add(artifact)
-        db.flush()
+
+        if not artifact:
+            # Create artifact record
+            artifact = ArchiveArtifact(
+                archived_url_id=archived_url_id,
+                archiver=archiver,
+                status="pending",
+                task_id=batch_id,
+            )
+            db.add(artifact)
+            db.flush()
 
         fetch_url = rewrite_paywalled_url(url)
 
@@ -574,7 +745,7 @@ async def archive_batch_with_archiver(
     )
 
 
-@router.get("/archive/{item_id}/size")
+@router.get("/archive/{item_id}/size", dependencies=[Depends(rate_limit_download)])
 async def get_archive_size(
     item_id: str,
     archiver: str = Query("all", description="Archiver name"),
@@ -620,7 +791,7 @@ async def get_archive_size(
     }
 
 
-@router.get("/retrieve")
+@router.get("/retrieve", dependencies=[Depends(rate_limit_download)])
 async def retrieve_archive(
     id: Optional[str] = Query(None, description="Item ID"),
     url: Optional[str] = Query(None, description="URL"),

@@ -11,7 +11,7 @@ import subprocess
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 logger = logging.getLogger(__name__)
 
@@ -35,17 +35,17 @@ class CommandRunner:
 
     def execute(
         self,
-        command: str,
+        command: List[str],
         timeout: float = 300.0,
         cwd: Path | None = None,
         archived_url_id: int | None = None,
         archiver: str | None = None,
     ) -> CommandResult:
         """
-        Execute a shell command.
+        Execute a command safely without shell interpretation.
 
         Args:
-            command: Shell command to execute
+            command: Command and arguments as a list (e.g., ["ls", "-la", "/tmp"])
             timeout: Timeout in seconds
             cwd: Working directory
             archived_url_id: Optional archived URL ID for logging
@@ -56,10 +56,12 @@ class CommandRunner:
         """
         start_time = datetime.utcnow()
 
+        # Log command as string for readability, but limit length
+        command_str = " ".join(command)
         logger.debug(
             "Executing command",
             extra={
-                "command": command[:200],
+                "command": command_str[:200],
                 "timeout": timeout,
                 "archiver": archiver,
             },
@@ -68,7 +70,7 @@ class CommandRunner:
         try:
             result = subprocess.run(
                 command,
-                shell=True,
+                shell=False,
                 capture_output=True,
                 text=True,
                 timeout=timeout,

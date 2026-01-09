@@ -8,9 +8,11 @@ Strategy:
 - Firestore gets filtered data (articles + pocket data only)
 - Writes must succeed to PostgreSQL; Firestore is best-effort based on failure mode
 - Reads always use PostgreSQL (source of truth)
+- Implements eventual consistency with reconciliation worker support
 """
 
 import logging
+from datetime import datetime
 from typing import Optional, List, Dict, Any
 
 from .database_storage import (
@@ -103,6 +105,10 @@ class DualDatabaseStorage(DatabaseStorageProvider):
                     item_id=metadata.item_id,
                     error="Firestore write returned False"
                 )
+
+            # Step 3: Update sync timestamp on success
+            self._update_article_sync_timestamp(metadata.item_id)
+
         except Exception as e:
             return self._handle_firestore_failure(
                 operation="create_article",
@@ -170,6 +176,10 @@ class DualDatabaseStorage(DatabaseStorageProvider):
                         item_id=item_id,
                         error="Firestore update returned False"
                     )
+
+                # Update sync timestamp on success
+                self._update_article_sync_timestamp(item_id)
+
         except Exception as e:
             return self._handle_firestore_failure(
                 operation="update_article_metadata",
@@ -204,6 +214,10 @@ class DualDatabaseStorage(DatabaseStorageProvider):
                     item_id=item_id,
                     error="Firestore delete returned False"
                 )
+
+            # Update sync timestamp on success (marks as synced deletion)
+            self._update_article_sync_timestamp(item_id)
+
         except Exception as e:
             return self._handle_firestore_failure(
                 operation="delete_article",
@@ -263,6 +277,10 @@ class DualDatabaseStorage(DatabaseStorageProvider):
                     item_id=artifact.item_id,
                     error=f"Firestore artifact write failed for {artifact.archiver}"
                 )
+
+            # Update sync timestamp on success
+            self._update_artifact_sync_timestamp(artifact.item_id, artifact.archiver)
+
         except Exception as e:
             return self._handle_firestore_failure(
                 operation="create_artifact",
@@ -349,6 +367,10 @@ class DualDatabaseStorage(DatabaseStorageProvider):
                     item_id=item_id,
                     error=f"Firestore artifact update failed for {archiver}"
                 )
+
+            # Update sync timestamp on success
+            self._update_artifact_sync_timestamp(item_id, archiver)
+
         except Exception as e:
             return self._handle_firestore_failure(
                 operation="update_artifact_status",
@@ -385,6 +407,10 @@ class DualDatabaseStorage(DatabaseStorageProvider):
                     item_id=pocket.item_id,
                     error="Firestore pocket write failed"
                 )
+
+            # Update sync timestamp on success
+            self._update_article_sync_timestamp(pocket.item_id)
+
         except Exception as e:
             return self._handle_firestore_failure(
                 operation="create_pocket_data",
@@ -614,10 +640,19 @@ class DualDatabaseStorage(DatabaseStorageProvider):
 
         if self.failure_mode == "fail_fast":
             logger.error(f"{log_msg} [FAIL_FAST MODE - FAILING OPERATION]")
+            # Compensation logic: rollback PostgreSQL write
+            try:
+                self._compensate_postgres_write(operation, item_id)
+            except Exception as comp_error:
+                logger.error(
+                    f"Compensation failed for {item_id}: {comp_error}",
+                    exc_info=True
+                )
             return False
 
         elif self.failure_mode == "log_and_continue":
             logger.warning(f"{log_msg} [LOG_AND_CONTINUE MODE - CONTINUING]")
+            # Record sync failure - reconciliation worker will fix later
             return True
 
         elif self.failure_mode == "queue_retry":
@@ -629,3 +664,99 @@ class DualDatabaseStorage(DatabaseStorageProvider):
         else:
             logger.error(f"Unknown failure_mode: {self.failure_mode}")
             return False
+
+    def _compensate_postgres_write(self, operation: str, item_id: str) -> None:
+        """
+        Compensate for failed Firestore write by rolling back PostgreSQL.
+
+        This is only called in fail_fast mode to maintain consistency.
+
+        Args:
+            operation: The operation that failed
+            item_id: The item identifier
+        """
+        logger.info(
+            f"Executing compensation for {operation} on {item_id}"
+        )
+
+        # Only compensate for certain operations to avoid data loss
+        if operation in ["create_article", "create_artifact", "create_pocket_data"]:
+            # For creates, we can safely delete
+            if operation == "create_article":
+                self.postgres.delete_article(item_id)
+            # Note: For artifacts and pocket data, compensation is more complex
+            # and would require additional context. For now, we log the failure.
+            logger.warning(
+                f"Compensation not fully implemented for {operation}, "
+                f"manual reconciliation may be needed"
+            )
+
+    def _update_article_sync_timestamp(self, item_id: str) -> None:
+        """
+        Update the last_synced_to_firestore timestamp for an article.
+
+        Args:
+            item_id: The article identifier
+        """
+        try:
+            from shared.db.session import get_session
+            from shared.db.models import ArchivedUrl
+
+            with get_session() as session:
+                au = session.query(ArchivedUrl).filter(
+                    ArchivedUrl.item_id == item_id
+                ).first()
+
+                if au:
+                    au.last_synced_to_firestore = datetime.utcnow()
+                    session.commit()
+                    logger.debug(f"Updated sync timestamp for article {item_id}")
+
+        except Exception as e:
+            logger.error(
+                f"Failed to update sync timestamp for {item_id}: {e}",
+                exc_info=True
+            )
+
+    def _update_artifact_sync_timestamp(
+        self, item_id: str, archiver: str
+    ) -> None:
+        """
+        Update the last_synced_to_firestore timestamp for an artifact.
+
+        Args:
+            item_id: The article identifier
+            archiver: The archiver name
+        """
+        try:
+            from shared.db.session import get_session
+            from shared.db.models import ArchivedUrl, ArchiveArtifact
+
+            with get_session() as session:
+                # Find the artifact
+                au = session.query(ArchivedUrl).filter(
+                    ArchivedUrl.item_id == item_id
+                ).first()
+
+                if not au:
+                    logger.warning(f"Article {item_id} not found for artifact sync")
+                    return
+
+                artifact = session.query(ArchiveArtifact).filter(
+                    ArchiveArtifact.archived_url_id == au.id,
+                    ArchiveArtifact.archiver == archiver
+                ).first()
+
+                if artifact:
+                    artifact.last_synced_to_firestore = datetime.utcnow()
+                    session.commit()
+                    logger.debug(
+                        f"Updated sync timestamp for artifact {item_id}/{archiver}"
+                    )
+
+        except Exception as e:
+            logger.error(
+                f"Failed to update artifact sync timestamp for "
+                f"{item_id}/{archiver}: {e}",
+                exc_info=True
+            )

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import logging
 import os
-import shlex
 
 from shared.models import ArchiveResult
 
@@ -37,24 +36,21 @@ class PDFArchiver(BaseArchiver):
         user_data_dir = self.settings.data_dir / "chromium-user-data"
         user_data_dir.mkdir(parents=True, exist_ok=True)
 
-        # Build command
-        url_q = shlex.quote(url)
-        out_q = shlex.quote(str(out_path))
-
-        cmd = (
-            f"{chromium_bin} "
-            f"--headless "
-            f"--disable-gpu "
-            f"--no-sandbox "
-            f"--disable-software-rasterizer "
-            f"--disable-dev-shm-usage "
-            f"--user-data-dir={shlex.quote(str(user_data_dir))} "
-            f"--print-to-pdf={out_q} "
-            f"--no-margins "
-            f"--run-all-compositor-stages-before-draw "
-            f"--virtual-time-budget=10000 "
-            f"{url_q}"
-        )
+        # Build command as list (safe from command injection)
+        cmd = [
+            chromium_bin,
+            "--headless",
+            "--disable-gpu",
+            "--no-sandbox",
+            "--disable-software-rasterizer",
+            "--disable-dev-shm-usage",
+            f"--user-data-dir={user_data_dir}",
+            f"--print-to-pdf={out_path}",
+            "--no-margins",
+            "--run-all-compositor-stages-before-draw",
+            "--virtual-time-budget=10000",
+            url,
+        ]
 
         # Execute command
         result = self.command_runner.execute(

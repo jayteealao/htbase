@@ -42,6 +42,8 @@ class ArchivedUrl(Base):
     created_at = Column(DateTime, nullable=False, server_default=sa_text("now()"))
     # Total size of all artifacts for this URL
     total_size_bytes = Column(BigInteger, nullable=True)
+    # Dual-write sync tracking
+    last_synced_to_firestore = Column(DateTime, nullable=True)
 
     # Relationships
     artifacts = relationship("ArchiveArtifact", back_populates="archived_url")
@@ -52,6 +54,7 @@ class ArchivedUrl(Base):
 
     __table_args__ = (
         Index("idx_archived_urls_item_id", "item_id"),
+        Index("idx_archived_urls_sync_status", "last_synced_to_firestore"),
     )
 
 
@@ -111,6 +114,9 @@ class ArchiveArtifact(Base):
     task_id = Column(String, nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=sa_text("now()"))
     updated_at = Column(DateTime, nullable=True)
+    # Task tracking for zombie detection
+    task_started_at = Column(DateTime, nullable=True)
+    last_heartbeat = Column(DateTime, nullable=True)
     # Size of individual archiver output in bytes
     size_bytes = Column(BigInteger, nullable=True)
 
@@ -131,6 +137,9 @@ class ArchiveArtifact(Base):
     gcs_path = Column(Text, nullable=True)
     gcs_bucket = Column(String, nullable=True)
 
+    # Dual-write sync tracking
+    last_synced_to_firestore = Column(DateTime, nullable=True)
+
     # Relationships
     archived_url = relationship("ArchivedUrl", back_populates="artifacts")
 
@@ -145,6 +154,7 @@ class ArchiveArtifact(Base):
             "local_file_deleted",
         ),
         Index("idx_artifact_status", "status"),
+        Index("idx_artifact_sync_status", "last_synced_to_firestore"),
     )
 
 

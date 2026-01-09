@@ -313,6 +313,33 @@ services:
           memory: 256M
 
   # ===========================================================================
+  # Migration Worker (For Firestore to PostgreSQL data migration)
+  # ===========================================================================
+
+  migration-worker:
+    <<: *worker-base
+    image: ${REGISTRY:-}htbase/migration-worker:${VERSION:-latest}
+    build:
+      context: .
+      dockerfile: services/migration-worker/Dockerfile
+    container_name: htbase-migration
+    environment:
+      <<: *common-env
+      WORKER_QUEUES: migration
+      WORKER_CONCURRENCY: ${MIGRATION_CONCURRENCY:-1}
+      FIRESTORE_PROJECT_ID: ${GCS_PROJECT_ID:-}
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 2G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+    profiles:
+      - migration
+
+  # ===========================================================================
   # Monitoring Services (Optional - use --profile monitoring)
   # ===========================================================================
 

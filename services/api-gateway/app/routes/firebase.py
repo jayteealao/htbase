@@ -16,6 +16,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from shared.auth import verify_api_key
+from shared.rate_limit import rate_limit_archive, rate_limit_download
 from shared.db import get_session, ArchivedUrl, ArchiveArtifact, UrlMetadata
 from shared.celery_config import celery_app
 
@@ -149,7 +151,7 @@ def _dispatch_archive_tasks(
     return task_id, artifact_ids
 
 
-@router.post("/add-pocket-article", response_model=AddPocketArticleResponse)
+@router.post("/add-pocket-article", response_model=AddPocketArticleResponse, dependencies=[Depends(rate_limit_archive)])
 async def add_pocket_article(
     data: AddPocketArticleRequest,
     db: Session = Depends(get_db),
@@ -267,7 +269,7 @@ async def add_pocket_article(
         )
 
 
-@router.get("/download/{item_id}/{archiver}", response_model=DownloadURLResponse)
+@router.get("/download/{item_id}/{archiver}", response_model=DownloadURLResponse, dependencies=[Depends(rate_limit_download)])
 async def generate_download_url(
     item_id: str,
     archiver: str,
@@ -363,7 +365,7 @@ async def generate_download_url(
         )
 
 
-@router.post("/save", response_model=AddPocketArticleResponse)
+@router.post("/save", response_model=AddPocketArticleResponse, dependencies=[Depends(rate_limit_archive)])
 async def save_article(
     data: SaveArticleRequest,
     db: Session = Depends(get_db),
@@ -442,7 +444,7 @@ async def save_article(
         )
 
 
-@router.post("/archive", response_model=ArchiveArticleResponse)
+@router.post("/archive", response_model=ArchiveArticleResponse, dependencies=[Depends(rate_limit_archive)])
 async def archive_article(
     data: ArchiveArticleRequest,
     db: Session = Depends(get_db),

@@ -38,6 +38,7 @@ default_exchange = Exchange("default", type="direct")
 archive_exchange = Exchange("archive", type="direct")
 summarization_exchange = Exchange("summarization", type="direct")
 storage_exchange = Exchange("storage", type="direct")
+migration_exchange = Exchange("migration", type="direct")
 
 # Define queues with routing
 celery_app.conf.task_queues = (
@@ -56,6 +57,9 @@ celery_app.conf.task_queues = (
 
     # Storage worker queue
     Queue("storage", storage_exchange, routing_key="storage"),
+
+    # Migration worker queue
+    Queue("migration", migration_exchange, routing_key="migration"),
 )
 
 # Task routing configuration
@@ -67,6 +71,10 @@ celery_app.conf.task_routes = {
     "services.archive_worker.tasks.archive_pdf": {"queue": "archive.pdf"},
     "services.archive_worker.tasks.archive_screenshot": {"queue": "archive.screenshot"},
 
+    # Webhook tasks - route to default queue for now
+    "services.archive_worker.tasks.notify_webhook": {"queue": "default"},
+    "services.archive_worker.tasks.gather_status": {"queue": "default"},
+
     # Summarization tasks
     "services.summarization_worker.tasks.summarize_article": {"queue": "summarization"},
     "services.summarization_worker.tasks.extract_entities": {"queue": "summarization"},
@@ -76,6 +84,13 @@ celery_app.conf.task_routes = {
     "services.storage_worker.tasks.upload_to_gcs": {"queue": "storage"},
     "services.storage_worker.tasks.download_from_gcs": {"queue": "storage"},
     "services.storage_worker.tasks.cleanup_local_files": {"queue": "storage"},
+
+    # Migration tasks
+    "services.migration_worker.tasks.backfill_firestore_to_postgres": {"queue": "migration"},
+    "services.migration_worker.tasks.resume_backfill": {"queue": "migration"},
+    "services.migration_worker.tasks.validate_migration": {"queue": "migration"},
+    "services.migration_worker.tasks.compare_counts": {"queue": "migration"},
+    "services.migration_worker.tasks.rollback_migration": {"queue": "migration"},
 }
 
 # Celery configuration
@@ -118,6 +133,18 @@ celery_app.conf.update(
             "task": "services.storage_worker.tasks.retry_failed_uploads",
             "schedule": 300.0,  # Every 5 minutes
         },
+        "cleanup-zombie-tasks": {
+            "task": "services.archive_worker.tasks.cleanup_zombie_tasks",
+            "schedule": 900.0,  # Every 15 minutes
+        },
+        "reconcile-dual-database": {
+            "task": "services.storage_worker.tasks.reconcile_dual_database",
+            "schedule": 300.0,  # Every 5 minutes
+        },
+        "detect-sync-drift": {
+            "task": "services.storage_worker.tasks.detect_sync_drift",
+            "schedule": 300.0,  # Every 5 minutes (monitoring)
+        },
     },
 )
 
@@ -127,7 +154,7 @@ def configure_for_worker(worker_type: str) -> None:
     Configure Celery for a specific worker type.
 
     Args:
-        worker_type: One of 'archive', 'summarization', 'storage'
+        worker_type: One of 'archive', 'summarization', 'storage', 'migration'
     """
     if worker_type == "archive":
         # Archive workers need more memory and longer timeouts
@@ -146,6 +173,12 @@ def configure_for_worker(worker_type: str) -> None:
         celery_app.conf.update(
             task_time_limit=180,  # 3 minutes
             task_soft_time_limit=150,  # 2.5 minutes
+        )
+    elif worker_type == "migration":
+        # Migration workers need very long timeouts for batch processing
+        celery_app.conf.update(
+            task_time_limit=3600,  # 1 hour
+            task_soft_time_limit=3300,  # 55 minutes
         )
 
 

@@ -14,6 +14,8 @@ from pydantic import BaseModel, Field, HttpUrl
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
+from shared.auth import verify_api_key
+from shared.rate_limit import rate_limit_admin
 from shared.db import (
     ArchivedUrl,
     ArchiveArtifact,
@@ -92,7 +94,7 @@ def get_db():
         yield session
 
 
-@router.get("/stats")
+@router.get("/stats", dependencies=[Depends(rate_limit_admin)])
 async def get_system_stats(db: Session = Depends(get_db)):
     """
     Get system statistics.
@@ -142,7 +144,7 @@ async def get_system_stats(db: Session = Depends(get_db)):
     }
 
 
-@router.delete("/archive/{item_id}", response_model=DeleteResponse)
+@router.delete("/archive/{item_id}", response_model=DeleteResponse, dependencies=[Depends(rate_limit_admin)])
 async def delete_archive(
     item_id: str,
     delete_files: bool = Query(False, description="Also delete local files"),
@@ -230,7 +232,7 @@ async def delete_archive(
     )
 
 
-@router.post("/retry-failed")
+@router.post("/retry-failed", dependencies=[Depends(rate_limit_admin)])
 async def retry_failed_artifacts(
     archivers: Optional[List[str]] = Query(None),
     limit: int = Query(100, ge=1, le=1000),
@@ -308,7 +310,7 @@ async def retry_failed_artifacts(
     }
 
 
-@router.post("/cleanup-local")
+@router.post("/cleanup-local", dependencies=[Depends(rate_limit_admin)])
 async def cleanup_local_files(
     older_than_hours: int = Query(24, ge=1),
     dry_run: bool = Query(True),
@@ -382,7 +384,7 @@ async def cleanup_local_files(
     }
 
 
-@router.get("/pending")
+@router.get("/pending", dependencies=[Depends(rate_limit_admin)])
 async def list_pending_artifacts(
     archiver: Optional[str] = Query(None),
     limit: int = Query(100, ge=1, le=1000),
@@ -429,7 +431,7 @@ from sqlalchemy import Integer
 AVAILABLE_ARCHIVERS = ["singlefile", "monolith", "readability", "pdf", "screenshot"]
 
 
-@router.get("/saves", response_model=List[Dict[str, Any]])
+@router.get("/saves", response_model=List[Dict[str, Any]], dependencies=[Depends(rate_limit_admin)])
 async def list_saves(
     limit: int = Query(200, ge=1, le=1000),
     offset: int = Query(0, ge=0),
@@ -480,7 +482,7 @@ async def list_saves(
     return out
 
 
-@router.get("/archivers", response_model=List[str])
+@router.get("/archivers", response_model=List[str], dependencies=[Depends(rate_limit_admin)])
 async def list_archivers():
     """
     List available archivers.
@@ -490,7 +492,7 @@ async def list_archivers():
     return sorted(AVAILABLE_ARCHIVERS)
 
 
-@router.post("/saves/requeue", response_model=RequeueResponse)
+@router.post("/saves/requeue", response_model=RequeueResponse, dependencies=[Depends(rate_limit_admin)])
 async def requeue_saves(
     payload: RequeueRequest,
     db: Session = Depends(get_db),
@@ -613,7 +615,7 @@ async def requeue_saves(
     return RequeueResponse(requeued_count=len(filtered), task_ids=task_ids)
 
 
-@router.post("/summarize", response_model=SummarizeResponse)
+@router.post("/summarize", response_model=SummarizeResponse, dependencies=[Depends(rate_limit_admin)])
 async def summarize_article(
     payload: SummarizeRequest,
     db: Session = Depends(get_db),
@@ -698,7 +700,7 @@ async def summarize_article(
     )
 
 
-@router.delete("/saves/by-item/{item_id}", response_model=DeleteResponse)
+@router.delete("/saves/by-item/{item_id}", response_model=DeleteResponse, dependencies=[Depends(rate_limit_admin)])
 async def delete_saves_by_item(
     item_id: str,
     remove_files: bool = Query(False),
@@ -774,7 +776,7 @@ async def delete_saves_by_item(
     )
 
 
-@router.delete("/saves/by-url", response_model=DeleteResponse)
+@router.delete("/saves/by-url", response_model=DeleteResponse, dependencies=[Depends(rate_limit_admin)])
 async def delete_saves_by_url(
     url: str = Query(..., description="URL to delete"),
     remove_files: bool = Query(False),

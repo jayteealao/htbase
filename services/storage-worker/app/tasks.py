@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../.."))
 from celery import Task
 from shared.celery_config import celery_app, configure_for_worker
 from shared.config import get_settings, configure_logging
-from shared.db import get_session, ArchiveArtifact
+from shared.db import get_session, ArchiveArtifact, ArchivedUrl
 
 # Configure for storage worker
 configure_for_worker("storage")
@@ -470,3 +470,243 @@ def _update_artifact_storage(
                 }
             ]
             artifact.updated_at = datetime.utcnow()
+
+
+@celery_app.task(bind=True, name="services.storage_worker.tasks.reconcile_dual_database")
+def reconcile_dual_database(self) -> dict:
+    """
+    Reconcile PostgreSQL and Firestore data consistency.
+
+    Detects and fixes drift between PostgreSQL (source of truth) and Firestore
+    (mobile replica) by finding records that have never been synced or are stale.
+
+    This task implements eventual consistency pattern for dual-database writes.
+    """
+    logger.info("Starting dual database reconciliation")
+
+    try:
+        from shared.storage.postgres_storage import PostgresStorage
+        from shared.storage.firestore_storage import FirestoreStorage
+        from shared.storage.database_storage import ArticleMetadata, ArchiveArtifact as ArtifactModel
+
+        postgres = PostgresStorage()
+        firestore = FirestoreStorage()
+
+        articles_synced = 0
+        articles_failed = 0
+        artifacts_synced = 0
+        artifacts_failed = 0
+
+        # Find articles that have never been synced or were updated after last sync
+        with get_session() as session:
+            # Get articles that need sync (never synced or updated_at > last_synced)
+            unsynced_articles = (
+                session.query(ArchivedUrl)
+                .filter(
+                    (ArchivedUrl.last_synced_to_firestore.is_(None)) |
+                    (ArchivedUrl.created_at > ArchivedUrl.last_synced_to_firestore)
+                )
+                .limit(50)  # Process in batches to avoid overwhelming Firestore
+                .all()
+            )
+
+            logger.info(f"Found {len(unsynced_articles)} articles to reconcile")
+
+            # Sync each article to Firestore
+            for au in unsynced_articles:
+                try:
+                    # Get full article record from PostgreSQL
+                    article_record = postgres.get_article(au.item_id)
+                    if not article_record:
+                        logger.warning(f"Article {au.item_id} not found in PostgreSQL")
+                        continue
+
+                    # Convert to ArticleMetadata for Firestore
+                    metadata = ArticleMetadata(
+                        url=article_record.url,
+                        item_id=article_record.item_id,
+                        title=article_record.title,
+                        byline=article_record.byline,
+                        text_content=article_record.text_content,
+                        word_count=article_record.word_count,
+                        excerpt=article_record.excerpt
+                    )
+
+                    # Write to Firestore
+                    success = firestore.create_article(metadata)
+                    if success:
+                        # Update sync timestamp
+                        au.last_synced_to_firestore = datetime.utcnow()
+                        session.commit()
+                        articles_synced += 1
+                        logger.debug(f"Synced article {au.item_id} to Firestore")
+                    else:
+                        articles_failed += 1
+                        logger.warning(f"Failed to sync article {au.item_id}")
+
+                except Exception as e:
+                    articles_failed += 1
+                    logger.error(
+                        f"Error syncing article {au.item_id}: {e}",
+                        exc_info=True
+                    )
+
+        # Find artifacts that need sync
+        with get_session() as session:
+            unsynced_artifacts = (
+                session.query(ArchiveArtifact, ArchivedUrl)
+                .join(ArchivedUrl)
+                .filter(
+                    (ArchiveArtifact.last_synced_to_firestore.is_(None)) |
+                    (ArchiveArtifact.updated_at > ArchiveArtifact.last_synced_to_firestore),
+                    ArchiveArtifact.success == True  # Only sync successful artifacts
+                )
+                .limit(50)
+                .all()
+            )
+
+            logger.info(f"Found {len(unsynced_artifacts)} artifacts to reconcile")
+
+            # Sync each artifact to Firestore
+            for artifact, au in unsynced_artifacts:
+                try:
+                    # Convert to Firestore artifact model
+                    artifact_model = ArtifactModel(
+                        item_id=au.item_id,
+                        archiver=artifact.archiver,
+                        status=artifact.status,
+                        gcs_path=artifact.gcs_path,
+                        gcs_bucket=artifact.gcs_bucket,
+                        file_size=artifact.size_bytes,
+                        created_at=artifact.created_at
+                    )
+
+                    # Write to Firestore
+                    success = firestore.create_artifact(artifact_model)
+                    if success:
+                        # Update sync timestamp
+                        artifact.last_synced_to_firestore = datetime.utcnow()
+                        session.commit()
+                        artifacts_synced += 1
+                        logger.debug(
+                            f"Synced artifact {au.item_id}/{artifact.archiver} to Firestore"
+                        )
+                    else:
+                        artifacts_failed += 1
+                        logger.warning(
+                            f"Failed to sync artifact {au.item_id}/{artifact.archiver}"
+                        )
+
+                except Exception as e:
+                    artifacts_failed += 1
+                    logger.error(
+                        f"Error syncing artifact {au.item_id}/{artifact.archiver}: {e}",
+                        exc_info=True
+                    )
+
+        result = {
+            "articles_synced": articles_synced,
+            "articles_failed": articles_failed,
+            "artifacts_synced": artifacts_synced,
+            "artifacts_failed": artifacts_failed,
+            "total_synced": articles_synced + artifacts_synced,
+            "total_failed": articles_failed + artifacts_failed,
+        }
+
+        logger.info(
+            "Dual database reconciliation completed",
+            extra=result
+        )
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Reconciliation task failed: {e}", exc_info=True)
+        raise
+
+
+@celery_app.task(bind=True, name="services.storage_worker.tasks.detect_sync_drift")
+def detect_sync_drift(self) -> dict:
+    """
+    Detect and report on sync drift between PostgreSQL and Firestore.
+
+    Returns metrics about unsynced records and sync lag for monitoring/alerting.
+    """
+    logger.info("Starting sync drift detection")
+
+    try:
+        with get_session() as session:
+            # Count articles never synced
+            never_synced_articles = (
+                session.query(ArchivedUrl)
+                .filter(ArchivedUrl.last_synced_to_firestore.is_(None))
+                .count()
+            )
+
+            # Count articles with sync lag > 10 minutes
+            cutoff = datetime.utcnow() - timedelta(minutes=10)
+            stale_articles = (
+                session.query(ArchivedUrl)
+                .filter(
+                    ArchivedUrl.last_synced_to_firestore.isnot(None),
+                    ArchivedUrl.created_at > ArchivedUrl.last_synced_to_firestore,
+                    ArchivedUrl.created_at < cutoff
+                )
+                .count()
+            )
+
+            # Count artifacts never synced
+            never_synced_artifacts = (
+                session.query(ArchiveArtifact)
+                .filter(
+                    ArchiveArtifact.last_synced_to_firestore.is_(None),
+                    ArchiveArtifact.success == True
+                )
+                .count()
+            )
+
+            # Count artifacts with sync lag > 10 minutes
+            stale_artifacts = (
+                session.query(ArchiveArtifact)
+                .filter(
+                    ArchiveArtifact.last_synced_to_firestore.isnot(None),
+                    ArchiveArtifact.updated_at > ArchiveArtifact.last_synced_to_firestore,
+                    ArchiveArtifact.updated_at < cutoff,
+                    ArchiveArtifact.success == True
+                )
+                .count()
+            )
+
+            metrics = {
+                "never_synced_articles": never_synced_articles,
+                "stale_articles": stale_articles,
+                "never_synced_artifacts": never_synced_artifacts,
+                "stale_artifacts": stale_artifacts,
+                "total_drift": (
+                    never_synced_articles + stale_articles +
+                    never_synced_artifacts + stale_artifacts
+                ),
+                "drift_detected": (
+                    never_synced_articles + stale_articles +
+                    never_synced_artifacts + stale_artifacts
+                ) > 0,
+                "checked_at": datetime.utcnow().isoformat()
+            }
+
+            # Log warning if significant drift detected
+            if metrics["total_drift"] > 10:
+                logger.warning(
+                    f"Significant sync drift detected: {metrics['total_drift']} records",
+                    extra=metrics
+                )
+            else:
+                logger.info(
+                    f"Sync drift check completed: {metrics['total_drift']} records out of sync",
+                    extra=metrics
+                )
+
+            return metrics
+
+    except Exception as e:
+        logger.error(f"Drift detection failed: {e}", exc_info=True)
+        raise

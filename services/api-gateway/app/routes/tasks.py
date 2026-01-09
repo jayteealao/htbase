@@ -12,8 +12,10 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
+from shared.auth import verify_api_key
 from shared.celery_config import celery_app, get_task_info
 from shared.db import get_session_dependency, ArchivedUrl, ArchiveArtifact
+from shared.rate_limit import rate_limit_status, rate_limit_admin
 from shared.models import TaskStatusResponse, TaskItemStatus
 
 logger = logging.getLogger(__name__)
@@ -29,7 +31,7 @@ def get_db():
         yield session
 
 
-@router.get("/tasks/{task_id}", response_model=TaskStatusResponse)
+@router.get("/tasks/{task_id}", response_model=TaskStatusResponse, dependencies=[Depends(rate_limit_status)])
 async def get_task_status(
     task_id: str,
     db: Session = Depends(get_db),
@@ -103,7 +105,7 @@ async def get_task_status(
     )
 
 
-@router.get("/tasks/{task_id}/celery")
+@router.get("/tasks/{task_id}/celery", dependencies=[Depends(rate_limit_status)])
 async def get_celery_task_info(task_id: str):
     """
     Get Celery task information.
@@ -118,7 +120,7 @@ async def get_celery_task_info(task_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/tasks/{task_id}/cancel")
+@router.post("/tasks/{task_id}/cancel", dependencies=[Depends(rate_limit_admin)])
 async def cancel_task(
     task_id: str,
     db: Session = Depends(get_db),
@@ -158,7 +160,7 @@ async def cancel_task(
     }
 
 
-@router.get("/tasks")
+@router.get("/tasks", dependencies=[Depends(rate_limit_status)])
 async def list_tasks(
     status: Optional[str] = Query(None, description="Filter by status"),
     limit: int = Query(50, ge=1, le=500),
@@ -202,7 +204,7 @@ async def list_tasks(
     }
 
 
-@router.get("/queue/stats")
+@router.get("/queue/stats", dependencies=[Depends(rate_limit_status)])
 async def get_queue_stats():
     """
     Get Celery queue statistics.

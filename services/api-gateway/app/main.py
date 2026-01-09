@@ -16,12 +16,14 @@ from typing import AsyncGenerator
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from slowapi.errors import RateLimitExceeded
 
 # Add shared module to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../.."))
 
 from shared.config import get_settings, configure_logging
 from shared.models import HealthResponse
+from shared.rate_limit import slowapi_limiter, _rate_limit_exceeded_handler, RateLimitMiddleware
 
 from app.routes import saves, tasks, admin, firebase, sync, commands
 
@@ -71,6 +73,13 @@ def create_app() -> FastAPI:
         redoc_url="/redoc",
         lifespan=lifespan,
     )
+
+    # Configure SlowAPI rate limiter
+    app.state.limiter = slowapi_limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+    # Add rate limit middleware for response headers
+    app.add_middleware(RateLimitMiddleware)
 
     # CORS middleware
     app.add_middleware(

@@ -1,0 +1,96 @@
+"""
+Authentication middleware for API Gateway.
+
+Provides API key-based authentication using FastAPI Security.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+from typing import Optional
+
+from fastapi import Security, HTTPException, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+
+logger = logging.getLogger(__name__)
+
+# HTTP Bearer token security scheme
+security = HTTPBearer()
+
+
+async def verify_api_key(
+    credentials: HTTPAuthorizationCredentials = Security(security),
+) -> str:
+    """
+    Verify API key from Authorization header.
+
+    Expects: Authorization: Bearer <api_key>
+
+    Args:
+        credentials: HTTP Bearer credentials from request header
+
+    Returns:
+        str: The validated API key
+
+    Raises:
+        HTTPException: 401 if API key is invalid or missing
+    """
+    api_key = credentials.credentials
+
+    # Get valid API keys from environment variable (comma-separated)
+    valid_keys_str = os.getenv("API_KEYS", "")
+
+    if not valid_keys_str:
+        logger.error("API_KEYS environment variable not configured")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Authentication not configured",
+        )
+
+    # Split and clean API keys
+    valid_keys = [key.strip() for key in valid_keys_str.split(",") if key.strip()]
+
+    if not valid_keys:
+        logger.error("No valid API keys found in API_KEYS environment variable")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Authentication not configured",
+        )
+
+    # Verify the provided key
+    if api_key not in valid_keys:
+        logger.warning(
+            "Invalid API key attempt",
+            extra={"key_prefix": api_key[:8] if len(api_key) >= 8 else "***"},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid API key",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    logger.debug("API key validated successfully")
+    return api_key
+
+
+async def optional_verify_api_key(
+    credentials: Optional[HTTPAuthorizationCredentials] = Security(security, auto_error=False),
+) -> Optional[str]:
+    """
+    Optional API key verification for endpoints that support both authenticated and public access.
+
+    Args:
+        credentials: HTTP Bearer credentials from request header (optional)
+
+    Returns:
+        Optional[str]: The validated API key if provided, None otherwise
+
+    Raises:
+        HTTPException: 401 if API key is provided but invalid
+    """
+    if credentials is None:
+        return None
+
+    # If credentials are provided, validate them
+    return await verify_api_key(credentials)

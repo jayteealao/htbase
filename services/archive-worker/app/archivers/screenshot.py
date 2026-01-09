@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import logging
 import os
-import shlex
 
 from shared.models import ArchiveResult
 
@@ -37,29 +36,26 @@ class ScreenshotArchiver(BaseArchiver):
         user_data_dir = self.settings.data_dir / "chromium-user-data"
         user_data_dir.mkdir(parents=True, exist_ok=True)
 
-        # Build command
-        url_q = shlex.quote(url)
-        out_q = shlex.quote(str(out_path))
-
         # Get window size from environment
         window_width = os.getenv("SCREENSHOT_WIDTH", "1920")
         window_height = os.getenv("SCREENSHOT_HEIGHT", "1080")
 
-        cmd = (
-            f"{chromium_bin} "
-            f"--headless "
-            f"--disable-gpu "
-            f"--no-sandbox "
-            f"--disable-software-rasterizer "
-            f"--disable-dev-shm-usage "
-            f"--user-data-dir={shlex.quote(str(user_data_dir))} "
-            f"--screenshot={out_q} "
-            f"--window-size={window_width},{window_height} "
-            f"--hide-scrollbars "
-            f"--run-all-compositor-stages-before-draw "
-            f"--virtual-time-budget=10000 "
-            f"{url_q}"
-        )
+        # Build command as list (safe from command injection)
+        cmd = [
+            chromium_bin,
+            "--headless",
+            "--disable-gpu",
+            "--no-sandbox",
+            "--disable-software-rasterizer",
+            "--disable-dev-shm-usage",
+            f"--user-data-dir={user_data_dir}",
+            f"--screenshot={out_path}",
+            f"--window-size={window_width},{window_height}",
+            "--hide-scrollbars",
+            "--run-all-compositor-stages-before-draw",
+            "--virtual-time-budget=10000",
+            url,
+        ]
 
         # Execute command
         result = self.command_runner.execute(
