@@ -24,7 +24,7 @@ from core.utils import cleanup_chromium_singleton_locks
 from core.command_runner import CommandRunner
 from services.summarizer import SummaryService
 from services.providers import ProviderFactory, ProviderChain
-from services.summarization import ArticleChunker, PromptBuilder, ResponseParser
+from shared.summarization import ArticleChunker, PromptBuilder, ResponseParser
 from task_manager import (
     ArchiverTaskManager,
     SummarizeTask,
@@ -32,12 +32,12 @@ from task_manager import (
     SummarizationTaskManager,
 )
 from task_manager.cleanup import CleanupTaskManager
-from storage.local_file_storage import LocalFileStorage
-from storage.gcs_file_storage import GCSFileStorage
-from storage.postgres_storage import PostgresStorage
-from storage.firestore_storage import FirestoreStorage
-from storage.file_storage import FileStorageProvider
-from storage.database_storage import DatabaseStorageProvider
+from shared.storage.local_file_storage import LocalFileStorage
+from shared.storage.gcs_file_storage import GCSFileStorage
+from shared.storage.postgres_storage import PostgresStorage
+from shared.storage.firestore_storage import FirestoreStorage
+from shared.storage.file_storage import FileStorageProvider
+from shared.storage.database_storage import DatabaseStorageProvider
 
 
 settings = get_settings()
@@ -123,7 +123,7 @@ async def lifespan_context(app: FastAPI):
             logger.info(f"Initialized Firestore (replica database): {settings.firestore.project_id}")
 
             # Wrap in dual-write coordinator
-            from storage.dual_database_storage import DualDatabaseStorage
+            from shared.storage.dual_database_storage import DualDatabaseStorage
             db_storage = DualDatabaseStorage(
                 postgres=primary_db,
                 firestore=replica_db,

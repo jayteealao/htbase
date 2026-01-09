@@ -9,8 +9,8 @@ if TYPE_CHECKING:
     from core.config import AppSettings
     from core.command_runner import CommandRunner
     from archivers.base import BaseArchiver
-    from storage.file_storage import FileStorageProvider
-    from storage.database_storage import DatabaseStorageProvider
+    from shared.storage.file_storage import FileStorageProvider
+    from shared.storage.database_storage import DatabaseStorageProvider
 
 logger = logging.getLogger(__name__)
 

@@ -7,8 +7,8 @@ from typing import Optional
 from core.config import AppSettings
 from core.utils import sanitize_filename
 from models import ArchiveResult
-from storage.file_storage import FileStorageProvider
-from storage.database_storage import DatabaseStorageProvider
+from shared.storage.file_storage import FileStorageProvider
+from shared.storage.database_storage import DatabaseStorageProvider
 
 
 class BaseArchiver(abc.ABC):
@@ -190,7 +190,7 @@ class BaseArchiver(abc.ABC):
             return
 
         try:
-            from storage.database_storage import ArchiveArtifact, ArchiveStatus
+            from shared.storage.database_storage import ArchiveArtifact, ArchiveStatus
 
             # Update artifact status with storage metadata
             self.db_storage.update_artifact_status(
@@ -340,7 +340,7 @@ class BaseArchiver(abc.ABC):
                         break
 
             # Update artifact status
-            from storage.database_storage import ArchiveStatus
+            from shared.storage.database_storage import ArchiveStatus
             self.db_storage.update_artifact_status(
                 item_id=item_id,
                 archiver=self.name,

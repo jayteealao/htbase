@@ -85,12 +85,17 @@ celery_app.conf.task_routes = {
     "services.storage_worker.tasks.download_from_gcs": {"queue": "storage"},
     "services.storage_worker.tasks.cleanup_local_files": {"queue": "storage"},
 
-    # Migration tasks
-    "services.migration_worker.tasks.backfill_firestore_to_postgres": {"queue": "migration"},
-    "services.migration_worker.tasks.resume_backfill": {"queue": "migration"},
-    "services.migration_worker.tasks.validate_migration": {"queue": "migration"},
-    "services.migration_worker.tasks.compare_counts": {"queue": "migration"},
-    "services.migration_worker.tasks.rollback_migration": {"queue": "migration"},
+    # Sync tasks
+    "services.sync_worker.tasks.backfill_postgres_to_firestore": {"queue": "sync"},
+    "services.sync_worker.tasks.resume_backfill": {"queue": "sync"},
+    "services.sync_worker.tasks.validate_sync": {"queue": "sync"},
+    "services.sync_worker.tasks.compare_counts": {"queue": "sync"},
+    "services.sync_worker.tasks.rollback_sync": {"queue": "sync"},
+    "services.sync_worker.tasks.delete_synced_data": {"queue": "sync"},
+    "services.sync_worker.tasks.pause_sync": {"queue": "sync"},
+    "services.sync_worker.tasks.reset_sync_progress": {"queue": "sync"},
+    "services.sync_worker.tasks.find_missing_records": {"queue": "sync"},
+    "services.sync_worker.tasks.get_sync_stats": {"queue": "sync"},
 }
 
 # Celery configuration

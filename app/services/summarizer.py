@@ -8,7 +8,7 @@ from typing import List, Optional, Sequence, Tuple
 from core.config import AppSettings
 from db import ArchivedUrlRepository, ArticleSummaryRepository, UrlMetadataRepository
 from services.providers import ProviderChain, SummaryLLMOutput, SummaryProvider
-from services.summarization import ArticleChunker, PromptBuilder, ResponseParser, SummaryInputs
+from shared.summarization import ArticleChunker, PromptBuilder, ResponseParser, SummaryInputs
 
 logger = logging.getLogger(__name__)
 

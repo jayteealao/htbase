@@ -363,7 +363,7 @@ def retrieve_archive(
                     pg_article = postgres.get_article(safe_id)
                     if pg_article:
                         # Import SyncFilter for data filtering
-                        from storage.sync_filter import SyncFilter
+                        from shared.storage.sync_filter import SyncFilter
                         sync_filter = SyncFilter()
 
                         # Filter data for Firestore

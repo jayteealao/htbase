@@ -11,8 +11,8 @@ from core.config import AppSettings
 from core.command_runner import CommandRunner
 from models import ArchiveResult
 from core.utils import sanitize_filename
-from storage.file_storage import FileStorageProvider
-from storage.database_storage import DatabaseStorageProvider
+from shared.storage.file_storage import FileStorageProvider
+from shared.storage.database_storage import DatabaseStorageProvider
 
 logger = logging.getLogger(__name__)
 

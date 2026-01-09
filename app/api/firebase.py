@@ -122,7 +122,7 @@ async def add_pocket_article(
             'archiver': data.archiver
         }
 
-        from storage.database_storage import ArticleMetadata
+        from shared.storage.database_storage import ArticleMetadata
 
         metadata = ArticleMetadata(
             item_id=item_id,
@@ -337,7 +337,7 @@ async def save_article(
             db_storage = request.app.state.db_storage
 
             # Create article
-            from storage.database_storage import ArticleMetadata
+            from shared.storage.database_storage import ArticleMetadata
 
             article_metadata = ArticleMetadata(
                 item_id=item_id,
@@ -418,7 +418,7 @@ async def archive_article(
         article = db_storage.get_article(data.item_id)
         if not article:
             # Article not found - create it (fallback)
-            from storage.database_storage import ArticleMetadata
+            from shared.storage.database_storage import ArticleMetadata
 
             metadata = ArticleMetadata(
                 item_id=data.item_id,

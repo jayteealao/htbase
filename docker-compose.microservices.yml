@@ -3,13 +3,13 @@
 # =============================================================================
 # Usage:
 #   docker compose -f docker-compose.microservices.yml up -d
-#   docker compose -f docker-compose.microservices.yml --profile monitoring up -d
 #   docker compose -f docker-compose.microservices.yml up -d --scale archive-worker-singlefile=3
 #
 # Prerequisites:
 #   - Copy .env.microservices.example to .env.microservices
 #   - Set up GCS credentials (or use STORAGE_PROVIDER=local)
 #   - Create artifacts directory: mkdir -p ./data/artifacts
+#   - Ensure archivebox_default network exists: docker network create archivebox_default
 # =============================================================================
 
 x-common-env: &common-env
@@ -32,7 +32,7 @@ x-worker-base: &worker-base
     postgres:
       condition: service_healthy
   networks:
-    - htbase-network
+    - archivebox_default
   volumes:
     - artifacts:/app/artifacts
     - ${GCS_CREDENTIALS_PATH:-./secrets/gcs-credentials.json}:/secrets/gcs-credentials.json:ro
@@ -66,7 +66,7 @@ services:
     volumes:
       - redis-data:/data
     networks:
-      - htbase-network
+      - archivebox_default
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -75,7 +75,7 @@ services:
       start_period: 5s
 
   postgres:
-    image: postgres:15-alpine
+    image: postgres:16-alpine
     container_name: htbase-postgres
     restart: unless-stopped
     environment:
@@ -89,7 +89,7 @@ services:
       - postgres-data:/var/lib/postgresql/data
       - ./infrastructure/postgres/init:/docker-entrypoint-initdb.d:ro
     networks:
-      - htbase-network
+      - archivebox_default
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-htbase} -d ${DB_NAME:-htbase}"]
       interval: 10s
@@ -129,7 +129,7 @@ services:
       postgres:
         condition: service_healthy
     networks:
-      - htbase-network
+      - archivebox_default
     volumes:
       - ${GCS_CREDENTIALS_PATH:-./secrets/gcs-credentials.json}:/secrets/gcs-credentials.json:ro
     healthcheck:
@@ -313,20 +313,20 @@ services:
           memory: 256M
 
   # ===========================================================================
-  # Migration Worker (For Firestore to PostgreSQL data migration)
+  # Sync Worker (For PostgreSQL to Firestore data sync for dual persistence)
   # ===========================================================================
 
-  migration-worker:
+  sync-worker:
     <<: *worker-base
-    image: ${REGISTRY:-}htbase/migration-worker:${VERSION:-latest}
+    image: ${REGISTRY:-}htbase/sync-worker:${VERSION:-latest}
     build:
       context: .
-      dockerfile: services/migration-worker/Dockerfile
-    container_name: htbase-migration
+      dockerfile: services/sync-worker/Dockerfile
+    container_name: htbase-sync
     environment:
       <<: *common-env
-      WORKER_QUEUES: migration
-      WORKER_CONCURRENCY: ${MIGRATION_CONCURRENCY:-1}
+      WORKER_QUEUES: sync
+      WORKER_CONCURRENCY: ${SYNC_CONCURRENCY:-1}
       FIRESTORE_PROJECT_ID: ${GCS_PROJECT_ID:-}
     deploy:
       resources:
@@ -337,10 +337,10 @@ services:
           cpus: "0.5"
           memory: 512M
     profiles:
-      - migration
+      - sync
 
   # ===========================================================================
-  # Monitoring Services (Optional - use --profile monitoring)
+  # Monitoring Services
   # ===========================================================================
 
   flower:
@@ -364,7 +364,7 @@ services:
       redis:
         condition: service_healthy
     networks:
-      - htbase-network
+      - archivebox_default
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.htbase-flower.rule=Host(`${DOMAIN:-localhost}`) && PathPrefix(`/flower`)"
@@ -372,8 +372,6 @@ services:
       - "traefik.http.routers.htbase-flower.tls.certresolver=letsencrypt"
       - "traefik.http.routers.htbase-flower.middlewares=monitoring-auth@file"
       - "traefik.http.services.htbase-flower.loadbalancer.server.port=5555"
-    profiles:
-      - monitoring
 
   redis-commander:
     image: rediscommander/redis-commander:latest
@@ -389,7 +387,7 @@ services:
       redis:
         condition: service_healthy
     networks:
-      - htbase-network
+      - archivebox_default
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.htbase-redis.rule=Host(`${DOMAIN:-localhost}`) && PathPrefix(`/redis`)"
@@ -397,8 +395,6 @@ services:
       - "traefik.http.routers.htbase-redis.tls.certresolver=letsencrypt"
       - "traefik.http.routers.htbase-redis.middlewares=monitoring-auth@file,strip-redis@file"
       - "traefik.http.services.htbase-redis.loadbalancer.server.port=8081"
-    profiles:
-      - monitoring
 
   # ===========================================================================
   # Reverse Proxy - Traefik (Optional - use --profile proxy)
@@ -407,46 +403,13 @@ services:
   # existing Traefik configuration. See infrastructure/traefik/ for examples.
   # ===========================================================================
 
-  traefik:
-    image: traefik:v3.2
-    container_name: htbase-traefik
-    restart: unless-stopped
-    command:
-      - "--configFile=/etc/traefik/traefik.yml"
-    ports:
-      - "80:80"
-      - "443:443"
-      - "8082:8082"  # Metrics
-    environment:
-      ACME_EMAIL: ${ACME_EMAIL:-admin@example.com}
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./infrastructure/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
-      - ./infrastructure/traefik/dynamic:/etc/traefik/dynamic:ro
-      - traefik-letsencrypt:/letsencrypt
-    networks:
-      - htbase-network
-    labels:
-      - "traefik.enable=true"
-      # Dashboard (optional - access via traefik.${DOMAIN})
-      - "traefik.http.routers.traefik-dashboard.rule=Host(`traefik.${DOMAIN:-localhost}`)"
-      - "traefik.http.routers.traefik-dashboard.service=api@internal"
-      - "traefik.http.routers.traefik-dashboard.entrypoints=websecure"
-      - "traefik.http.routers.traefik-dashboard.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.traefik-dashboard.middlewares=monitoring-auth@file"
-    profiles:
-      - proxy
-
 # =============================================================================
 # Networks
 # =============================================================================
 
 networks:
-  htbase-network:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.28.0.0/16
+  archivebox_default:
+    external: true
 
 # =============================================================================
 # Volumes
@@ -464,6 +427,4 @@ volumes:
       o: bind
       device: ${ARTIFACTS_PATH:-./data/artifacts}
   flower-data:
-    driver: local
-  traefik-letsencrypt:
     driver: local

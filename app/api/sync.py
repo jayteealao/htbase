@@ -70,8 +70,8 @@ async def sync_postgres_to_firestore(
     Raises:
         HTTPException: If sync fails or storage providers unavailable
     """
-    from storage.postgres_storage import PostgresStorage
-    from storage.firestore_storage import FirestoreStorage
+    from shared.storage.postgres_storage import PostgresStorage
+    from shared.storage.firestore_storage import FirestoreStorage
 
     # Verify both storage backends available
     if not hasattr(request.app.state, 'db_storage'):
@@ -247,8 +247,8 @@ async def sync_firestore_to_postgres(
     Raises:
         HTTPException: If sync fails or article not found
     """
-    from storage.postgres_storage import PostgresStorage
-    from storage.firestore_storage import FirestoreStorage
+    from shared.storage.postgres_storage import PostgresStorage
+    from shared.storage.firestore_storage import FirestoreStorage
 
     # Verify storage backends
     if not hasattr(request.app.state, 'db_storage'):
