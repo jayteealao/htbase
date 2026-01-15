@@ -308,8 +308,7 @@ services:
       --persistent=true
       --db=/data/flower.db
       --url_prefix=/flower
-    ports:
-      - "${FLOWER_PORT:-5555}:5555"
+    # No port binding - accessible via Traefik
     volumes:
       - flower-data:/data
     depends_on:
@@ -335,8 +334,7 @@ services:
       REDIS_HOSTS: local:redis:6379
       HTTP_USER: ${REDIS_COMMANDER_USER:-admin}
       HTTP_PASSWORD: ${REDIS_COMMANDER_PASSWORD:-admin}
-    ports:
-      - "${REDIS_COMMANDER_PORT:-8081}:8081"
+    # No port binding - accessible via Traefik
     depends_on:
       redis:
         condition: service_healthy
