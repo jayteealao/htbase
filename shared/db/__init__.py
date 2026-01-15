@@ -6,6 +6,7 @@ and repository classes for database operations.
 """
 
 from shared.db.session import (
+    check_connection,
     get_engine,
     get_session,
     get_session_dependency,
@@ -35,6 +36,7 @@ from shared.db.schemas import (
 
 __all__ = [
     # Session management
+    "check_connection",
     "get_engine",
     "get_session",
     "get_session_dependency",
