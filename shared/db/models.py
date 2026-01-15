@@ -47,7 +47,7 @@ class ArchivedUrl(Base):
 
     # Relationships
     artifacts = relationship("ArchiveArtifact", back_populates="archived_url")
-    metadata = relationship("UrlMetadata", back_populates="archived_url", uselist=False)
+    url_metadata = relationship("UrlMetadata", back_populates="archived_url", uselist=False)
     summaries = relationship("ArticleSummary", back_populates="archived_url")
     entities = relationship("ArticleEntity", back_populates="archived_url")
     tags = relationship("ArticleTag", back_populates="archived_url")
