@@ -10,7 +10,7 @@ import logging
 import os
 from typing import Optional
 
-from fastapi import Security, HTTPException, status
+from fastapi import Security, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 logger = logging.getLogger(__name__)
@@ -75,13 +75,13 @@ async def verify_api_key(
 
 
 async def optional_verify_api_key(
-    credentials: Optional[HTTPAuthorizationCredentials] = Security(security, auto_error=False),
+    request: Request,
 ) -> Optional[str]:
     """
     Optional API key verification for endpoints that support both authenticated and public access.
 
     Args:
-        credentials: HTTP Bearer credentials from request header (optional)
+        request: FastAPI Request object
 
     Returns:
         Optional[str]: The validated API key if provided, None otherwise
@@ -89,8 +89,37 @@ async def optional_verify_api_key(
     Raises:
         HTTPException: 401 if API key is provided but invalid
     """
-    if credentials is None:
+    # Check for Authorization header
+    auth_header = request.headers.get("Authorization")
+    if not auth_header:
         return None
 
-    # If credentials are provided, validate them
-    return await verify_api_key(credentials)
+    # Parse Bearer token
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication scheme. Expected: Bearer",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    api_key = auth_header[7:]  # Remove "Bearer " prefix
+
+    # Validate API key
+    expected_key = os.getenv("API_KEY")
+    if not expected_key:
+        logger.warning("API_KEY environment variable not set")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="API authentication not configured",
+        )
+
+    if api_key != expected_key:
+        logger.warning(f"Invalid API key provided")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid API key",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    logger.debug("API key validated successfully")
+    return api_key
