@@ -370,9 +370,5 @@ volumes:
     driver: local
   artifacts:
     driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ${ARTIFACTS_PATH:-./data/artifacts}
   flower-data:
     driver: local
