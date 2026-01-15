@@ -8,6 +8,7 @@ and repository classes for database operations.
 from shared.db.session import (
     get_engine,
     get_session,
+    get_session_dependency,
     get_sessionmaker,
     init_db,
 )
@@ -36,6 +37,7 @@ __all__ = [
     # Session management
     "get_engine",
     "get_session",
+    "get_session_dependency",
     "get_sessionmaker",
     "init_db",
     # SQLAlchemy models
