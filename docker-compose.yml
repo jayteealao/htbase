@@ -1,96 +1,379 @@
+# =============================================================================
+# HT Base - Microservices Docker Compose (OtterStack VPS Deployment)
+# =============================================================================
+# Optimized for OtterStack deployment with:
+# - External PostgreSQL at postgres.archivist.lol
+# - Traefik routing with CrowdSec DDoS protection
+# - archivebox_default network
+# =============================================================================
+
+x-common-env: &common-env
+  REDIS_URL: redis://redis:6379/0
+  CELERY_BROKER_URL: redis://redis:6379/0
+  CELERY_RESULT_BACKEND: redis://redis:6379/1
+  # External PostgreSQL
+  DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
+  GCS_BUCKET: ${GCS_BUCKET}
+  GCS_PROJECT_ID: ${GCS_PROJECT_ID}
+  GOOGLE_APPLICATION_CREDENTIALS: /secrets/gcs-credentials.json
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  LOG_FORMAT: ${LOG_FORMAT:-json}
+  ENVIRONMENT: ${ENVIRONMENT:-production}
+
+x-worker-base: &worker-base
+  restart: unless-stopped
+  depends_on:
+    redis:
+      condition: service_healthy
+  networks:
+    - archivebox_default
+  volumes:
+    - artifacts:/app/artifacts
+    - ${GCS_CREDENTIALS_PATH:-./secrets/gcs-credentials.json}:/secrets/gcs-credentials.json:ro
+
+x-archive-worker: &archive-worker
+  <<: *worker-base
+  image: ${REGISTRY:-}htbase/archive-worker:${VERSION:-latest}
+  build:
+    context: .
+    dockerfile: services/archive-worker/Dockerfile
+  shm_size: 2gb
+
 services:
-    monolith-ht:
-        build:
-            context: .
-            dockerfile: Dockerfile
-        image: ht-base:local
-        container_name: ht-base
-        ports:
-        - "8080:8080"   # REST API
-        - "7681:7681"   # ht live preview
-        - "9222:9222"   # Chromium remote debugging
-        env_file:
-        - .env.production
-        environment:
-        - DATA_DIR=/data
-        - HT_LISTEN=0.0.0.0:7681
-        - MONOLITH_FLAGS=${MONOLITH_FLAGS}
-        volumes:
-        - ./data:/data
-        develop:
-            watch:
-            # Rebuild image and restart when source changes
-                - action: rebuild
-                  path: .
-                  ignore:
-                    - data/**
-                    - .git/**
-                    - .venv/**
-                    - __pycache__/**
-                    - .pytest_cache/**
-                    - tests/**
-                    - ht.md
-                    - monolith.md
-    # text-generation:
-    #     image: ghcr.io/huggingface/text-generation-inference:3.3.6
-    #     container_name: text-generation
-    #     ports:
-    #       - "8001:80"   # REST API
-    #     volumes:
-    #       - ./data/tgi:/data
-    #     environment:
-    #       HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN}
-    #       HF_TOKEN: ${HF_TOKEN}
-    #     deploy:
-    #         resources:
-    #             reservations:
-    #                 devices:
-    #                     - driver: nvidia
-    #                       count: all
-    #                       capabilities: [gpu]
-    #     shm_size: "1g"
-    #     command:
-    #       - --model-id=Qwen/Qwen3-4B-Instruct-2507
-    #       - --trust-remote-code
-    #       - --sharded=false
-    
-    # text-embedding:
-    #     image: ghcr.io/huggingface/text-embeddings-inference:1.8.2
-    #     container_name: text-embedding
-    #     ports:
-    #       - "8002:80"   # REST API
-    #     volumes:
-    #       - ./data/tei:/data
-    #     environment:
-    #     - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
-    #       - HF_TOKEN=${HF_TOKEN}
-    #     deploy:
-    #         resources:
-    #             reservations:
-    #                 devices:
-    #                     - driver: nvidia
-    #                       count: all
-    #                       capabilities: [gpu]
-    #     shm_size: "1g"
-    #     command:
-    #       - --model-id=Qwen/Qwen3-Embedding-0.6B
-    
-    postgrest-pa:
-        image: postgrest/postgrest
-        container_name: postgrest_pa
-        ports:
-          - "3000:3000"   # PostgREST API
-        environment:
-          PGRST_DB_URI: postgres://postgres:your_password@192.168.1.12:5432/postgres
-          PGRST_DB_SCHEMA: public
-          PGRST_DB_ANON_ROLE: postgres
-    
-    postgrest-ht:
-        image: postgrest/postgrest
-        container_name: postgrest_ht
-        ports:
-          - "3001:3000"   # PostgREST API
-        environment:
-          PGRST_DB_URI: postgres://postgres:your_password@192.168.1.12:5432/htbase
-          PGRST_DB_SCHEMA: public
-          PGRST_DB_ANON_ROLE: postgres
+  # ===========================================================================
+  # Infrastructure Services
+  # ===========================================================================
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 512mb
+      --maxmemory-policy volatile-lru
+      --tcp-keepalive 60
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - archivebox_default
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  # ===========================================================================
+  # API Gateway
+  # ===========================================================================
+
+  api-gateway:
+    image: ${REGISTRY:-}htbase/api-gateway:${VERSION:-latest}
+    build:
+      context: .
+      dockerfile: services/api-gateway/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-8080}:8080"
+    environment:
+      <<: *common-env
+      PORT: 8080
+      WORKERS: ${API_WORKERS:-4}
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      API_RATE_LIMIT: ${API_RATE_LIMIT:-100/minute}
+      DEFAULT_ARCHIVERS: ${DEFAULT_ARCHIVERS:-singlefile,monolith,readability,pdf,screenshot}
+      ENABLE_SUMMARIZATION: ${ENABLE_SUMMARIZATION:-true}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - archivebox_default
+    volumes:
+      - ${GCS_CREDENTIALS_PATH:-./secrets/gcs-credentials.json}:/secrets/gcs-credentials.json:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.htbase-api.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.htbase-api.entrypoints=web,websecure"
+      - "traefik.http.routers.htbase-api.tls=true"
+      - "traefik.http.routers.htbase-api.tls.certresolver=myresolver"
+      - "traefik.http.services.htbase-api.loadbalancer.server.port=8080"
+      - "traefik.http.services.htbase-api.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.htbase-api.loadbalancer.healthcheck.interval=30s"
+      # CrowdSec DDoS protection
+      - "traefik.http.routers.htbase-api.middlewares=crowdsec-htbase-api@docker"
+      - "traefik.http.middlewares.crowdsec-htbase-api.plugin.crowdsec-bouncer.enabled=true"
+      - "traefik.http.middlewares.crowdsec-htbase-api.plugin.crowdsec-bouncer.crowdseclapikey=${CROWDSEC_API_KEY}"
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+
+  # ===========================================================================
+  # Archive Workers (Isolated per archiver type)
+  # ===========================================================================
+
+  archive-worker-singlefile:
+    <<: *archive-worker
+    environment:
+      <<: *common-env
+      WORKER_QUEUES: archive.singlefile
+      WORKER_CONCURRENCY: ${SINGLEFILE_CONCURRENCY:-2}
+      ARCHIVER_TYPE: singlefile
+      ARCHIVER_TIMEOUT: 300
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 4G
+        reservations:
+          cpus: "1"
+          memory: 2G
+
+  archive-worker-monolith:
+    <<: *archive-worker
+    environment:
+      <<: *common-env
+      WORKER_QUEUES: archive.monolith
+      WORKER_CONCURRENCY: ${MONOLITH_CONCURRENCY:-3}
+      ARCHIVER_TYPE: monolith
+      ARCHIVER_TIMEOUT: 300
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 4G
+        reservations:
+          cpus: "1"
+          memory: 2G
+
+  archive-worker-readability:
+    <<: *archive-worker
+    environment:
+      <<: *common-env
+      WORKER_QUEUES: archive.readability
+      WORKER_CONCURRENCY: ${READABILITY_CONCURRENCY:-5}
+      ARCHIVER_TYPE: readability
+      ARCHIVER_TIMEOUT: 120
+    shm_size: 1gb
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 2G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+
+  archive-worker-pdf:
+    <<: *archive-worker
+    environment:
+      <<: *common-env
+      WORKER_QUEUES: archive.pdf
+      WORKER_CONCURRENCY: ${PDF_CONCURRENCY:-3}
+      ARCHIVER_TYPE: pdf
+      ARCHIVER_TIMEOUT: 60
+    shm_size: 1gb
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 2G
+        reservations:
+          cpus: "0.5"
+          memory: 1G
+
+  archive-worker-screenshot:
+    <<: *archive-worker
+    environment:
+      <<: *common-env
+      WORKER_QUEUES: archive.screenshot
+      WORKER_CONCURRENCY: ${SCREENSHOT_CONCURRENCY:-3}
+      ARCHIVER_TYPE: screenshot
+      ARCHIVER_TIMEOUT: 60
+    shm_size: 1gb
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 2G
+        reservations:
+          cpus: "0.5"
+          memory: 1G
+
+  # ===========================================================================
+  # Summarization Worker
+  # ===========================================================================
+
+  summarization-worker:
+    <<: *worker-base
+    image: ${REGISTRY:-}htbase/summarization-worker:${VERSION:-latest}
+    build:
+      context: .
+      dockerfile: services/summarization-worker/Dockerfile
+    environment:
+      <<: *common-env
+      WORKER_QUEUES: summarization
+      WORKER_CONCURRENCY: ${SUMMARIZATION_CONCURRENCY:-5}
+      LLM_PROVIDER: ${LLM_PROVIDER:-huggingface}
+      HUGGINGFACE_API_URL: ${HUGGINGFACE_API_URL:-}
+      HUGGINGFACE_API_KEY: ${HUGGINGFACE_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      CHUNK_SIZE: ${CHUNK_SIZE:-4000}
+      CHUNK_OVERLAP: ${CHUNK_OVERLAP:-200}
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+
+  # ===========================================================================
+  # Storage Worker
+  # ===========================================================================
+
+  storage-worker:
+    <<: *worker-base
+    image: ${REGISTRY:-}htbase/storage-worker:${VERSION:-latest}
+    build:
+      context: .
+      dockerfile: services/storage-worker/Dockerfile
+    environment:
+      <<: *common-env
+      WORKER_QUEUES: storage
+      WORKER_CONCURRENCY: ${STORAGE_CONCURRENCY:-10}
+      STORAGE_PROVIDER: ${STORAGE_PROVIDER:-gcs}
+      LOCAL_STORAGE_PATH: /app/artifacts
+      COMPRESSION_ENABLED: ${COMPRESSION_ENABLED:-true}
+      CLEANUP_AFTER_UPLOAD: ${CLEANUP_AFTER_UPLOAD:-true}
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1G
+        reservations:
+          cpus: "0.5"
+          memory: 256M
+
+  # ===========================================================================
+  # Sync Worker (PostgreSQL to Firestore)
+  # ===========================================================================
+
+  sync-worker:
+    <<: *worker-base
+    image: ${REGISTRY:-}htbase/sync-worker:${VERSION:-latest}
+    build:
+      context: .
+      dockerfile: services/sync-worker/Dockerfile
+    environment:
+      <<: *common-env
+      WORKER_QUEUES: sync
+      WORKER_CONCURRENCY: ${SYNC_CONCURRENCY:-1}
+      FIRESTORE_PROJECT_ID: ${GCS_PROJECT_ID}
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 2G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+    profiles:
+      - sync
+
+  # ===========================================================================
+  # Monitoring Services
+  # ===========================================================================
+
+  flower:
+    image: mher/flower:2.0
+    restart: unless-stopped
+    command: >
+      celery
+      --broker=redis://redis:6379/0
+      flower
+      --port=5555
+      --basic_auth=${FLOWER_USER:-admin}:${FLOWER_PASSWORD:-admin}
+      --persistent=true
+      --db=/data/flower.db
+      --url_prefix=/flower
+    ports:
+      - "${FLOWER_PORT:-5555}:5555"
+    volumes:
+      - flower-data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - archivebox_default
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.htbase-flower.rule=Host(`${DOMAIN}`) && PathPrefix(`/flower`)"
+      - "traefik.http.routers.htbase-flower.entrypoints=web,websecure"
+      - "traefik.http.routers.htbase-flower.tls=true"
+      - "traefik.http.routers.htbase-flower.tls.certresolver=myresolver"
+      - "traefik.http.routers.htbase-flower.middlewares=crowdsec-htbase-flower@docker"
+      - "traefik.http.middlewares.crowdsec-htbase-flower.plugin.crowdsec-bouncer.enabled=true"
+      - "traefik.http.middlewares.crowdsec-htbase-flower.plugin.crowdsec-bouncer.crowdseclapikey=${CROWDSEC_API_KEY}"
+      - "traefik.http.services.htbase-flower.loadbalancer.server.port=5555"
+
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    restart: unless-stopped
+    environment:
+      REDIS_HOSTS: local:redis:6379
+      HTTP_USER: ${REDIS_COMMANDER_USER:-admin}
+      HTTP_PASSWORD: ${REDIS_COMMANDER_PASSWORD:-admin}
+    ports:
+      - "${REDIS_COMMANDER_PORT:-8081}:8081"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - archivebox_default
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.htbase-redis.rule=Host(`${DOMAIN}`) && PathPrefix(`/redis`)"
+      - "traefik.http.routers.htbase-redis.entrypoints=web,websecure"
+      - "traefik.http.routers.htbase-redis.tls=true"
+      - "traefik.http.routers.htbase-redis.tls.certresolver=myresolver"
+      - "traefik.http.routers.htbase-redis.middlewares=crowdsec-htbase-redis@docker"
+      - "traefik.http.middlewares.crowdsec-htbase-redis.plugin.crowdsec-bouncer.enabled=true"
+      - "traefik.http.middlewares.crowdsec-htbase-redis.plugin.crowdsec-bouncer.crowdseclapikey=${CROWDSEC_API_KEY}"
+      - "traefik.http.services.htbase-redis.loadbalancer.server.port=8081"
+
+# =============================================================================
+# Networks
+# =============================================================================
+
+networks:
+  archivebox_default:
+    external: true
+
+# =============================================================================
+# Volumes
+# =============================================================================
+
+volumes:
+  redis-data:
+    driver: local
+  artifacts:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${ARTIFACTS_PATH:-./data/artifacts}
+  flower-data:
+    driver: local
