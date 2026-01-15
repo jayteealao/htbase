@@ -53,8 +53,7 @@ services:
       --maxmemory 512mb
       --maxmemory-policy volatile-lru
       --tcp-keepalive 60
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
+    # No port binding - internal use only
     volumes:
       - redis-data:/data
     networks:
