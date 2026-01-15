@@ -89,7 +89,7 @@ class UrlMetadata(Base):
     created_at = Column(DateTime, nullable=False, server_default=sa_text("now()"))
 
     # Relationships
-    archived_url = relationship("ArchivedUrl", back_populates="metadata")
+    archived_url = relationship("ArchivedUrl", back_populates="url_metadata")
 
     __table_args__ = (
         Index("idx_url_metadata_archived_url_id", "archived_url_id"),
