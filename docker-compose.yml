@@ -12,7 +12,7 @@ x-common-env: &common-env
   CELERY_BROKER_URL: redis://redis:6379/0
   CELERY_RESULT_BACKEND: redis://redis:6379/1
   # External PostgreSQL
-  DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
+  DATABASE_URL: postgresql+psycopg://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
   GCS_BUCKET: ${GCS_BUCKET}
   GCS_PROJECT_ID: ${GCS_PROJECT_ID}
   GOOGLE_APPLICATION_CREDENTIALS: /secrets/gcs-credentials.json
