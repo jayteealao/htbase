@@ -847,3 +847,136 @@ async def delete_saves_by_url(
         removed_files=removed_files,
         errors=errors,
     )
+
+
+# New endpoints added 2026-01-16 to fill gaps in API coverage
+
+
+@router.get("/archive/{item_id}", dependencies=[Depends(rate_limit_admin)])
+async def get_archive_by_id(
+    item_id: str,
+    db: Session = Depends(get_db),
+):
+    """
+    Get a single archive by item_id.
+
+    Returns the archived URL and all associated artifacts.
+    """
+    archived_url = db.query(ArchivedUrl).filter(ArchivedUrl.item_id == item_id).first()
+    if not archived_url:
+        raise HTTPException(status_code=404, detail=f"Archive not found: {item_id}")
+
+    # Get all artifacts for this archived URL
+    artifacts = (
+        db.query(ArchiveArtifact)
+        .filter(ArchiveArtifact.archived_url_id == archived_url.id)
+        .all()
+    )
+
+    artifact_list = []
+    for artifact in artifacts:
+        created_at = artifact.created_at.isoformat() if artifact.created_at else None
+        artifact_list.append({
+            "rowid": artifact.id,
+            "archiver": artifact.archiver,
+            "status": artifact.status,
+            "success": artifact.success or False,
+            "exit_code": artifact.exit_code,
+            "saved_path": artifact.saved_path,
+            "size_bytes": artifact.size_bytes,
+            "gcs_path": artifact.gcs_path,
+            "created_at": created_at,
+        })
+
+    return {
+        "item_id": archived_url.item_id,
+        "url": archived_url.url,
+        "name": archived_url.name,
+        "created_at": archived_url.created_at.isoformat() if archived_url.created_at else None,
+        "artifacts": artifact_list,
+    }
+
+
+@router.get("/archive/by-url", dependencies=[Depends(rate_limit_admin)])
+async def get_archive_by_url(
+    url: str = Query(..., description="URL to lookup"),
+    db: Session = Depends(get_db),
+):
+    """
+    Get a single archive by URL.
+
+    Returns the archived URL and all associated artifacts.
+    """
+    archived_url = db.query(ArchivedUrl).filter(ArchivedUrl.url == url).first()
+    if not archived_url:
+        raise HTTPException(status_code=404, detail=f"Archive not found for URL: {url}")
+
+    # Get all artifacts for this archived URL
+    artifacts = (
+        db.query(ArchiveArtifact)
+        .filter(ArchiveArtifact.archived_url_id == archived_url.id)
+        .all()
+    )
+
+    artifact_list = []
+    for artifact in artifacts:
+        created_at = artifact.created_at.isoformat() if artifact.created_at else None
+        artifact_list.append({
+            "rowid": artifact.id,
+            "archiver": artifact.archiver,
+            "status": artifact.status,
+            "success": artifact.success or False,
+            "exit_code": artifact.exit_code,
+            "saved_path": artifact.saved_path,
+            "size_bytes": artifact.size_bytes,
+            "gcs_path": artifact.gcs_path,
+            "created_at": created_at,
+        })
+
+    return {
+        "item_id": archived_url.item_id,
+        "url": archived_url.url,
+        "name": archived_url.name,
+        "created_at": archived_url.created_at.isoformat() if archived_url.created_at else None,
+        "artifacts": artifact_list,
+    }
+
+
+class UpdateArchiveRequest(BaseModel):
+    """Request model for updating archive metadata."""
+
+    name: Optional[str] = Field(None, description="Update the archive name")
+    # Add other metadata fields as needed
+
+
+@router.patch("/archive/{item_id}", dependencies=[Depends(rate_limit_admin)])
+async def update_archive_metadata(
+    item_id: str,
+    request: UpdateArchiveRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Update archive metadata by item_id.
+
+    Currently supports updating the name field.
+    Additional metadata fields can be added as needed.
+    """
+    archived_url = db.query(ArchivedUrl).filter(ArchivedUrl.item_id == item_id).first()
+    if not archived_url:
+        raise HTTPException(status_code=404, detail=f"Archive not found: {item_id}")
+
+    # Update fields if provided
+    if request.name is not None:
+        archived_url.name = request.name
+
+    db.commit()
+    db.refresh(archived_url)
+
+    return {
+        "ok": True,
+        "item_id": archived_url.item_id,
+        "url": archived_url.url,
+        "name": archived_url.name,
+        "updated_at": archived_url.created_at.isoformat() if archived_url.created_at else None,
+    }
+

@@ -7,9 +7,7 @@ from typing import Optional
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from api import router as api_router
-from api.firebase import router as firebase_router
-from api.sync import router as sync_router
+# API routers removed 2026-01-16: Monolith API deleted, migrated to microservices
 from web import router as web_router
 from archivers.factory import ArchiverFactory
 from archivers.monolith import MonolithArchiver
@@ -287,10 +285,8 @@ async def lifespan_context(app: FastAPI):
 
 app = FastAPI(title="archiver service", version="0.3.0", lifespan=lifespan_context)
 
-# Mount API routes
-app.include_router(api_router)
-app.include_router(firebase_router)
-app.include_router(sync_router)
+# Mount routes
+# API routers removed 2026-01-16: Monolith API deleted, all endpoints migrated to microservices
 app.include_router(web_router)
 
 # Serve saved files directly for viewing in UI only when using local storage backend.

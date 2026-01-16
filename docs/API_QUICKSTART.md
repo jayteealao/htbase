@@ -10,6 +10,8 @@ HTBase is a web archiving service designed for programmatic access by developers
 - Retrieve archived content
 - Generate AI summaries of archived articles
 
+> **Note:** As of 2026-01-16, HTBase uses a microservices architecture. All API endpoints use the `/api/v1/` prefix.
+
 ---
 
 ## Quick Start: Archive Your First URL
@@ -18,7 +20,7 @@ HTBase is a web archiving service designed for programmatic access by developers
 
 **Request:**
 ```bash
-curl -X POST http://localhost:8000/api/save/readability \
+curl -X POST http://localhost:8080/api/v1/archive/readability \
   -H 'Content-Type: application/json' \
   -d '{
     "id": "my-first-save",
@@ -41,7 +43,7 @@ curl -X POST http://localhost:8000/api/save/readability \
 
 **Request:**
 ```bash
-curl http://localhost:8000/api/retrieve?id=my-first-save&archiver=readability
+curl http://localhost:8080/api/v1/retrieve?id=my-first-save&archiver=readability
 ```
 
 This will download the archived file.
@@ -54,12 +56,12 @@ HTBase supports multiple archiving formats, each optimized for different use cas
 
 | Archiver | Output Format | Best For | Endpoint |
 |----------|--------------|----------|----------|
-| **readability** | Clean HTML + JSON metadata | Article text extraction, AI processing | `/api/save/readability` |
-| **monolith** | Single HTML file | Complete page preservation | `/api/save/monolith` |
-| **singlefile-cli** | Single HTML file with embedded assets | Offline viewing, complete fidelity | `/api/save/singlefile-cli` |
-| **pdf** | PDF | Print-ready documents | `/api/save/pdf` |
-| **screenshot** | PNG | Visual snapshots | `/api/save/screenshot` |
-| **all** | All formats | Comprehensive archiving | `/api/save/all` |
+| **readability** | Clean HTML + JSON metadata | Article text extraction, AI processing | `/api/v1/archive/readability` |
+| **monolith** | Single HTML file | Complete page preservation | `/api/v1/archive/monolith` |
+| **singlefile-cli** | Single HTML file with embedded assets | Offline viewing, complete fidelity | `/api/v1/archive/singlefile-cli` |
+| **pdf** | PDF | Print-ready documents | `/api/v1/archive/pdf` |
+| **screenshot** | PNG | Visual snapshots | `/api/v1/archive/screenshot` |
+| **all** | All formats | Comprehensive archiving | `/api/v1/workflow` |
 
 ---
 
@@ -70,7 +72,7 @@ HTBase supports multiple archiving formats, each optimized for different use cas
 Archive a URL with all available archivers:
 
 ```bash
-curl -X POST http://localhost:8000/api/save/all \
+curl -X POST http://localhost:8080/api/v1/workflow \
   -H 'Content-Type: application/json' \
   -d '{
     "id": "article-2026-01-09",
@@ -83,7 +85,7 @@ curl -X POST http://localhost:8000/api/save/all \
 Archive multiple URLs at once:
 
 ```bash
-curl -X POST http://localhost:8000/api/batch/readability \
+curl -X POST http://localhost:8080/api/v1/archive/readability/batch \
   -H 'Content-Type: application/json' \
   -d '{
     "items": [
@@ -105,7 +107,7 @@ curl -X POST http://localhost:8000/api/batch/readability \
 ### Workflow 3: Check Batch Task Status
 
 ```bash
-curl http://localhost:8000/api/tasks/batch-abc123
+curl http://localhost:8080/api/v1/tasks/batch-abc123
 ```
 
 **Response:**
@@ -145,7 +147,7 @@ curl http://localhost:8000/api/tasks/batch-abc123
 After archiving with `readability`, generate an AI summary:
 
 ```bash
-curl -X POST http://localhost:8000/api/admin/summarize \
+curl -X POST http://localhost:8080/api/v1/admin/summarize \
   -H 'Content-Type: application/json' \
   -d '{
     "item_id": "my-first-save"
@@ -166,7 +168,7 @@ curl -X POST http://localhost:8000/api/admin/summarize \
 Download all archived formats for a URL as a tarball:
 
 ```bash
-curl http://localhost:8000/api/retrieve?id=article-2026-01-09&archiver=all \
+curl http://localhost:8080/api/v1/retrieve?id=article-2026-01-09&archiver=all \
   --output article-2026-01-09.tar.gz
 ```
 
@@ -201,7 +203,7 @@ curl http://localhost:8000/api/retrieve?id=article-2026-01-09&archiver=all \
 ### Missing Required Field
 
 ```bash
-curl -X POST http://localhost:8000/api/save/readability \
+curl -X POST http://localhost:8080/api/v1/archive/readability \
   -H 'Content-Type: application/json' \
   -d '{"url": "https://example.com"}'
 ```
@@ -261,10 +263,10 @@ For multiple URLs, use batch endpoints to improve efficiency:
 
 ```python
 # Efficient
-POST /api/batch/readability with 100 items
+POST /api/v1/archive/readability/batch with 100 items
 
 # Inefficient
-100 individual POST /api/save/readability calls
+100 individual POST /api/v1/archive/readability calls
 ```
 
 ### 5. Implement Retry Logic
@@ -278,7 +280,7 @@ def archive_with_retry(url, id, max_retries=3):
     for attempt in range(max_retries):
         try:
             response = requests.post(
-                "http://localhost:8000/api/save/readability",
+                "http://localhost:8080/api/v1/archive/readability",
                 json={"url": url, "id": id}
             )
             response.raise_for_status()
@@ -321,8 +323,8 @@ HTBase supports multiple storage backends:
 
 Visit the interactive API docs while your server is running:
 
-- **Swagger UI**: http://localhost:8000/docs
-- **ReDoc**: http://localhost:8000/redoc
+- **Swagger UI**: http://localhost:8080/docs
+- **ReDoc**: http://localhost:8080/redoc
 
 ---
 
@@ -342,22 +344,25 @@ Visit the interactive API docs while your server is running:
 
 ```
 # Single Archive
-POST /api/save/{archiver}        Body: {"id": "...", "url": "..."}
+POST /api/v1/archive/{archiver}        Body: {"id": "...", "url": "..."}
 
 # Batch Archive
-POST /api/batch/{archiver}       Body: {"items": [...]}
+POST /api/v1/archive/{archiver}/batch  Body: {"items": [...]}
+
+# Workflow (All Archivers)
+POST /api/v1/workflow                  Body: {"id": "...", "url": "..."}
 
 # Task Status
-GET  /api/tasks/{task_id}
+GET  /api/v1/tasks/{task_id}
 
 # Retrieve Archive
-GET  /api/retrieve               Query: id=..., archiver=...
+GET  /api/v1/retrieve                  Query: id=..., archiver=...
 
 # Summarize
-POST /api/admin/summarize        Body: {"item_id": "..."}
+POST /api/v1/admin/summarize           Body: {"item_id": "..."}
 
 # Health Check
-GET  /api/health
+GET  /health
 ```
 
 ### Available Archivers

@@ -25,7 +25,7 @@ from shared.config import get_settings, configure_logging
 from shared.models import HealthResponse
 from shared.rate_limit import slowapi_limiter, _rate_limit_exceeded_handler, RateLimitMiddleware
 
-from app.routes import saves, tasks, admin, firebase, sync, commands
+from app.routes import saves, tasks, admin, firebase, sync, commands, ht
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +97,7 @@ def create_app() -> FastAPI:
     app.include_router(firebase.router, prefix="/api/v1/firebase", tags=["firebase"])
     app.include_router(sync.router, prefix="/api/v1/sync", tags=["sync"])
     app.include_router(commands.router, prefix="/api/v1/commands", tags=["commands"])
+    app.include_router(ht.router, prefix="/api/v1/ht", tags=["hyperterm"])
 
     # Exception handlers
     @app.exception_handler(Exception)
