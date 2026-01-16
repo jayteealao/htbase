@@ -66,12 +66,25 @@ class ArchiveArticleResponse(BaseModel):
 
 # Endpoints
 
-@router.post("/add-pocket-article", response_model=AddPocketArticleResponse)
+@router.post("/add-pocket-article", response_model=AddPocketArticleResponse, deprecated=True)
 async def add_pocket_article(
     request: Request,
     data: AddPocketArticleRequest
 ) -> AddPocketArticleResponse:
     """
+    **DEPRECATED:** Use `/api/v1/firebase/add-article` instead.
+
+    This endpoint will be removed in v2.0.0. The new endpoint:
+    - Properly accepts custom item_id
+    - Has smart prefix selection (pocket vs article)
+    - Includes validation and better error handling
+    - Is the production-ready microservices version
+
+    Migration: POST to `/api/v1/firebase/add-article` with same payload structure.
+    Move `item_id` from `pocket_data` dict to top-level field if needed.
+
+    ---
+
     Add a Pocket article to the archive system.
 
     This endpoint:
@@ -90,6 +103,14 @@ async def add_pocket_article(
     Raises:
         HTTPException: If Firestore backend not available or archival fails
     """
+    # Log deprecation warning
+    logger.warning(
+        "DEPRECATED: /firebase/add-pocket-article called. "
+        "Use /api/v1/firebase/add-article instead. "
+        "This endpoint will be removed in v2.0.0",
+        extra={"url": data.url, "user_id": data.user_id}
+    )
+
     from core.config import get_settings
 
     settings = get_settings()
@@ -307,12 +328,23 @@ async def generate_download_url(
         )
 
 
-@router.post("/save", response_model=AddPocketArticleResponse)
+@router.post("/save", response_model=AddPocketArticleResponse, deprecated=True)
 async def save_article(
     request: Request,
     data: SaveArticleRequest
 ) -> AddPocketArticleResponse:
     """
+    **DEPRECATED:** Use `/api/v1/firebase/add-article` instead.
+
+    This endpoint will be removed in v2.0.0. The new endpoint:
+    - Consolidates add-pocket-article and save into one
+    - Properly accepts custom item_id
+    - Has validation and better error handling
+
+    Migration: POST to `/api/v1/firebase/add-article` with same payload structure.
+
+    ---
+
     Save a basic article (non-Pocket).
 
     Similar to add-pocket-article but with minimal metadata.
@@ -324,6 +356,14 @@ async def save_article(
     Returns:
         AddPocketArticleResponse with article_id and status
     """
+    # Log deprecation warning
+    logger.warning(
+        "DEPRECATED: /firebase/save called. "
+        "Use /api/v1/firebase/add-article instead. "
+        "This endpoint will be removed in v2.0.0",
+        extra={"url": data.url}
+    )
+
     from core.utils import sanitize_filename
     import hashlib
 
@@ -372,12 +412,21 @@ async def save_article(
         )
 
 
-@router.post("/archive", response_model=ArchiveArticleResponse)
+@router.post("/archive", response_model=ArchiveArticleResponse, deprecated=True)
 async def archive_article(
     request: Request,
     data: ArchiveArticleRequest
 ) -> ArchiveArticleResponse:
     """
+    **DEPRECATED:** Use `/api/v1/firebase/archive` instead.
+
+    This endpoint will be removed in v2.0.0. The new endpoint uses the same
+    structure but with better validation and microservices architecture.
+
+    Migration: POST to `/api/v1/firebase/archive` with same payload structure.
+
+    ---
+
     Archive an article triggered by Cloud Function.
 
     This endpoint is called by the Firebase Cloud Function when a user saves
@@ -399,6 +448,14 @@ async def archive_article(
     Raises:
         HTTPException: If database or task manager unavailable
     """
+    # Log deprecation warning
+    logger.warning(
+        "DEPRECATED: /firebase/archive called. "
+        "Use /api/v1/firebase/archive instead. "
+        "This endpoint will be removed in v2.0.0",
+        extra={"item_id": data.item_id, "url": data.url}
+    )
+
     from core.config import get_settings
 
     settings = get_settings()

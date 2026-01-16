@@ -7,6 +7,22 @@ This setup runs [monolith](https://github.com/Y2Z/monolith) inside an interactiv
 
 Saved pages go into a local `./data` directory (mounted to `/data` in the container). Each request must include an `id` to namespace the save, and files are stored under `./data/<id>/monolith/`.
 
+## ⚠️ Firebase API Deprecation Notice
+
+**Legacy endpoints** (`/firebase/...`) are deprecated and will be removed in v2.0.0.
+
+**Action Required:** Migrate to new microservices endpoints (`/api/v1/firebase/...`).
+
+See [Firebase API Migration Guide](docs/FIREBASE_API_MIGRATION.md) for details.
+
+### Quick Migration
+
+Replace:
+- `/firebase/add-pocket-article` → `/api/v1/firebase/add-article`
+- `/firebase/save` → `/api/v1/firebase/add-article`
+- `/firebase/archive` → `/api/v1/firebase/archive`
+- `/firebase/download` → `/api/v1/firebase/download`
+
 ## Quick start
 
 1) Build and start
