@@ -140,13 +140,15 @@ def _build_firestore_document(
     return doc
 
 
-@router.post("/postgres-to-firestore", response_model=PostgresToFirestoreSyncResponse, dependencies=[Depends(rate_limit_admin)])
+@router.post("/sync/export", response_model=PostgresToFirestoreSyncResponse, dependencies=[Depends(rate_limit_admin)])
 async def sync_postgres_to_firestore(
     data: PostgresToFirestoreSyncRequest,
     db: Session = Depends(get_db),
 ) -> PostgresToFirestoreSyncResponse:
     """
-    Sync articles from PostgreSQL to Firestore.
+    Export articles from PostgreSQL to Firestore.
+
+    Replaces: POST /postgres-to-firestore
 
     This endpoint:
     1. Queries PostgreSQL for articles to sync
@@ -339,13 +341,15 @@ async def sync_postgres_to_firestore(
         )
 
 
-@router.post("/firestore-to-postgres", response_model=FirestoreToPostgresSyncResponse, dependencies=[Depends(rate_limit_admin)])
+@router.post("/sync/import", response_model=FirestoreToPostgresSyncResponse, dependencies=[Depends(rate_limit_admin)])
 async def sync_firestore_to_postgres(
     data: FirestoreToPostgresSyncRequest,
     db: Session = Depends(get_db),
 ) -> FirestoreToPostgresSyncResponse:
     """
-    Sync a single article from Firestore to PostgreSQL.
+    Import a single article from Firestore to PostgreSQL.
+
+    Replaces: POST /firestore-to-postgres
 
     This endpoint:
     1. Fetches article from Firestore

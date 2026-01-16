@@ -25,7 +25,7 @@ from shared.config import get_settings, configure_logging
 from shared.models import HealthResponse
 from shared.rate_limit import slowapi_limiter, _rate_limit_exceeded_handler, RateLimitMiddleware
 
-from app.routes import saves, tasks, admin, firebase, sync, commands, ht
+from app.routes import tasks, sync, archives, artifacts, system
 
 logger = logging.getLogger(__name__)
 
@@ -90,14 +90,12 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # Include routers
-    app.include_router(saves.router, prefix="/api/v1", tags=["saves"])
+    # Include routers - Consolidated API structure
+    app.include_router(archives.router, prefix="/api/v1", tags=["archives"])
+    app.include_router(artifacts.router, prefix="/api/v1", tags=["artifacts"])
+    app.include_router(system.router, prefix="/api/v1", tags=["system"])
     app.include_router(tasks.router, prefix="/api/v1", tags=["tasks"])
-    app.include_router(admin.router, prefix="/api/v1/admin", tags=["admin"])
-    app.include_router(firebase.router, prefix="/api/v1/firebase", tags=["firebase"])
-    app.include_router(sync.router, prefix="/api/v1/sync", tags=["sync"])
-    app.include_router(commands.router, prefix="/api/v1/commands", tags=["commands"])
-    app.include_router(ht.router, prefix="/api/v1/ht", tags=["hyperterm"])
+    app.include_router(sync.router, prefix="/api/v1", tags=["sync"])
 
     # Exception handlers
     @app.exception_handler(Exception)

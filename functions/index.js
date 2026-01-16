@@ -93,12 +93,15 @@ exports.onUserArticleSave = functions.firestore
       });
 
       // Call HTBase API to start archival
-      // Updated 2026-01-16: Use microservices API endpoint instead of deprecated monolith endpoint
+      // Updated 2026-01-16: Use consolidated archives endpoint
       const htbaseUrl = process.env.HTBASE_URL || 'http://localhost:8080';
-      const response = await axios.post(`${htbaseUrl}/api/v1/firebase/archive`, {
-        item_id: itemId,
-        url: userArticle.url,
-        archiver: userArticle.archiver || 'all'
+      const archiver = userArticle.archiver || 'all';
+      const response = await axios.post(`${htbaseUrl}/api/v1/archives`, {
+        items: [{
+          id: itemId,
+          url: userArticle.url
+        }],
+        archivers: archiver === 'all' ? ['all'] : [archiver]
       }, {
         headers: {
           'Content-Type': 'application/json',
@@ -168,12 +171,12 @@ exports.onArchiveStatusChange = functions.firestore
       console.log(`Article ${itemId} archival completed`);
 
       // Sync to PostgreSQL if enabled
-      // Updated 2026-01-16: Use microservices API endpoint instead of deprecated monolith endpoint
+      // Updated 2026-01-16: Use consolidated sync/import endpoint
       const syncToPg = process.env.SYNC_TO_POSTGRES === 'true';
       if (syncToPg) {
         try {
           const htbaseUrl = process.env.HTBASE_URL;
-          await axios.post(`${htbaseUrl}/api/v1/sync/firestore-to-postgres`, {
+          await axios.post(`${htbaseUrl}/api/v1/sync/import`, {
             item_id: itemId
           });
           console.log(`Synced ${itemId} to PostgreSQL`);

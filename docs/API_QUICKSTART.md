@@ -20,11 +20,11 @@ HTBase is a web archiving service designed for programmatic access by developers
 
 **Request:**
 ```bash
-curl -X POST http://localhost:8080/api/v1/archive/readability \
+curl -X POST http://localhost:8080/api/v1/archives \
   -H 'Content-Type: application/json' \
   -d '{
-    "id": "my-first-save",
-    "url": "https://example.com"
+    "items": [{"id": "my-first-save", "url": "https://example.com"}],
+    "archivers": ["readability"]
   }'
 ```
 
@@ -43,7 +43,7 @@ curl -X POST http://localhost:8080/api/v1/archive/readability \
 
 **Request:**
 ```bash
-curl http://localhost:8080/api/v1/retrieve?id=my-first-save&archiver=readability
+curl http://localhost:8080/api/v1/archives/my-first-save/download?archiver=readability
 ```
 
 This will download the archived file.
@@ -56,12 +56,12 @@ HTBase supports multiple archiving formats, each optimized for different use cas
 
 | Archiver | Output Format | Best For | Endpoint |
 |----------|--------------|----------|----------|
-| **readability** | Clean HTML + JSON metadata | Article text extraction, AI processing | `/api/v1/archive/readability` |
-| **monolith** | Single HTML file | Complete page preservation | `/api/v1/archive/monolith` |
-| **singlefile-cli** | Single HTML file with embedded assets | Offline viewing, complete fidelity | `/api/v1/archive/singlefile-cli` |
-| **pdf** | PDF | Print-ready documents | `/api/v1/archive/pdf` |
-| **screenshot** | PNG | Visual snapshots | `/api/v1/archive/screenshot` |
-| **all** | All formats | Comprehensive archiving | `/api/v1/workflow` |
+| **readability** | Clean HTML + JSON metadata | Article text extraction, AI processing | `/api/v1/archives` |
+| **monolith** | Single HTML file | Complete page preservation | `/api/v1/archives` |
+| **singlefile-cli** | Single HTML file with embedded assets | Offline viewing, complete fidelity | `/api/v1/archives` |
+| **pdf** | PDF | Print-ready documents | `/api/v1/archives` |
+| **screenshot** | PNG | Visual snapshots | `/api/v1/archives` |
+| **all** | All formats | Comprehensive archiving | `/api/v1/archives` |
 
 ---
 
@@ -72,11 +72,11 @@ HTBase supports multiple archiving formats, each optimized for different use cas
 Archive a URL with all available archivers:
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/workflow \
+curl -X POST http://localhost:8080/api/v1/archives \
   -H 'Content-Type: application/json' \
   -d '{
-    "id": "article-2026-01-09",
-    "url": "https://www.example.com/article"
+    "items": [{"id": "article-2026-01-09", "url": "https://www.example.com/article"}],
+    "archivers": ["all"]
   }'
 ```
 
@@ -85,14 +85,15 @@ curl -X POST http://localhost:8080/api/v1/workflow \
 Archive multiple URLs at once:
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/archive/readability/batch \
+curl -X POST http://localhost:8080/api/v1/archives \
   -H 'Content-Type: application/json' \
   -d '{
     "items": [
       {"id": "article-1", "url": "https://example.com/1"},
       {"id": "article-2", "url": "https://example.com/2"},
       {"id": "article-3", "url": "https://example.com/3"}
-    ]
+    ],
+    "archivers": ["readability"]
   }'
 ```
 
@@ -147,7 +148,7 @@ curl http://localhost:8080/api/v1/tasks/batch-abc123
 After archiving with `readability`, generate an AI summary:
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/admin/summarize \
+curl -X POST http://localhost:8080/api/v1/system/summarize \
   -H 'Content-Type: application/json' \
   -d '{
     "item_id": "my-first-save"
@@ -168,7 +169,7 @@ curl -X POST http://localhost:8080/api/v1/admin/summarize \
 Download all archived formats for a URL as a tarball:
 
 ```bash
-curl http://localhost:8080/api/v1/retrieve?id=article-2026-01-09&archiver=all \
+curl http://localhost:8080/api/v1/archives/article-2026-01-09/download?archiver=all \
   --output article-2026-01-09.tar.gz
 ```
 
@@ -203,9 +204,9 @@ curl http://localhost:8080/api/v1/retrieve?id=article-2026-01-09&archiver=all \
 ### Missing Required Field
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/archive/readability \
+curl -X POST http://localhost:8080/api/v1/archives \
   -H 'Content-Type: application/json' \
-  -d '{"url": "https://example.com"}'
+  -d '{"items": [{"url": "https://example.com"}]}'
 ```
 
 **Error:**
@@ -259,14 +260,14 @@ HTBase will check if an archive already exists before processing.
 
 ### 4. Handle Batch Operations
 
-For multiple URLs, use batch endpoints to improve efficiency:
+For multiple URLs, use batch mode to improve efficiency:
 
 ```python
 # Efficient
-POST /api/v1/archive/readability/batch with 100 items
+POST /api/v1/archives with {"items": [100 items], "archivers": ["readability"]}
 
 # Inefficient
-100 individual POST /api/v1/archive/readability calls
+100 individual POST /api/v1/archives calls
 ```
 
 ### 5. Implement Retry Logic
@@ -280,8 +281,11 @@ def archive_with_retry(url, id, max_retries=3):
     for attempt in range(max_retries):
         try:
             response = requests.post(
-                "http://localhost:8080/api/v1/archive/readability",
-                json={"url": url, "id": id}
+                "http://localhost:8080/api/v1/archives",
+                json={
+                    "items": [{"url": url, "id": id}],
+                    "archivers": ["readability"]
+                }
             )
             response.raise_for_status()
             return response.json()
@@ -343,23 +347,32 @@ Visit the interactive API docs while your server is running:
 ### Core Endpoints
 
 ```
-# Single Archive
-POST /api/v1/archive/{archiver}        Body: {"id": "...", "url": "..."}
+# Archive (Single or Batch)
+POST /api/v1/archives                  Body: {"items": [...], "archivers": [...]}
 
-# Batch Archive
-POST /api/v1/archive/{archiver}/batch  Body: {"items": [...]}
+# List Archives
+GET  /api/v1/archives                  Query: limit=..., offset=...
 
-# Workflow (All Archivers)
-POST /api/v1/workflow                  Body: {"id": "...", "url": "..."}
+# Get Archive Details
+GET  /api/v1/archives/{item_id}        Query: include=...
+
+# Download Archive
+GET  /api/v1/archives/{item_id}/download  Query: archiver=...
+
+# Delete Archive
+DELETE /api/v1/archives                Query: identifier=..., type=...
 
 # Task Status
-GET  /api/v1/tasks/{task_id}
+GET  /api/v1/tasks/{task_id}           Query: include_celery=...
 
-# Retrieve Archive
-GET  /api/v1/retrieve                  Query: id=..., archiver=...
+# List Archivers
+GET  /api/v1/system/archivers
+
+# System Statistics
+GET  /api/v1/system/stats
 
 # Summarize
-POST /api/v1/admin/summarize           Body: {"item_id": "..."}
+POST /api/v1/system/summarize          Body: {"item_id": "..."}
 
 # Health Check
 GET  /health

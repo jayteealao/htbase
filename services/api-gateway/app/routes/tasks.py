@@ -34,14 +34,23 @@ def get_db():
 @router.get("/tasks/{task_id}", response_model=TaskStatusResponse, dependencies=[Depends(rate_limit_status)])
 async def get_task_status(
     task_id: str,
+    include_celery: bool = Query(False, description="Include Celery-specific details"),
     db: Session = Depends(get_db),
 ):
     """
     Get status of a task or batch of tasks.
 
+    Consolidates:
+    - GET /tasks/{task_id} - Task status with artifact details
+    - GET /tasks/{task_id}/celery - Raw Celery task info
+
+    Query params:
+    - include_celery: Include raw Celery task information (default: false)
+
     Returns status of all items associated with the task ID.
+    If include_celery=true, response includes a "celery_info" field.
     """
-    logger.debug("Task status request", extra={"task_id": task_id})
+    logger.debug("Task status request", extra={"task_id": task_id, "include_celery": include_celery})
 
     # Find all artifacts with this task ID
     artifacts = (
@@ -97,67 +106,27 @@ async def get_task_status(
         overall_status = "completed"
         progress = 100.0
 
-    return TaskStatusResponse(
+    response = TaskStatusResponse(
         task_id=task_id,
         status=overall_status,
         progress=progress,
         items=items,
     )
 
+    # Add Celery info if requested
+    if include_celery:
+        try:
+            celery_info = get_task_info(task_id)
+            response_dict = response.dict()
+            response_dict["celery_info"] = celery_info
+            return response_dict
+        except Exception as e:
+            logger.error(f"Error getting Celery task info: {e}")
+            response_dict = response.dict()
+            response_dict["celery_info"] = {"error": str(e)}
+            return response_dict
 
-@router.get("/tasks/{task_id}/celery", dependencies=[Depends(rate_limit_status)])
-async def get_celery_task_info(task_id: str):
-    """
-    Get Celery task information.
-
-    Returns the raw Celery task status and result.
-    """
-    try:
-        info = get_task_info(task_id)
-        return info
-    except Exception as e:
-        logger.error(f"Error getting Celery task info: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/tasks/{task_id}/cancel", dependencies=[Depends(rate_limit_admin)])
-async def cancel_task(
-    task_id: str,
-    db: Session = Depends(get_db),
-):
-    """
-    Cancel a pending task.
-
-    Revokes any pending Celery tasks and marks artifacts as cancelled.
-    """
-    logger.info("Cancel task request", extra={"task_id": task_id})
-
-    # Find artifacts
-    artifacts = (
-        db.query(ArchiveArtifact)
-        .filter(
-            ArchiveArtifact.task_id == task_id,
-            ArchiveArtifact.status == "pending",
-        )
-        .all()
-    )
-
-    if not artifacts:
-        raise HTTPException(status_code=404, detail="No pending tasks found")
-
-    # Revoke Celery tasks
-    celery_app.control.revoke(task_id, terminate=True)
-
-    # Update artifact status
-    for artifact in artifacts:
-        artifact.status = "cancelled"
-
-    db.commit()
-
-    return {
-        "message": f"Cancelled {len(artifacts)} task(s)",
-        "task_id": task_id,
-    }
+    return response
 
 
 @router.get("/tasks", dependencies=[Depends(rate_limit_status)])
@@ -204,10 +173,12 @@ async def list_tasks(
     }
 
 
-@router.get("/queue/stats", dependencies=[Depends(rate_limit_status)])
+@router.get("/tasks/queue-stats", dependencies=[Depends(rate_limit_status)])
 async def get_queue_stats():
     """
     Get Celery queue statistics.
+
+    Replaces: GET /queue/stats
 
     Returns information about queue lengths and worker status.
     """
