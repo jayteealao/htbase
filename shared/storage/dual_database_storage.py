@@ -37,13 +37,65 @@ class DualDatabaseStorage(DatabaseStorageProvider):
     """
     Dual-database storage provider that writes to both PostgreSQL and Firestore.
 
-    PostgreSQL is the source of truth for all data.
-    Firestore is a read replica for mobile apps (articles + pocket data only).
+    Architecture:
+    - PostgreSQL: Source of truth for ALL data (articles, artifacts, summaries, etc.)
+    - Firestore: Read replica for mobile apps (articles + pocket metadata only)
+    - Sync: Best-effort eventual consistency (PostgreSQL → Firestore)
 
-    Failure Modes (configurable):
-    - fail_fast: If Firestore fails, fail entire operation
-    - log_and_continue: Log Firestore failures, continue with PostgreSQL
-    - queue_retry: Queue failed Firestore writes for retry (future enhancement)
+    Write Order (CRITICAL):
+    1. PostgreSQL write (blocking, must succeed)
+    2. Firestore write (best-effort based on failure_mode)
+
+    ⚠️ IMPORTANT: Distributed Transaction Semantics
+
+    This class does NOT provide true atomic dual-writes across both databases.
+    Neither PostgreSQL nor Firestore supports distributed transactions (2PC).
+
+    Failure Modes:
+
+    1. "fail_fast" (strict, raises exception on Firestore failure)
+       - PostgreSQL write succeeds ✅
+       - Firestore write fails ❌
+       - Exception raised to caller
+       - ⚠️ WARNING: PostgreSQL data IS ALREADY COMMITTED (cannot rollback)
+       - Result: Split-brain state (PostgreSQL has data, Firestore doesn't)
+       - Recovery: Reconciliation worker must sync PostgreSQL → Firestore
+       - Use when: You want to know immediately about sync failures
+
+    2. "log_and_continue" (eventual consistency, tolerates Firestore failures)
+       - PostgreSQL write succeeds ✅
+       - Firestore write fails ❌
+       - Logs warning but returns success
+       - Result: Firestore eventual consistency (will be synced later)
+       - Recovery: Reconciliation worker handles sync
+       - Use when: Firestore is truly optional, mobile app can tolerate stale data
+
+    3. "queue_retry" (future enhancement, not yet implemented)
+       - Would queue failed Firestore writes for retry
+       - Requires message queue infrastructure
+
+    Reconciliation:
+    - A separate reconciliation worker should periodically sync PostgreSQL → Firestore
+    - Query PostgreSQL for records with firestore_synced=False
+    - Retry Firestore writes for unsynced records
+    - Mark records as synced on success
+
+    Example Failure Scenario:
+
+        storage = DualDatabaseStorage(pg, fs, failure_mode="fail_fast")
+
+        try:
+            storage.create_article(metadata)
+        except Exception:
+            # Exception raised because Firestore failed
+            # BUT: Article exists in PostgreSQL! (committed before Firestore attempt)
+            # Check PostgreSQL directly to see data
+
+    Best Practices:
+    - Use "log_and_continue" for production (tolerates Firestore outages)
+    - Implement reconciliation worker to fix sync lag
+    - Monitor Firestore sync lag metrics
+    - Alert on sustained sync failures (>1 hour lag)
     """
 
     def __init__(
@@ -77,17 +129,45 @@ class DualDatabaseStorage(DatabaseStorageProvider):
         """
         Create article in both databases.
 
+        ⚠️ CRITICAL: PostgreSQL write happens BEFORE Firestore write.
+        If Firestore fails, PostgreSQL data is ALREADY COMMITTED (cannot rollback).
+
         Flow:
-        1. Write to PostgreSQL (source of truth)
-        2. Filter data for Firestore
-        3. Write to Firestore (articles + pocket only)
-        4. Handle failures based on failure_mode
+        1. Write to PostgreSQL (BLOCKING - must succeed or entire operation fails)
+        2. If PostgreSQL succeeds → PostgreSQL data is COMMITTED
+        3. Filter data for Firestore (articles + pocket metadata only)
+        4. Write to Firestore (best-effort based on failure_mode)
+        5. Handle Firestore failures based on failure_mode setting
+
+        Failure Scenarios:
+
+        Scenario A: PostgreSQL fails
+        - Returns: False immediately
+        - State: No data written anywhere ✅ (safe)
+
+        Scenario B: PostgreSQL succeeds, Firestore fails (failure_mode="fail_fast")
+        - PostgreSQL: Data committed ✅
+        - Firestore: No data ❌
+        - Returns: False (or raises exception)
+        - State: SPLIT-BRAIN ⚠️ (PostgreSQL has data, Firestore doesn't)
+        - Recovery: Reconciliation worker must sync
+
+        Scenario C: PostgreSQL succeeds, Firestore fails (failure_mode="log_and_continue")
+        - PostgreSQL: Data committed ✅
+        - Firestore: No data ❌
+        - Returns: True (logs warning)
+        - State: Eventual consistency ⏱️ (Firestore will be synced later)
+        - Recovery: Reconciliation worker handles automatically
 
         Args:
             metadata: Article metadata
 
         Returns:
-            True if successful (based on failure mode)
+            - True: PostgreSQL write succeeded (Firestore may or may not have succeeded)
+            - False: PostgreSQL write failed OR (Firestore failed AND failure_mode="fail_fast")
+
+        Raises:
+            May raise exception if failure_mode="fail_fast" and Firestore fails
         """
         # Step 1: Write to PostgreSQL first
         pg_success = self.postgres.create_article(metadata)

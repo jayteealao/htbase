@@ -3,6 +3,13 @@ SQLAlchemy ORM models for HTBase.
 
 These models define the database schema for storing archived URLs,
 artifacts, metadata, summaries, and related data.
+
+Timezone Handling:
+- Python code uses datetime.utcnow() for all timestamp generation
+- Database server_default uses now() which depends on PostgreSQL timezone setting
+- IMPORTANT: Ensure PostgreSQL is configured with timezone='UTC'
+- Verify with: SHOW timezone;
+- Configure with: ALTER DATABASE htbase SET timezone = 'UTC';
 """
 
 from __future__ import annotations
@@ -29,7 +36,17 @@ Base = declarative_base()
 
 
 class ArchivedUrl(Base):
-    """Archived URL record - the primary entity for saved URLs."""
+    """Archived URL record - the primary entity for saved URLs.
+
+    Security Note: URL validation happens at the API layer (Pydantic HttpUrl).
+    For defense-in-depth, consider adding database CHECK constraint:
+
+        ALTER TABLE archived_urls
+        ADD CONSTRAINT archived_urls_url_format_check
+        CHECK (url ~ '^https?://');
+
+    This ensures malformed URLs cannot be inserted directly via SQL.
+    """
 
     __tablename__ = "archived_urls"
 
@@ -37,6 +54,7 @@ class ArchivedUrl(Base):
     # Original identifier provided by client (kept for compatibility/labeling)
     item_id = Column(String, nullable=True)
     # The canonical URL for this entry; enforce single row per URL
+    # TODO: Add CHECK constraint for URL format (url ~ '^https?://')
     url = Column(Text, nullable=False, unique=True)
     name = Column(String, nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=sa_text("now()"))

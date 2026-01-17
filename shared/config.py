@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 from urllib.parse import quote_plus
 
 from pydantic import AliasChoices, BaseModel, Field, SecretStr, field_validator
@@ -47,11 +47,21 @@ class DatabaseSettings(BaseModel):
     )
     pool_size: int = Field(
         default=5,
+        ge=1,
         validation_alias=AliasChoices("DB_POOL_SIZE", "DATABASE__POOL_SIZE"),
+        description="Database connection pool size (min 1)",
     )
     max_overflow: int = Field(
         default=10,
+        ge=0,
         validation_alias=AliasChoices("DB_MAX_OVERFLOW", "DATABASE__MAX_OVERFLOW"),
+        description="Maximum overflow connections (min 0)",
+    )
+    pool_timeout: int = Field(
+        default=30,
+        ge=1,
+        validation_alias=AliasChoices("DB_POOL_TIMEOUT", "DATABASE__POOL_TIMEOUT"),
+        description="Pool timeout in seconds (min 1)",
     )
 
     def sqlalchemy_url(self) -> str:
@@ -133,6 +143,135 @@ class FirestoreSettings(BaseModel):
     def is_configured(self) -> bool:
         """Check if Firestore is properly configured."""
         return bool(self.project_id)
+
+
+class ArchiverSettings(BaseModel):
+    """Archiver execution timeout settings (in seconds)."""
+
+    singlefile_timeout: float = Field(
+        default=300.0,
+        ge=1.0,
+        validation_alias=AliasChoices("ARCHIVER_SINGLEFILE_TIMEOUT", "ARCHIVERS__SINGLEFILE_TIMEOUT"),
+        description="Timeout for singlefile archiver (seconds)",
+    )
+    monolith_timeout: float = Field(
+        default=300.0,
+        ge=1.0,
+        validation_alias=AliasChoices("ARCHIVER_MONOLITH_TIMEOUT", "ARCHIVERS__MONOLITH_TIMEOUT"),
+        description="Timeout for monolith archiver (seconds)",
+    )
+    pdf_timeout: float = Field(
+        default=120.0,
+        ge=1.0,
+        validation_alias=AliasChoices("ARCHIVER_PDF_TIMEOUT", "ARCHIVERS__PDF_TIMEOUT"),
+        description="Timeout for PDF archiver (seconds)",
+    )
+    screenshot_timeout: float = Field(
+        default=60.0,
+        ge=1.0,
+        validation_alias=AliasChoices("ARCHIVER_SCREENSHOT_TIMEOUT", "ARCHIVERS__SCREENSHOT_TIMEOUT"),
+        description="Timeout for screenshot archiver (seconds)",
+    )
+    readability_timeout: float = Field(
+        default=30.0,
+        ge=1.0,
+        validation_alias=AliasChoices("ARCHIVER_READABILITY_TIMEOUT", "ARCHIVERS__READABILITY_TIMEOUT"),
+        description="Timeout for readability archiver (seconds)",
+    )
+
+
+class TaskSettings(BaseModel):
+    """Celery task retry and timeout settings."""
+
+    default_retry_delay: int = Field(
+        default=60,
+        ge=1,
+        validation_alias=AliasChoices("TASK_DEFAULT_RETRY_DELAY", "TASKS__DEFAULT_RETRY_DELAY"),
+        description="Default retry delay in seconds",
+    )
+    max_retries: int = Field(
+        default=3,
+        ge=0,
+        validation_alias=AliasChoices("TASK_MAX_RETRIES", "TASKS__MAX_RETRIES"),
+        description="Default maximum retries for tasks",
+    )
+    retry_backoff_max: int = Field(
+        default=300,
+        ge=1,
+        validation_alias=AliasChoices("TASK_RETRY_BACKOFF_MAX", "TASKS__RETRY_BACKOFF_MAX"),
+        description="Maximum backoff delay in seconds",
+    )
+    webhook_retry_delay: int = Field(
+        default=60,
+        ge=1,
+        validation_alias=AliasChoices("TASK_WEBHOOK_RETRY_DELAY", "TASKS__WEBHOOK_RETRY_DELAY"),
+        description="Webhook task retry delay in seconds",
+    )
+    webhook_max_retries: int = Field(
+        default=5,
+        ge=0,
+        validation_alias=AliasChoices("TASK_WEBHOOK_MAX_RETRIES", "TASKS__WEBHOOK_MAX_RETRIES"),
+        description="Maximum retries for webhook tasks",
+    )
+    webhook_retry_backoff_max: int = Field(
+        default=600,
+        ge=1,
+        validation_alias=AliasChoices("TASK_WEBHOOK_RETRY_BACKOFF_MAX", "TASKS__WEBHOOK_RETRY_BACKOFF_MAX"),
+        description="Maximum backoff delay for webhook tasks in seconds",
+    )
+    storage_max_retries: int = Field(
+        default=5,
+        ge=0,
+        validation_alias=AliasChoices("TASK_STORAGE_MAX_RETRIES", "TASKS__STORAGE_MAX_RETRIES"),
+        description="Maximum retries for storage tasks",
+    )
+
+
+class HTTPSettings(BaseModel):
+    """HTTP client timeout settings (in seconds)."""
+
+    default_timeout: float = Field(
+        default=30.0,
+        ge=1.0,
+        validation_alias=AliasChoices("HTTP_DEFAULT_TIMEOUT", "HTTP__DEFAULT_TIMEOUT"),
+        description="Default HTTP request timeout (seconds)",
+    )
+    health_check_timeout: float = Field(
+        default=10.0,
+        ge=1.0,
+        validation_alias=AliasChoices("HTTP_HEALTH_CHECK_TIMEOUT", "HTTP__HEALTH_CHECK_TIMEOUT"),
+        description="Timeout for health check requests (seconds)",
+    )
+    webhook_timeout: float = Field(
+        default=10.0,
+        ge=1.0,
+        validation_alias=AliasChoices("HTTP_WEBHOOK_TIMEOUT", "HTTP__WEBHOOK_TIMEOUT"),
+        description="Timeout for webhook delivery (seconds)",
+    )
+
+
+class BatchSettings(BaseModel):
+    """Batch processing limits and chunk sizes."""
+
+    max_batch_size: int = Field(
+        default=100,
+        ge=1,
+        le=1000,
+        validation_alias=AliasChoices("BATCH_MAX_SIZE", "BATCH__MAX_SIZE"),
+        description="Maximum items in a single batch request (1-1000)",
+    )
+    requeue_chunk_size: int = Field(
+        default=10,
+        ge=1,
+        validation_alias=AliasChoices("BATCH_REQUEUE_CHUNK_SIZE", "BATCH__REQUEUE_CHUNK_SIZE"),
+        description="Number of tasks to requeue at once",
+    )
+    worker_max_tasks_per_child: int = Field(
+        default=10,
+        ge=1,
+        validation_alias=AliasChoices("WORKER_MAX_TASKS_PER_CHILD", "WORKER__MAX_TASKS_PER_CHILD"),
+        description="Maximum tasks per worker child process",
+    )
 
 
 class SummarizationSettings(BaseModel):
@@ -224,11 +363,34 @@ class SharedSettings(BaseSettings):
         description="Log format: 'json' or 'text'",
     )
 
+    # CORS configuration
+    cors_origins: List[str] = Field(
+        default=["http://localhost:3000", "http://localhost:8080"],
+        validation_alias=AliasChoices("CORS_ORIGINS"),
+        description="List of allowed CORS origins (comma-separated in env)",
+    )
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def parse_cors_origins(cls, v) -> List[str]:
+        """Parse comma-separated CORS origins into a list."""
+        if isinstance(v, list):
+            return v
+        if isinstance(v, str):
+            if not v:
+                return []
+            return [origin.strip() for origin in v.split(",") if origin.strip()]
+        return v
+
     # Nested settings
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     redis: RedisSettings = Field(default_factory=RedisSettings)
     gcs: GCSSettings = Field(default_factory=GCSSettings)
     firestore: FirestoreSettings = Field(default_factory=FirestoreSettings)
+    archivers: ArchiverSettings = Field(default_factory=ArchiverSettings)
+    tasks: TaskSettings = Field(default_factory=TaskSettings)
+    http: HTTPSettings = Field(default_factory=HTTPSettings)
+    batch: BatchSettings = Field(default_factory=BatchSettings)
     summarization: SummarizationSettings = Field(default_factory=SummarizationSettings)
 
     # Storage configuration
