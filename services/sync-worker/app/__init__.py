@@ -1,1 +1,0 @@
-"""Migration worker application package."""

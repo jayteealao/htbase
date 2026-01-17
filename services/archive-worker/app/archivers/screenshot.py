@@ -22,9 +22,11 @@ class ScreenshotArchiver(BaseArchiver):
     name = "screenshot"
     output_extension = "png"
 
-    def archive(self, *, url: str, item_id: str) -> ArchiveResult:
-        """Archive URL as screenshot."""
-        out_dir, out_path = self.get_output_path(item_id)
+    def archive(self, *, url: str, item_id: str, output_path) -> ArchiveResult:
+        """Archive URL as screenshot to provided output_path."""
+        from pathlib import Path
+
+        output_path = Path(output_path)
 
         logger.info(
             f"Taking screenshot of {item_id} {url}",
@@ -49,7 +51,7 @@ class ScreenshotArchiver(BaseArchiver):
             "--disable-software-rasterizer",
             "--disable-dev-shm-usage",
             f"--user-data-dir={user_data_dir}",
-            f"--screenshot={out_path}",
+            f"--screenshot={output_path}",
             f"--window-size={window_width},{window_height}",
             "--hide-scrollbars",
             "--run-all-compositor-stages-before-draw",
@@ -67,4 +69,4 @@ class ScreenshotArchiver(BaseArchiver):
         if result.timed_out:
             return ArchiveResult(success=False, exit_code=None, saved_path=None)
 
-        return self.create_result(path=out_path, exit_code=result.exit_code)
+        return self.create_result(path=output_path, exit_code=result.exit_code)

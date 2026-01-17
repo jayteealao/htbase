@@ -21,7 +21,7 @@ load_dotenv(env_file, override=True)
 sys.path.insert(0, str(Path(__file__).parent / "app"))
 
 # Now import and force reload of settings
-from core.config import get_settings
+from shared.config import get_settings
 # Clear the LRU cache to force fresh load
 get_settings.cache_clear()
 

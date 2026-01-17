@@ -30,7 +30,7 @@ def test_client(temp_env) -> Generator:
     client = TestClient(server.app)
     # Install dummy archiver to avoid external binaries
     from archivers.base import BaseArchiver
-    from core.config import get_settings
+    from shared.config import get_settings
     from models import ArchiveResult
     from core.utils import sanitize_filename
     from task_manager import ArchiverTaskManager

@@ -18,8 +18,16 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class DatabaseSettings(BaseModel):
-    """Database connection settings."""
+    """Database settings (for backward compatibility during PostgreSQL removal).
 
+    NOTE: HTBase now uses Firestore exclusively. This class remains only for
+    backward compatibility with legacy scripts during the transition period.
+    """
+
+    path: Optional[Path] = Field(
+        default=None,
+        validation_alias=AliasChoices("DB_PATH", "DATABASE__PATH"),
+    )
     host: str = Field(
         default="localhost",
         validation_alias=AliasChoices("DB_HOST", "DATABASE__HOST"),
@@ -40,40 +48,26 @@ class DatabaseSettings(BaseModel):
         default=SecretStr(""),
         validation_alias=AliasChoices("DB_PASSWORD", "DATABASE__PASSWORD"),
     )
-    socket: Optional[str] = Field(
-        default=None,
-        validation_alias=AliasChoices("DB_SOCKET", "DATABASE__SOCKET"),
-        description="Cloud SQL socket path for Unix socket connections",
-    )
-    pool_size: int = Field(
-        default=5,
-        ge=1,
-        validation_alias=AliasChoices("DB_POOL_SIZE", "DATABASE__POOL_SIZE"),
-        description="Database connection pool size (min 1)",
-    )
-    max_overflow: int = Field(
-        default=10,
-        ge=0,
-        validation_alias=AliasChoices("DB_MAX_OVERFLOW", "DATABASE__MAX_OVERFLOW"),
-        description="Maximum overflow connections (min 0)",
-    )
-    pool_timeout: int = Field(
-        default=30,
-        ge=1,
-        validation_alias=AliasChoices("DB_POOL_TIMEOUT", "DATABASE__POOL_TIMEOUT"),
-        description="Pool timeout in seconds (min 1)",
-    )
 
     def sqlalchemy_url(self) -> str:
-        """Build SQLAlchemy database URL."""
+        """Generate SQLAlchemy database URL.
+
+        NOTE: This method is deprecated as HTBase no longer uses PostgreSQL.
+        It remains for backward compatibility with legacy scripts only.
+        """
+        if self.path:
+            return f"sqlite:///{self.path}"
         user = quote_plus(self.user)
         pwd = quote_plus(self.password.get_secret_value())
-
-        if self.socket:
-            # Cloud SQL Unix socket connection
-            return f"postgresql+psycopg://{user}:{pwd}@/{self.name}?host={self.socket}"
-
         return f"postgresql+psycopg://{user}:{pwd}@{self.host}:{self.port}/{self.name}"
+
+    def resolved_path(self, data_dir: Path) -> Path:
+        """Get resolved database path with fallback to data_dir/app.db.
+
+        NOTE: This method is deprecated as HTBase no longer uses SQLite.
+        It remains for backward compatibility with legacy scripts only.
+        """
+        return self.path or (data_dir / "app.db")
 
 
 class RedisSettings(BaseModel):
@@ -104,40 +98,41 @@ class RedisSettings(BaseModel):
 
 
 class GCSSettings(BaseModel):
-    """Google Cloud Storage settings."""
+    """Google Cloud Storage settings - now required for all storage operations."""
 
     bucket: str = Field(
-        default="htbase-archives",
+        ...,  # Required field
         validation_alias=AliasChoices("GCS_BUCKET", "STORAGE__GCS_BUCKET"),
+        description="GCS bucket name for artifact storage",
     )
-    project_id: Optional[str] = Field(
-        default=None,
+    project_id: str = Field(
+        ...,  # Required field
         validation_alias=AliasChoices("GCS_PROJECT_ID", "GOOGLE_CLOUD_PROJECT"),
+        description="Google Cloud project ID",
     )
     credentials_path: Optional[Path] = Field(
         default=None,
         validation_alias=AliasChoices(
             "GCS_CREDENTIALS_PATH", "GOOGLE_APPLICATION_CREDENTIALS"
         ),
+        description="Path to service account credentials JSON file",
     )
-
-    def is_configured(self) -> bool:
-        """Check if GCS is properly configured."""
-        return bool(self.bucket)
 
 
 class FirestoreSettings(BaseModel):
-    """Firestore settings for mobile client sync."""
+    """Firestore settings - now the primary database for HTBase."""
 
-    project_id: Optional[str] = Field(
-        default=None,
+    project_id: str = Field(
+        ...,  # Required field
         validation_alias=AliasChoices(
             "FIRESTORE_PROJECT_ID", "GOOGLE_CLOUD_PROJECT", "GCS_PROJECT_ID"
         ),
+        description="Google Cloud project ID for Firestore database",
     )
     collection_name: str = Field(
         default="articles",
         validation_alias=AliasChoices("FIRESTORE_COLLECTION", "FIRESTORE__COLLECTION"),
+        description="Firestore collection name for articles",
     )
 
     def is_configured(self) -> bool:
@@ -236,12 +231,8 @@ class HTTPSettings(BaseModel):
         validation_alias=AliasChoices("HTTP_DEFAULT_TIMEOUT", "HTTP__DEFAULT_TIMEOUT"),
         description="Default HTTP request timeout (seconds)",
     )
-    health_check_timeout: float = Field(
-        default=10.0,
-        ge=1.0,
-        validation_alias=AliasChoices("HTTP_HEALTH_CHECK_TIMEOUT", "HTTP__HEALTH_CHECK_TIMEOUT"),
-        description="Timeout for health check requests (seconds)",
-    )
+    # REMOVED: health_check_timeout - never used in codebase
+    # Health checks use hardcoded timeouts in their respective endpoints
     webhook_timeout: float = Field(
         default=10.0,
         ge=1.0,
@@ -250,29 +241,12 @@ class HTTPSettings(BaseModel):
     )
 
 
-class BatchSettings(BaseModel):
-    """Batch processing limits and chunk sizes."""
-
-    max_batch_size: int = Field(
-        default=100,
-        ge=1,
-        le=1000,
-        validation_alias=AliasChoices("BATCH_MAX_SIZE", "BATCH__MAX_SIZE"),
-        description="Maximum items in a single batch request (1-1000)",
-    )
-    requeue_chunk_size: int = Field(
-        default=10,
-        ge=1,
-        validation_alias=AliasChoices("BATCH_REQUEUE_CHUNK_SIZE", "BATCH__REQUEUE_CHUNK_SIZE"),
-        description="Number of tasks to requeue at once",
-    )
-    worker_max_tasks_per_child: int = Field(
-        default=10,
-        ge=1,
-        validation_alias=AliasChoices("WORKER_MAX_TASKS_PER_CHILD", "WORKER__MAX_TASKS_PER_CHILD"),
-        description="Maximum tasks per worker child process",
-    )
-
+# REMOVED: BatchSettings class
+# These settings were defined but never actually used in the codebase:
+# - max_batch_size: Hardcoded to 100 in API validation (CreateArchiveRequest.items)
+# - requeue_chunk_size: Hardcoded to DEFAULT_REQUEUE_CHUNK_SIZE (10) in archiver.py
+# - worker_max_tasks_per_child: Hardcoded in Celery worker configs
+# If you need these to be configurable, use the constants directly where needed.
 
 class SummarizationSettings(BaseModel):
     """Summarization service settings."""
@@ -383,38 +357,17 @@ class SharedSettings(BaseSettings):
         return v
 
     # Nested settings
-    database: DatabaseSettings = Field(default_factory=DatabaseSettings)
+    database: DatabaseSettings = Field(
+        default_factory=DatabaseSettings,
+        description="Legacy database settings (deprecated - HTBase uses Firestore)"
+    )
     redis: RedisSettings = Field(default_factory=RedisSettings)
     gcs: GCSSettings = Field(default_factory=GCSSettings)
     firestore: FirestoreSettings = Field(default_factory=FirestoreSettings)
     archivers: ArchiverSettings = Field(default_factory=ArchiverSettings)
     tasks: TaskSettings = Field(default_factory=TaskSettings)
     http: HTTPSettings = Field(default_factory=HTTPSettings)
-    batch: BatchSettings = Field(default_factory=BatchSettings)
     summarization: SummarizationSettings = Field(default_factory=SummarizationSettings)
-
-    # Storage configuration
-    storage_backend: str = Field(
-        default="local",
-        validation_alias=AliasChoices("STORAGE_BACKEND", "STORAGE__BACKEND"),
-        description="File storage backend: 'local' or 'gcs'",
-    )
-    enable_storage_integration: bool = Field(
-        default=False,
-        validation_alias=AliasChoices(
-            "ENABLE_STORAGE_INTEGRATION", "STORAGE__ENABLE_INTEGRATION"
-        ),
-    )
-    enable_local_cleanup: bool = Field(
-        default=True,
-        validation_alias=AliasChoices("ENABLE_LOCAL_CLEANUP", "STORAGE__ENABLE_CLEANUP"),
-    )
-    local_workspace_retention_hours: int = Field(
-        default=24,
-        validation_alias=AliasChoices(
-            "LOCAL_WORKSPACE_RETENTION_HOURS", "STORAGE__RETENTION_HOURS"
-        ),
-    )
 
     # Celery configuration
     celery_broker_url: Optional[str] = Field(
@@ -438,7 +391,11 @@ class SharedSettings(BaseSettings):
 
     @property
     def database_url(self) -> str:
-        """Get database connection string."""
+        """Get database connection string.
+
+        NOTE: This property is deprecated as HTBase no longer uses PostgreSQL.
+        It remains for backward compatibility with legacy scripts only.
+        """
         return self.database.sqlalchemy_url()
 
     model_config = SettingsConfigDict(

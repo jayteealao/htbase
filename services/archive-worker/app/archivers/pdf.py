@@ -22,9 +22,11 @@ class PDFArchiver(BaseArchiver):
     name = "pdf"
     output_extension = "pdf"
 
-    def archive(self, *, url: str, item_id: str) -> ArchiveResult:
-        """Archive URL as PDF."""
-        out_dir, out_path = self.get_output_path(item_id)
+    def archive(self, *, url: str, item_id: str, output_path) -> ArchiveResult:
+        """Archive URL as PDF to provided output_path."""
+        from pathlib import Path
+
+        output_path = Path(output_path)
 
         logger.info(
             f"Creating PDF of {item_id} {url}",
@@ -45,7 +47,7 @@ class PDFArchiver(BaseArchiver):
             "--disable-software-rasterizer",
             "--disable-dev-shm-usage",
             f"--user-data-dir={user_data_dir}",
-            f"--print-to-pdf={out_path}",
+            f"--print-to-pdf={output_path}",
             "--no-margins",
             "--run-all-compositor-stages-before-draw",
             "--virtual-time-budget=10000",
@@ -62,4 +64,4 @@ class PDFArchiver(BaseArchiver):
         if result.timed_out:
             return ArchiveResult(success=False, exit_code=None, saved_path=None)
 
-        return self.create_result(path=out_path, exit_code=result.exit_code)
+        return self.create_result(path=output_path, exit_code=result.exit_code)

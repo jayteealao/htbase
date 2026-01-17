@@ -1,7 +1,7 @@
 """
 Summarization Worker Celery Tasks.
 
-Defines Celery tasks for article summarization.
+Defines Celery tasks for article summarization using Firestore.
 """
 
 from __future__ import annotations
@@ -19,7 +19,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../.."))
 from celery import Task
 from shared.celery_config import celery_app, configure_for_worker
 from shared.config import get_settings, configure_logging
-from shared.db import get_session, ArchiveArtifact, ArticleSummary, UrlMetadata
+from shared.firestore_db import (
+    get_article,
+    get_summary,
+    create_summary,
+    add_entities,
+    add_tags,
+)
 
 # Configure for summarization worker
 configure_for_worker("summarization")
@@ -49,7 +55,6 @@ class SummarizationTask(Task):
 def summarize_article(
     self,
     item_id: str,
-    archived_url_id: int,
     force: bool = False,
 ) -> dict:
     """
@@ -57,7 +62,6 @@ def summarize_article(
 
     Args:
         item_id: Item identifier
-        archived_url_id: Database ID of archived URL
         force: Force re-summarization even if summary exists
 
     Returns:
@@ -68,7 +72,6 @@ def summarize_article(
         extra={
             "task_id": self.request.id,
             "item_id": item_id,
-            "archived_url_id": archived_url_id,
         },
     )
 
@@ -81,22 +84,17 @@ def summarize_article(
 
     # Check for existing summary
     if not force:
-        with get_session() as session:
-            existing = (
-                session.query(ArticleSummary)
-                .filter(ArticleSummary.archived_url_id == archived_url_id)
-                .first()
-            )
-            if existing:
-                logger.info("Summary already exists")
-                return {
-                    "success": True,
-                    "reason": "existing",
-                    "summary_id": existing.id,
-                }
+        existing = get_summary(item_id)
+        if existing and existing.get("text"):
+            logger.info("Summary already exists")
+            return {
+                "success": True,
+                "reason": "existing",
+                "summary": existing.get("text"),
+            }
 
-    # Get content from readability artifact
-    content = _get_article_content(archived_url_id, settings)
+    # Get content from Firestore metadata
+    content = _get_article_content(item_id, settings)
     if not content:
         logger.warning("No content found for summarization")
         return {"success": False, "reason": "no_content"}
@@ -106,27 +104,22 @@ def summarize_article(
         summary_result = _generate_summary(content, settings)
 
         if summary_result:
-            # Store summary
-            with get_session() as session:
-                summary = ArticleSummary(
-                    archived_url_id=archived_url_id,
-                    summary_type="default",
-                    summary_text=summary_result["summary"],
-                    bullet_points=summary_result.get("bullet_points"),
-                    model_name=summary_result.get("model_name"),
-                )
-                session.add(summary)
-                session.flush()
-                summary_id = summary.id
+            # Store summary in Firestore
+            create_summary(
+                item_id=item_id,
+                summary_text=summary_result["summary"],
+                bullet_points=summary_result.get("bullet_points"),
+                lede=summary_result.get("lede"),
+                model_name=summary_result.get("model_name"),
+            )
 
             logger.info(
                 "Summary created",
-                extra={"summary_id": summary_id, "item_id": item_id},
+                extra={"item_id": item_id},
             )
 
             return {
                 "success": True,
-                "summary_id": summary_id,
                 "summary_text": summary_result["summary"],
                 "bullet_points": summary_result.get("bullet_points"),
             }
@@ -142,14 +135,12 @@ def summarize_article(
 def extract_entities(
     self,
     item_id: str,
-    archived_url_id: int,
 ) -> dict:
     """
     Extract named entities from article.
 
     Args:
         item_id: Item identifier
-        archived_url_id: Database ID of archived URL
 
     Returns:
         Entity extraction result
@@ -162,7 +153,7 @@ def extract_entities(
     settings = get_settings()
 
     # Get content
-    content = _get_article_content(archived_url_id, settings)
+    content = _get_article_content(item_id, settings)
     if not content:
         return {"success": False, "reason": "no_content"}
 
@@ -170,18 +161,8 @@ def extract_entities(
         entities = _extract_entities(content, settings)
 
         if entities:
-            # Store entities
-            from shared.db import ArticleEntity
-
-            with get_session() as session:
-                for entity in entities:
-                    db_entity = ArticleEntity(
-                        archived_url_id=archived_url_id,
-                        entity=entity["entity"],
-                        entity_type=entity.get("type"),
-                        confidence=entity.get("confidence"),
-                    )
-                    session.add(db_entity)
+            # Store entities in Firestore
+            add_entities(item_id, entities)
 
             return {
                 "success": True,
@@ -200,14 +181,12 @@ def extract_entities(
 def generate_tags(
     self,
     item_id: str,
-    archived_url_id: int,
 ) -> dict:
     """
     Generate tags for article.
 
     Args:
         item_id: Item identifier
-        archived_url_id: Database ID of archived URL
 
     Returns:
         Tag generation result
@@ -220,7 +199,7 @@ def generate_tags(
     settings = get_settings()
 
     # Get content
-    content = _get_article_content(archived_url_id, settings)
+    content = _get_article_content(item_id, settings)
     if not content:
         return {"success": False, "reason": "no_content"}
 
@@ -228,18 +207,8 @@ def generate_tags(
         tags = _generate_tags(content, settings)
 
         if tags:
-            # Store tags
-            from shared.db import ArticleTag
-
-            with get_session() as session:
-                for tag in tags:
-                    db_tag = ArticleTag(
-                        archived_url_id=archived_url_id,
-                        tag=tag["tag"],
-                        source="llm",
-                        confidence=tag.get("confidence"),
-                    )
-                    session.add(db_tag)
+            # Store tags in Firestore
+            add_tags(item_id, tags)
 
             return {
                 "success": True,
@@ -254,38 +223,45 @@ def generate_tags(
         raise
 
 
-def _get_article_content(archived_url_id: int, settings) -> Optional[str]:
-    """Get article content for summarization."""
-    # First try to get from metadata
-    with get_session() as session:
-        metadata = (
-            session.query(UrlMetadata)
-            .filter(UrlMetadata.archived_url_id == archived_url_id)
-            .first()
-        )
-        if metadata and metadata.text:
-            return metadata.text
+def _get_article_content(item_id: str, settings) -> Optional[str]:
+    """Get article content for summarization from Firestore metadata."""
+    article = get_article(item_id)
+    if not article:
+        return None
 
-    # Fall back to readability artifact
-    with get_session() as session:
-        artifact = (
-            session.query(ArchiveArtifact)
-            .filter(
-                ArchiveArtifact.archived_url_id == archived_url_id,
-                ArchiveArtifact.archiver == "readability",
-                ArchiveArtifact.success == True,
-            )
-            .first()
-        )
+    # Get from metadata field
+    metadata = article.get("metadata", {})
+    text_content = metadata.get("textContent") or metadata.get("text")
 
-        if artifact and artifact.saved_path:
+    if text_content:
+        return text_content
+
+    # Fallback: try to read from GCS readability artifact
+    archives = article.get("archives", {})
+    readability = archives.get("readability", {})
+
+    if readability.get("status") == "success" and readability.get("gcs_path"):
+        try:
+            from google.cloud import storage
+
+            gcs_path = readability["gcs_path"]
+            # Extract blob name from gs:// URL
+            blob_name = gcs_path.replace(f"gs://{settings.gcs.bucket}/", "")
+
+            client = storage.Client(project=settings.gcs.project_id)
+            bucket = client.bucket(settings.gcs.bucket)
+            blob = bucket.blob(blob_name)
+
+            # Download and parse JSON
             import json
+            data_bytes = blob.download_as_bytes()
+            data = json.loads(data_bytes)
 
-            path = Path(artifact.saved_path)
-            if path.exists():
-                with open(path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    return data.get("text") or data.get("content")
+            return data.get("text") or data.get("content")
+
+        except Exception as e:
+            logger.error(f"Failed to fetch content from GCS: {e}")
+            return None
 
     return None
 
@@ -433,7 +409,7 @@ def _extract_entities(content: str, settings) -> List[dict]:
         if match not in seen and len(match) > 3:
             entities.append({
                 "entity": match,
-                "type": "UNKNOWN",
+                "entity_type": "UNKNOWN",
                 "confidence": 0.5,
             })
             seen.add(match)

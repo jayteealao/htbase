@@ -2,7 +2,8 @@
 # HT Base - Microservices Docker Compose (OtterStack VPS Deployment)
 # =============================================================================
 # Optimized for OtterStack deployment with:
-# - External PostgreSQL at postgres.archivist.lol
+# - Firestore for data storage
+# - GCS for artifact storage (temp files, no local persistence)
 # - Traefik routing with CrowdSec DDoS protection
 # - archivebox_default network
 # =============================================================================
@@ -11,8 +12,8 @@ x-common-env: &common-env
   REDIS_URL: redis://redis:6379/0
   CELERY_BROKER_URL: redis://redis:6379/0
   CELERY_RESULT_BACKEND: redis://redis:6379/1
-  # External PostgreSQL
-  DATABASE_URL: postgresql+psycopg://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
+  # Firestore and GCS
+  FIRESTORE_PROJECT_ID: ${GCS_PROJECT_ID}
   GCS_BUCKET: ${GCS_BUCKET}
   GCS_PROJECT_ID: ${GCS_PROJECT_ID}
   GOOGLE_APPLICATION_CREDENTIALS: /secrets/gcs-credentials.json
@@ -28,7 +29,6 @@ x-worker-base: &worker-base
   networks:
     - archivebox_default
   volumes:
-    - artifacts:/app/artifacts
     - ${GCS_CREDENTIALS_PATH:-./secrets/gcs-credentials.json}:/secrets/gcs-credentials.json:ro
 
 x-archive-worker: &archive-worker
@@ -240,59 +240,6 @@ services:
           memory: 512M
 
   # ===========================================================================
-  # Storage Worker
-  # ===========================================================================
-
-  storage-worker:
-    <<: *worker-base
-    image: ${REGISTRY:-}htbase/storage-worker:${VERSION:-latest}
-    build:
-      context: .
-      dockerfile: services/storage-worker/Dockerfile
-    environment:
-      <<: *common-env
-      WORKER_QUEUES: storage
-      WORKER_CONCURRENCY: ${STORAGE_CONCURRENCY:-10}
-      STORAGE_PROVIDER: ${STORAGE_PROVIDER:-gcs}
-      LOCAL_STORAGE_PATH: /app/artifacts
-      COMPRESSION_ENABLED: ${COMPRESSION_ENABLED:-true}
-      CLEANUP_AFTER_UPLOAD: ${CLEANUP_AFTER_UPLOAD:-true}
-    deploy:
-      resources:
-        limits:
-          cpus: "1"
-          memory: 1G
-        reservations:
-          cpus: "0.5"
-          memory: 256M
-
-  # ===========================================================================
-  # Sync Worker (PostgreSQL to Firestore)
-  # ===========================================================================
-
-  sync-worker:
-    <<: *worker-base
-    image: ${REGISTRY:-}htbase/sync-worker:${VERSION:-latest}
-    build:
-      context: .
-      dockerfile: services/sync-worker/Dockerfile
-    environment:
-      <<: *common-env
-      WORKER_QUEUES: sync
-      WORKER_CONCURRENCY: ${SYNC_CONCURRENCY:-1}
-      FIRESTORE_PROJECT_ID: ${GCS_PROJECT_ID}
-    deploy:
-      resources:
-        limits:
-          cpus: "1"
-          memory: 2G
-        reservations:
-          cpus: "0.5"
-          memory: 512M
-    profiles:
-      - sync
-
-  # ===========================================================================
   # Monitoring Services
   # ===========================================================================
 
@@ -365,8 +312,6 @@ networks:
 
 volumes:
   redis-data:
-    driver: local
-  artifacts:
     driver: local
   flower-data:
     driver: local

@@ -81,13 +81,27 @@ def create_app() -> FastAPI:
     # Add rate limit middleware for response headers
     app.add_middleware(RateLimitMiddleware)
 
-    # CORS middleware
+    # CORS middleware - configure allowed origins from environment
+    cors_origins = settings.cors_origins if hasattr(settings, 'cors_origins') else []
+
+    # In production, be more restrictive
+    if settings.environment == "production":
+        # Only allow credentials in development
+        allow_credentials = False
+        # If no origins configured in production, block all CORS
+        if not cors_origins:
+            logger.warning("No CORS origins configured for production - CORS will be disabled")
+            cors_origins = []
+    else:
+        # Development: Allow credentials for easier local development
+        allow_credentials = True
+
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],  # Configure appropriately in production
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_origins=cors_origins,
+        allow_credentials=allow_credentials,
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
     )
 
     # Include routers - Consolidated API structure

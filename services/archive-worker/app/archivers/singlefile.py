@@ -23,9 +23,11 @@ class SingleFileArchiver(BaseArchiver):
     name = "singlefile"
     output_extension = "html"
 
-    def archive(self, *, url: str, item_id: str) -> ArchiveResult:
-        """Archive URL using SingleFile."""
-        out_dir, out_path = self.get_output_path(item_id)
+    def archive(self, *, url: str, item_id: str, output_path) -> ArchiveResult:
+        """Archive URL using SingleFile to provided output_path."""
+        from pathlib import Path
+
+        output_path = Path(output_path)
 
         logger.info(
             f"Archiving {item_id} {url}",
@@ -54,7 +56,7 @@ class SingleFileArchiver(BaseArchiver):
         cmd = [
             singlefile_bin,
             url,
-            str(out_path),
+            str(output_path),
             f"--browser-executable-path={chromium_bin}",
             f"--browser-args={browser_args_json}",
         ]
@@ -72,7 +74,7 @@ class SingleFileArchiver(BaseArchiver):
         # Clean up locks after archiving
         self._cleanup_chromium_locks(user_data_dir)
 
-        return self.create_result(path=out_path, exit_code=result.exit_code)
+        return self.create_result(path=output_path, exit_code=result.exit_code)
 
     def _cleanup_chromium_locks(self, user_data_dir):
         """Remove Chromium singleton lock files."""

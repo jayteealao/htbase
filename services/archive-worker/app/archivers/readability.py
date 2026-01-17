@@ -24,9 +24,11 @@ class ReadabilityArchiver(BaseArchiver):
     name = "readability"
     output_extension = "json"
 
-    def archive(self, *, url: str, item_id: str) -> ArchiveResult:
-        """Extract article content using Readability."""
-        out_dir, out_path = self.get_output_path(item_id)
+    def archive(self, *, url: str, item_id: str, output_path) -> ArchiveResult:
+        """Extract article content using Readability to provided output_path."""
+        from pathlib import Path
+
+        output_path = Path(output_path)
 
         logger.info(
             f"Extracting {item_id} {url}",
@@ -39,13 +41,12 @@ class ReadabilityArchiver(BaseArchiver):
 
             if content:
                 # Save as JSON
-                with open(out_path, "w", encoding="utf-8") as f:
+                with open(output_path, "w", encoding="utf-8") as f:
                     json.dump(content, f, ensure_ascii=False, indent=2)
 
-                return ArchiveResult(
-                    success=True,
+                return self.create_result(
+                    path=output_path,
                     exit_code=0,
-                    saved_path=str(out_path),
                     metadata=content,
                 )
             else:

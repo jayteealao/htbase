@@ -2,7 +2,7 @@
 
 **Quick reference guide for all HTBase environment variables**
 
-Last Updated: 2026-01-09
+Last Updated: 2026-01-17
 
 ---
 
@@ -11,22 +11,19 @@ Last Updated: 2026-01-09
 These variables MUST be set for HTBase to run:
 
 ```bash
-# Database
-DB_PASSWORD=your_secure_database_password
+# Database (Firestore)
+FIRESTORE_PROJECT_ID=your-gcp-project-id
+
+# Storage (GCS - required, no local storage option)
+GCS_BUCKET=your-bucket-name
+GCS_PROJECT_ID=your-gcp-project-id
+GOOGLE_APPLICATION_CREDENTIALS=./secrets/gcs-credentials.json
 
 # Authentication
 API_KEYS=htbase_live_key1,htbase_live_key2
-
-# Storage
-STORAGE_PROVIDER=local  # or 'gcs'
 ```
 
-**If using GCS storage, also required:**
-```bash
-GCS_BUCKET=your-bucket-name
-GCS_PROJECT_ID=your-gcp-project-id
-GCS_CREDENTIALS_PATH=./secrets/gcs-credentials.json
-```
+**Note:** PostgreSQL is no longer supported. Firestore is the only database backend.
 
 ---
 
@@ -44,21 +41,18 @@ GCS_CREDENTIALS_PATH=./secrets/gcs-credentials.json
 
 ---
 
-### Database Configuration
+### Database Configuration (Firestore)
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `DB_HOST` | string | `postgres` | PostgreSQL host |
-| `DB_PORT` | int | `5432` | PostgreSQL port |
-| `DB_NAME` | string | `htbase` | Database name |
-| `DB_USER` | string | `htbase` | Database username |
-| `DB_PASSWORD` | **REQUIRED** | - | Database password |
-| `DB_POOL_SIZE` | int | `5` | Connection pool size |
-| `DB_MAX_OVERFLOW` | int | `10` | Max overflow connections |
-| `DB_SOCKET` | string | - | Cloud SQL socket path |
+| `FIRESTORE_PROJECT_ID` | **REQUIRED** | - | Google Cloud project ID for Firestore |
+| `FIRESTORE_COLLECTION` | string | `articles` | Firestore collection name |
+| `GOOGLE_APPLICATION_CREDENTIALS` | **REQUIRED** | - | Path to GCP service account JSON |
 
-**Derived (auto-set):**
-- `DATABASE_URL`: `postgresql://user:pass@host:port/db`
+**Notes:**
+- PostgreSQL has been removed - Firestore is the only supported database
+- Uses the same service account credentials as GCS
+- No connection pooling needed - Firestore SDK handles this automatically
 
 ---
 
@@ -124,43 +118,23 @@ openssl rand -hex 32
 
 ---
 
-### Storage Configuration
+### Storage Configuration (GCS-Only)
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `STORAGE_PROVIDER` | **REQUIRED** | `gcs` | Storage provider (gcs/local) |
-| `ARTIFACTS_PATH` | string | `./data/artifacts` | Local storage path |
-| `COMPRESSION_ENABLED` | bool | `true` | Enable gzip compression |
-| `CLEANUP_AFTER_UPLOAD` | bool | `true` | Delete local files after upload |
-| `STORAGE_CONCURRENCY` | int | `10` | Storage worker concurrency |
+| `GCS_BUCKET` | **REQUIRED** | - | GCS bucket name for artifacts |
+| `GCS_PROJECT_ID` | **REQUIRED** | - | GCP project ID |
+| `GOOGLE_APPLICATION_CREDENTIALS` | **REQUIRED** | - | Path to GCP service account JSON |
 
----
+**Important Changes:**
+- Local storage has been **removed** - GCS is the only supported storage backend
+- No `storage-worker` service needed - uploads happen synchronously in archive workers
+- Temporary files are used during archiving and deleted immediately after GCS upload
+- No `COMPRESSION_ENABLED`, `CLEANUP_AFTER_UPLOAD`, or `ARTIFACTS_PATH` variables needed
 
-### Google Cloud Storage (GCS)
-
-| Variable | Type | Default | Description |
-|----------|------|---------|-------------|
-| `GCS_BUCKET` | **REQUIRED** (if using GCS) | - | GCS bucket name |
-| `GCS_PROJECT_ID` | **REQUIRED** (if using GCS) | - | GCP project ID |
-| `GCS_CREDENTIALS_PATH` | **REQUIRED** (if using GCS) | `./secrets/gcs-credentials.json` | Service account JSON path |
-
-**Alternative:**
+**Alternative variable names (for compatibility):**
 - `GOOGLE_CLOUD_PROJECT`: Alias for `GCS_PROJECT_ID`
-- `GOOGLE_APPLICATION_CREDENTIALS`: Alias for `GCS_CREDENTIALS_PATH`
-
----
-
-### Firestore (Optional)
-
-| Variable | Type | Default | Description |
-|----------|------|---------|-------------|
-| `FIRESTORE_PROJECT_ID` | string | - | Firestore project ID |
-| `FIRESTORE_COLLECTION` | string | `articles` | Collection name |
-
-**Notes:**
-- Optional - only needed for mobile client sync
-- Uses same GCS credentials
-- Can use `GOOGLE_CLOUD_PROJECT` instead
+- `GCS_CREDENTIALS_PATH`: Alias for `GOOGLE_APPLICATION_CREDENTIALS`
 
 ---
 
@@ -225,7 +199,7 @@ openssl rand -hex 32
 
 ## Configuration Examples
 
-### Minimal (Local Development)
+### Minimal (Development)
 
 ```bash
 # Core
@@ -233,15 +207,16 @@ ENVIRONMENT=development
 LOG_LEVEL=DEBUG
 LOG_FORMAT=text
 
-# Database (using defaults)
-DB_PASSWORD=dev_password_not_for_production
+# Database (Firestore)
+FIRESTORE_PROJECT_ID=my-dev-project
+GOOGLE_APPLICATION_CREDENTIALS=./secrets/gcs-dev-credentials.json
+
+# Storage (GCS - required)
+GCS_BUCKET=htbase-dev-archives
+GCS_PROJECT_ID=my-dev-project
 
 # Authentication
 API_KEYS=htbase_test_dev123
-
-# Storage
-STORAGE_PROVIDER=local
-ARTIFACTS_PATH=./data/artifacts
 
 # Disable features
 ENABLE_SUMMARIZATION=false
@@ -249,7 +224,7 @@ ENABLE_SUMMARIZATION=false
 
 ---
 
-### Production (with GCS)
+### Production
 
 ```bash
 # Core
@@ -258,11 +233,14 @@ VERSION=latest
 LOG_LEVEL=INFO
 LOG_FORMAT=json
 
-# Database
-DB_USER=htbase
-DB_PASSWORD=SecurePasswordHere123!@#
-DB_NAME=htbase
-DB_PORT=5432
+# Database (Firestore)
+FIRESTORE_PROJECT_ID=my-production-project
+FIRESTORE_COLLECTION=articles
+
+# Storage (GCS)
+GCS_BUCKET=htbase-production-archives
+GCS_PROJECT_ID=my-production-project
+GOOGLE_APPLICATION_CREDENTIALS=./secrets/gcs-credentials.json
 
 # Authentication
 API_KEYS=htbase_live_a1b2c3...,htbase_live_x7y8z9...
@@ -280,19 +258,6 @@ MONOLITH_CONCURRENCY=3
 READABILITY_CONCURRENCY=5
 PDF_CONCURRENCY=3
 SCREENSHOT_CONCURRENCY=3
-
-# Storage
-STORAGE_PROVIDER=gcs
-GCS_BUCKET=htbase-production-archives
-GCS_PROJECT_ID=my-gcp-project
-GCS_CREDENTIALS_PATH=./secrets/gcs-credentials.json
-COMPRESSION_ENABLED=true
-CLEANUP_AFTER_UPLOAD=true
-STORAGE_CONCURRENCY=10
-
-# Firestore
-FIRESTORE_PROJECT_ID=my-firebase-project
-FIRESTORE_COLLECTION=articles
 
 # Summarization
 ENABLE_SUMMARIZATION=true
@@ -318,58 +283,37 @@ ACME_EMAIL=admin@example.com
 
 ---
 
-### Production (Local Storage Only)
-
-```bash
-# Core
-ENVIRONMENT=production
-LOG_LEVEL=INFO
-LOG_FORMAT=json
-
-# Database
-DB_PASSWORD=SecurePasswordHere123!@#
-
-# Authentication
-API_KEYS=htbase_live_a1b2c3...,htbase_live_x7y8z9...
-
-# Storage (local only)
-STORAGE_PROVIDER=local
-ARTIFACTS_PATH=/mnt/archives
-COMPRESSION_ENABLED=false
-CLEANUP_AFTER_UPLOAD=false
-
-# Disable features
-ENABLE_SUMMARIZATION=false
-```
-
----
-
 ## Environment Variable Precedence
 
 HTBase uses Pydantic settings with the following precedence (highest to lowest):
 
-1. **Environment variables** (e.g., `DB_HOST=postgres`)
-2. **Nested environment variables** (e.g., `DATABASE__HOST=postgres`)
-3. **`.env` file** in project root
-4. **Default values** in code
+1. **Environment variables** (e.g., `FIRESTORE_PROJECT_ID=my-project`)
+2. **`.env` file** in project root
+3. **Default values** in code
 
 **Example:**
 ```bash
-# Both are equivalent:
-DB_HOST=postgres
-DATABASE__HOST=postgres
+# Environment variable takes precedence over .env file
+export GCS_BUCKET=production-bucket
+
+# This value in .env will be ignored if env var is set
+GCS_BUCKET=dev-bucket
 ```
 
 ---
 
 ## Validation Rules
 
-### Passwords
+### API Keys and Passwords
 
-- **DB_PASSWORD**: No restrictions (but use strong passwords in production)
 - **API_KEYS**: Comma-separated, no spaces
 - **FLOWER_PASSWORD**: No restrictions
 - **REDIS_COMMANDER_PASSWORD**: No restrictions
+
+**Generate secure API keys:**
+```bash
+openssl rand -hex 32
+```
 
 **Generate secure passwords:**
 ```bash
@@ -385,7 +329,6 @@ openssl rand -base64 32
 
 **Common ports:**
 - `8080`: API Gateway
-- `5432`: PostgreSQL
 - `6379`: Redis
 - `5555`: Flower
 - `8081`: Redis Commander
@@ -395,25 +338,28 @@ openssl rand -base64 32
 
 ### Paths
 
-- **ARTIFACTS_PATH**: Must be writable by container user
-- **GCS_CREDENTIALS_PATH**: Must be readable JSON file
-- **DATA_DIR**: Must be writable
+- **GOOGLE_APPLICATION_CREDENTIALS**: Must be readable JSON file containing GCP service account credentials
+- **GCS_CREDENTIALS_PATH**: Alternative name for service account JSON path
 
 **Docker volume mounting:**
 ```yaml
 volumes:
-  - ./data/artifacts:/app/artifacts
   - ./secrets/gcs-credentials.json:/secrets/gcs-credentials.json:ro
 ```
+
+**Notes:**
+- No local artifact storage paths needed - GCS is used exclusively
+- Temporary files are handled automatically and cleaned up
 
 ---
 
 ### URLs
 
 - **REDIS_URL**: `redis://[user]:[password]@host:port/db`
-- **DATABASE_URL**: `postgresql://user:pass@host:port/dbname`
 - **HUGGINGFACE_API_URL**: `https://endpoint.com` or `http://tgi-service:80`
 - **CORS_ORIGINS**: Comma-separated, no spaces
+
+**Note:** No DATABASE_URL needed - Firestore uses project ID instead
 
 ---
 
@@ -445,9 +391,9 @@ services:
 ### Password Requirements
 
 **Minimum for production:**
-- DB_PASSWORD: 32+ characters
 - API_KEYS: 64 hex characters (use `openssl rand -hex 32`)
 - All monitoring passwords: 16+ characters
+- GCS service account: Use key rotation via GCP Console
 
 ---
 
@@ -455,15 +401,22 @@ services:
 
 **Recommended schedule:**
 - API_KEYS: Every 90 days
-- DB_PASSWORD: Every 180 days
 - Monitoring passwords: Every 90 days
-- GCS credentials: Every 180 days
+- GCS service account keys: Every 180 days (rotate via GCP Console)
+- Firestore access: Controlled via GCS service account
 
 **API Key rotation process:**
 1. Generate new key: `openssl rand -hex 32`
 2. Add to `API_KEYS` (keep old key): `API_KEYS=old_key,new_key`
 3. Update clients to use new key
 4. After grace period, remove old key from `API_KEYS`
+
+**GCS Service Account rotation:**
+1. Create new service account key in GCP Console
+2. Download new JSON credentials file
+3. Update `GOOGLE_APPLICATION_CREDENTIALS` path
+4. Restart services
+5. Delete old service account key in GCP Console
 
 ---
 
@@ -473,8 +426,8 @@ services:
 
 **Check precedence:**
 ```bash
-# Print all environment variables
-docker compose exec api-gateway env | grep DB_
+# Print all environment variables (check Firestore and GCS vars)
+docker compose exec api-gateway env | grep -E "FIRESTORE|GCS|GOOGLE"
 
 # Check if .env file is being read
 docker compose config
@@ -483,8 +436,9 @@ docker compose config
 **Common issues:**
 - Typo in variable name
 - Extra spaces in `.env` file
-- Using wrong prefix (e.g., `DATABASE_HOST` instead of `DB_HOST`)
+- Wrong variable name (e.g., `GCS_CREDENTIALS_PATH` vs `GOOGLE_APPLICATION_CREDENTIALS`)
 - Not restarting services after changes
+- Service account JSON file not mounted correctly
 
 ---
 

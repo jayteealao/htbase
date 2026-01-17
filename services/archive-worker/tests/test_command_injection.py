@@ -126,8 +126,9 @@ class TestArchiverSecurity:
         with tempfile.TemporaryDirectory() as tmpdir:
             settings = Mock()
             settings.data_dir = Path(tmpdir)
-            settings.archive_output_dir = Path(tmpdir) / "output"
-            settings.archive_output_dir.mkdir(parents=True, exist_ok=True)
+            settings.gcs = Mock()
+            settings.gcs.bucket = "test-bucket"
+            settings.gcs.project_id = "test-project"
             yield settings
 
     def test_monolith_archiver_malicious_url(self, mock_settings):
@@ -139,22 +140,29 @@ class TestArchiverSecurity:
             mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
 
             for malicious_url in MALICIOUS_URLS[:5]:  # Test subset
-                result = archiver.archive(url=malicious_url, item_id="test")
+                with tempfile.NamedTemporaryFile(suffix=".html", delete=False) as tmp:
+                    output_path = Path(tmp.name)
 
-                # Verify command was called with list (not shell string)
-                assert mock_run.called
-                call_args = mock_run.call_args
+                try:
+                    result = archiver.archive(url=malicious_url, item_id="test", output_path=output_path)
 
-                # First argument should be a list
-                assert isinstance(call_args[0][0], list)
+                    # Verify command was called with list (not shell string)
+                    assert mock_run.called
+                    call_args = mock_run.call_args
 
-                # shell parameter should be False
-                assert call_args[1].get("shell") is False
+                    # First argument should be a list
+                    assert isinstance(call_args[0][0], list)
 
-                # URL should be in command as literal argument
-                assert malicious_url in call_args[0][0]
+                    # shell parameter should be False
+                    assert call_args[1].get("shell") is False
 
-                mock_run.reset_mock()
+                    # URL should be in command as literal argument
+                    assert malicious_url in call_args[0][0]
+
+                    mock_run.reset_mock()
+                finally:
+                    if output_path.exists():
+                        output_path.unlink()
 
     def test_screenshot_archiver_malicious_url(self, mock_settings):
         """Test ScreenshotArchiver with malicious URLs."""
@@ -164,17 +172,24 @@ class TestArchiverSecurity:
             mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
 
             for malicious_url in MALICIOUS_URLS[:5]:
-                result = archiver.archive(url=malicious_url, item_id="test")
+                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                    output_path = Path(tmp.name)
 
-                assert mock_run.called
-                call_args = mock_run.call_args
+                try:
+                    result = archiver.archive(url=malicious_url, item_id="test", output_path=output_path)
 
-                # Verify list command and shell=False
-                assert isinstance(call_args[0][0], list)
-                assert call_args[1].get("shell") is False
-                assert malicious_url in call_args[0][0]
+                    assert mock_run.called
+                    call_args = mock_run.call_args
 
-                mock_run.reset_mock()
+                    # Verify list command and shell=False
+                    assert isinstance(call_args[0][0], list)
+                    assert call_args[1].get("shell") is False
+                    assert malicious_url in call_args[0][0]
+
+                    mock_run.reset_mock()
+                finally:
+                    if output_path.exists():
+                        output_path.unlink()
 
     def test_pdf_archiver_malicious_url(self, mock_settings):
         """Test PDFArchiver with malicious URLs."""
@@ -184,16 +199,23 @@ class TestArchiverSecurity:
             mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
 
             for malicious_url in MALICIOUS_URLS[:5]:
-                result = archiver.archive(url=malicious_url, item_id="test")
+                with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+                    output_path = Path(tmp.name)
 
-                assert mock_run.called
-                call_args = mock_run.call_args
+                try:
+                    result = archiver.archive(url=malicious_url, item_id="test", output_path=output_path)
 
-                assert isinstance(call_args[0][0], list)
-                assert call_args[1].get("shell") is False
-                assert malicious_url in call_args[0][0]
+                    assert mock_run.called
+                    call_args = mock_run.call_args
 
-                mock_run.reset_mock()
+                    assert isinstance(call_args[0][0], list)
+                    assert call_args[1].get("shell") is False
+                    assert malicious_url in call_args[0][0]
+
+                    mock_run.reset_mock()
+                finally:
+                    if output_path.exists():
+                        output_path.unlink()
 
     def test_singlefile_archiver_malicious_url(self, mock_settings):
         """Test SingleFileArchiver with malicious URLs."""
@@ -203,16 +225,23 @@ class TestArchiverSecurity:
             mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
 
             for malicious_url in MALICIOUS_URLS[:5]:
-                result = archiver.archive(url=malicious_url, item_id="test")
+                with tempfile.NamedTemporaryFile(suffix=".html", delete=False) as tmp:
+                    output_path = Path(tmp.name)
 
-                assert mock_run.called
-                call_args = mock_run.call_args
+                try:
+                    result = archiver.archive(url=malicious_url, item_id="test", output_path=output_path)
 
-                assert isinstance(call_args[0][0], list)
-                assert call_args[1].get("shell") is False
-                assert malicious_url in call_args[0][0]
+                    assert mock_run.called
+                    call_args = mock_run.call_args
 
-                mock_run.reset_mock()
+                    assert isinstance(call_args[0][0], list)
+                    assert call_args[1].get("shell") is False
+                    assert malicious_url in call_args[0][0]
+
+                    mock_run.reset_mock()
+                finally:
+                    if output_path.exists():
+                        output_path.unlink()
 
 
 class TestRealWorldScenarios:

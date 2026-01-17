@@ -21,18 +21,21 @@ from datetime import timedelta
 from pathlib import Path
 from typing import List, Optional, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, HttpUrl
-from sqlalchemy.orm import Session
 from celery import chain, group
 
 from shared.auth import verify_api_key
 from shared.celery_config import celery_app
-from shared.db import (
-    ArchivedUrl,
-    ArchiveArtifact,
-    ArticleSummary,
-    UrlMetadata,
+from shared.firestore_db import (
+    create_article,
+    get_article,
+    article_exists,
+    update_article,
+    delete_article,
+    list_articles,
+    query_by_url,
+    get_artifact,
+    update_artifact,
 )
 from shared.rate_limit import rate_limit_archive, rate_limit_batch, rate_limit_admin, rate_limit_download
 from shared.models import TaskAccepted, DeleteResponse
@@ -46,14 +49,6 @@ router = APIRouter()
 
 # Available archivers
 AVAILABLE_ARCHIVERS = ["singlefile", "monolith", "readability", "pdf", "screenshot"]
-
-
-def get_db():
-    """Database session dependency."""
-    from shared.db import get_session
-
-    with get_session() as session:
-        yield session
 
 
 # Request/Response Models
@@ -74,7 +69,7 @@ class ArchiveOptions(BaseModel):
 
 class CreateArchiveRequest(BaseModel):
     """Request model for creating archives."""
-    items: List[ArchiveItem] = Field(..., min_items=1, description="URLs to archive")
+    items: List[ArchiveItem] = Field(..., min_items=1, max_items=100, description="URLs to archive (max 100)")
     archivers: List[str] = Field(["all"], description="Archivers to use (default: all)")
     options: Optional[ArchiveOptions] = Field(None, description="Optional workflow features")
 
@@ -116,13 +111,153 @@ class UpdateArchiveRequest(BaseModel):
     name: Optional[str] = Field(None, description="Update the archive name")
 
 
+# Helper functions for create_archives endpoint
+
+
+def _validate_archivers(archivers: List[str]) -> List[str]:
+    """Validate and normalize archiver list.
+
+    Args:
+        archivers: List of archiver names or ["all"]
+
+    Returns:
+        Validated list of archiver names
+
+    Raises:
+        HTTPException: If invalid archivers are provided
+    """
+    # Handle "all" archiver
+    if "all" in archivers:
+        return AVAILABLE_ARCHIVERS.copy()
+
+    # Validate archivers
+    invalid = [a for a in archivers if a not in AVAILABLE_ARCHIVERS]
+    if invalid:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid archivers: {invalid}. Valid options: {AVAILABLE_ARCHIVERS}",
+        )
+
+    return archivers
+
+
+def _create_archive_tasks(
+    items: List[ArchiveItem],
+    archivers: List[str]
+):
+    """Create Celery tasks for archive items.
+
+    Args:
+        items: List of items to archive
+        archivers: List of validated archiver names
+
+    Returns:
+        Tuple of (task_list, skipped_count)
+    """
+    all_tasks = []
+    skipped_count = 0
+    is_batch = len(items) > 1
+
+    for item in items:
+        url = str(item.url)
+        item_id = item.id
+
+        logger.info(
+            "Archive request received",
+            extra={"url": url, "item_id": item_id, "archivers": archivers, "batch": is_batch},
+        )
+
+        # Get or create article in Firestore
+        existing_article = get_article(item_id)
+        if not existing_article:
+            create_article(item_id=item_id, url=url)
+            logger.info(f"Created article in Firestore", extra={"item_id": item_id})
+
+        # Create artifacts and dispatch tasks
+        for archiver in archivers:
+            # Check for existing successful artifact
+            existing_artifact = get_artifact(item_id, archiver)
+
+            if existing_artifact and existing_artifact.get("status") == "success":
+                logger.info(
+                    "Skipping existing archive",
+                    extra={"archiver": archiver, "item_id": item_id},
+                )
+                skipped_count += 1
+                continue
+
+            # Initialize artifact status if not exists
+            if not existing_artifact:
+                update_artifact(
+                    item_id=item_id,
+                    archiver=archiver,
+                    status="pending",
+                )
+
+            # Rewrite URL for paywall bypass
+            fetch_url = rewrite_paywalled_url(url)
+
+            # Create Celery task
+            task_name = f"services.archive_worker.tasks.archive_{archiver}"
+            all_tasks.append(
+                celery_app.signature(
+                    task_name,
+                    kwargs={
+                        "item_id": item_id,
+                        "url": fetch_url,
+                    },
+                )
+            )
+
+    return all_tasks, skipped_count
+
+
+def _build_workflow(task_group, options: Optional[ArchiveOptions], workflow_id: str):
+    """Build Celery workflow with optional steps.
+
+    Args:
+        task_group: Celery group of archive tasks
+        options: Optional workflow options (summarize, webhook)
+        workflow_id: Workflow identifier
+
+    Returns:
+        Celery workflow (group or chain)
+    """
+    if not options:
+        return task_group
+
+    steps = [task_group]
+
+    if options.summarize:
+        steps.append(
+            celery_app.signature(
+                "services.archive_worker.tasks.gather_status",
+                kwargs={"task_id": workflow_id},
+            )
+        )
+
+    if options.webhook_url:
+        steps.append(
+            celery_app.signature(
+                "services.archive_worker.tasks.notify_webhook",
+                kwargs={
+                    "workflow_id": workflow_id,
+                    "webhook_url": str(options.webhook_url),
+                    "webhook_secret": options.webhook_secret,
+                    "event_type": "task.completed",
+                },
+            )
+        )
+
+    return chain(*steps) if len(steps) > 1 else steps[0]
+
+
 # Endpoints
 
 
 @router.post("/archives", response_model=TaskAccepted, dependencies=[Depends(rate_limit_archive)])
 async def create_archives(
     request: CreateArchiveRequest,
-    db: Session = Depends(get_db),
 ):
     """
     Create archives (single or batch).
@@ -152,113 +287,16 @@ async def create_archives(
     - archivers=["all"]: Use all available archivers
     - options.summarize: Chain summarization task
     """
-    is_batch = len(request.items) > 1
-    archivers = request.archivers
-
-    # Handle "all" archiver
-    if "all" in archivers:
-        archivers = AVAILABLE_ARCHIVERS
-
     # Validate archivers
-    invalid = [a for a in archivers if a not in AVAILABLE_ARCHIVERS]
-    if invalid:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid archivers: {invalid}. Valid options: {AVAILABLE_ARCHIVERS}",
-        )
+    archivers = _validate_archivers(request.archivers)
 
-    # Generate workflow ID for this batch
+    # Generate workflow ID
     workflow_id = uuid.uuid4().hex
-    all_tasks = []
-    skipped_count = 0
 
-    for item in request.items:
-        url = str(item.url)
-        item_id = item.id
+    # Create archive tasks
+    all_tasks, skipped_count = _create_archive_tasks(request.items, archivers)
 
-        logger.info(
-            "Archive request received",
-            extra={"url": url, "item_id": item_id, "archivers": archivers, "batch": is_batch},
-        )
-
-        # Get or create archived URL
-        existing = db.query(ArchivedUrl).filter(ArchivedUrl.url == url).first()
-        if existing:
-            archived_url_id = existing.id
-        else:
-            archived_url = ArchivedUrl(url=url, item_id=item_id)
-            db.add(archived_url)
-            db.flush()
-            archived_url_id = archived_url.id
-
-        # Create artifacts and dispatch tasks
-        for archiver in archivers:
-            # Lock row to prevent race conditions
-            locked_url = (
-                db.query(ArchivedUrl)
-                .filter(ArchivedUrl.id == archived_url_id)
-                .with_for_update()
-                .first()
-            )
-
-            # Check for existing successful artifact
-            existing_artifact = (
-                db.query(ArchiveArtifact)
-                .filter(
-                    ArchiveArtifact.archived_url_id == archived_url_id,
-                    ArchiveArtifact.archiver == archiver,
-                    ArchiveArtifact.success == True,
-                )
-                .first()
-            )
-
-            if existing_artifact:
-                logger.info(
-                    "Skipping existing archive",
-                    extra={"archiver": archiver, "item_id": item_id},
-                )
-                skipped_count += 1
-                continue
-
-            # Create or get artifact
-            artifact = (
-                db.query(ArchiveArtifact)
-                .filter(
-                    ArchiveArtifact.archived_url_id == archived_url_id,
-                    ArchiveArtifact.archiver == archiver,
-                )
-                .first()
-            )
-
-            if not artifact:
-                artifact = ArchiveArtifact(
-                    archived_url_id=archived_url_id,
-                    archiver=archiver,
-                    status="pending",
-                    task_id=workflow_id,
-                )
-                db.add(artifact)
-                db.flush()
-
-            # Rewrite URL for paywall bypass
-            fetch_url = rewrite_paywalled_url(url)
-
-            # Create Celery task
-            task_name = f"services.archive_worker.tasks.archive_{archiver}"
-            all_tasks.append(
-                celery_app.signature(
-                    task_name,
-                    kwargs={
-                        "item_id": item_id,
-                        "url": fetch_url,
-                        "archived_url_id": archived_url_id,
-                        "artifact_id": artifact.id,
-                    },
-                )
-            )
-
-    db.commit()
-
+    # Early return if all archives exist
     if not all_tasks:
         return TaskAccepted(
             task_id=workflow_id,
@@ -266,39 +304,30 @@ async def create_archives(
             message=f"All archives already exist ({skipped_count} skipped)",
         )
 
-    # Build workflow
+    # Build and dispatch workflow
     task_group = group(all_tasks)
+    workflow = _build_workflow(task_group, request.options, workflow_id)
 
-    # Add optional workflow steps
-    if request.options:
-        steps = [task_group]
-
-        if request.options.summarize:
-            steps.append(
-                celery_app.signature(
-                    "services.archive_worker.tasks.gather_status",
-                    kwargs={"task_id": workflow_id},
-                )
-            )
-
-        if request.options.webhook_url:
-            steps.append(
-                celery_app.signature(
-                    "services.archive_worker.tasks.notify_webhook",
-                    kwargs={
-                        "workflow_id": workflow_id,
-                        "webhook_url": str(request.options.webhook_url),
-                        "webhook_secret": request.options.webhook_secret,
-                        "event_type": "task.completed",
-                    },
-                )
-            )
-
-        workflow = chain(*steps) if len(steps) > 1 else steps[0]
+    try:
         workflow.apply_async()
-    else:
-        task_group.apply_async()
 
+        logger.info(
+            "Archive tasks dispatched successfully",
+            extra={"workflow_id": workflow_id, "task_count": len(all_tasks)}
+        )
+
+    except Exception as e:
+        logger.error(
+            f"Failed to dispatch archive tasks: {e}",
+            extra={"workflow_id": workflow_id, "task_count": len(all_tasks)},
+            exc_info=True
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to queue archiving tasks: {str(e)}"
+        )
+
+    # Return success response
     return TaskAccepted(
         task_id=workflow_id,
         count=len(all_tasks),
@@ -312,29 +341,30 @@ async def list_archives(
     offset: int = Query(0, ge=0, description="Number of results to skip"),
     status: Optional[str] = Query(None, description="Filter by status"),
     archiver: Optional[str] = Query(None, description="Filter by archiver"),
-    db: Session = Depends(get_db),
 ):
     """
     List all archives with pagination and filtering.
 
     Replaces: GET /admin/saves
     """
-    query = db.query(ArchivedUrl).order_by(ArchivedUrl.created_at.desc())
-
-    total = query.count()
-    results = query.offset(offset).limit(limit).all()
+    results = list_articles(
+        limit=limit,
+        offset=offset,
+        order_by="created_at",
+        descending=True,
+    )
 
     return {
-        "total": total,
+        "total": len(results),  # Note: Firestore doesn't support efficient total counts
         "limit": limit,
         "offset": offset,
         "count": len(results),
         "items": [
             {
-                "item_id": r.item_id,
-                "url": r.url,
-                "name": r.name,
-                "created_at": r.created_at.isoformat() if r.created_at else None,
+                "item_id": r.get("item_id"),
+                "url": r.get("url"),
+                "name": r.get("title"),  # Using title field
+                "created_at": r.get("created_at"),
             }
             for r in results
         ],
@@ -348,7 +378,6 @@ async def get_archive(
     archiver: Optional[str] = Query(None, description="Filter artifacts by archiver"),
     type: Literal["item_id", "url"] = Query("item_id", description="Lookup type"),
     identifier: Optional[str] = Query(None, description="Override identifier for URL lookup"),
-    db: Session = Depends(get_db),
 ):
     """
     Get archive details by item_id or URL.
@@ -368,44 +397,45 @@ async def get_archive(
     lookup_value = identifier if identifier else item_id
 
     if type == "item_id":
-        archived_url = db.query(ArchivedUrl).filter(ArchivedUrl.item_id == lookup_value).first()
+        article = get_article(lookup_value)
     else:
-        archived_url = db.query(ArchivedUrl).filter(ArchivedUrl.url == lookup_value).first()
+        article = query_by_url(lookup_value)
 
-    if not archived_url:
+    if not article:
         raise HTTPException(404, f"Archive not found: {lookup_value}")
 
     result = ArchiveDetailResponse(
-        item_id=archived_url.item_id,
-        url=archived_url.url,
-        name=archived_url.name,
-        created_at=archived_url.created_at.isoformat(),
+        item_id=article.get("item_id"),
+        url=article.get("url"),
+        name=article.get("title"),
+        created_at=article.get("created_at"),
     )
 
     if "artifacts" in include or "size" in include:
-        query = db.query(ArchiveArtifact).filter(ArchiveArtifact.archived_url_id == archived_url.id)
+        archives = article.get("archives", {})
+
+        # Filter by archiver if specified
         if archiver:
-            query = query.filter(ArchiveArtifact.archiver == archiver)
-        artifacts = query.all()
+            archives = {k: v for k, v in archives.items() if k == archiver}
 
         if "artifacts" in include:
             result.artifacts = [
                 ArchiveArtifactResponse(
-                    artifact_id=a.id,
-                    archiver=a.archiver,
-                    status=a.status,
-                    success=a.success,
-                    exit_code=a.exit_code,
-                    saved_path=a.saved_path,
-                    size_bytes=a.size_bytes,
-                    created_at=a.created_at.isoformat() if a.created_at else None,
+                    artifact_id=0,  # Firestore doesn't have artifact IDs
+                    archiver=arch_name,
+                    status=arch_data.get("status", "unknown"),
+                    success=arch_data.get("status") == "success",
+                    exit_code=arch_data.get("exit_code"),
+                    saved_path=None,  # No local paths in GCS-only mode
+                    size_bytes=arch_data.get("file_size"),
+                    created_at=arch_data.get("updated_at"),
                 )
-                for a in artifacts
+                for arch_name, arch_data in archives.items()
             ]
 
         if "size" in include:
-            result.total_size_bytes = sum(a.size_bytes or 0 for a in artifacts)
-            result.size_by_archiver = {a.archiver: a.size_bytes for a in artifacts}
+            result.total_size_bytes = sum(a.get("file_size", 0) for a in archives.values())
+            result.size_by_archiver = {k: v.get("file_size") for k, v in archives.items()}
 
     return result
 
@@ -414,7 +444,6 @@ async def get_archive(
 async def update_archive_metadata(
     item_id: str,
     request: UpdateArchiveRequest,
-    db: Session = Depends(get_db),
 ):
     """
     Update archive metadata by item_id.
@@ -422,14 +451,12 @@ async def update_archive_metadata(
     Currently supports updating:
     - name: Archive name/title
     """
-    archived_url = db.query(ArchivedUrl).filter(ArchivedUrl.item_id == item_id).first()
-    if not archived_url:
+    article = get_article(item_id)
+    if not article:
         raise HTTPException(404, f"Archive not found: {item_id}")
 
     if request.name is not None:
-        archived_url.name = request.name
-
-    db.commit()
+        update_article(item_id, title=request.name)
 
     return {
         "ok": True,
@@ -442,8 +469,7 @@ async def update_archive_metadata(
 async def delete_archive(
     identifier: str = Query(..., description="item_id or URL to delete"),
     type: Literal["item_id", "url"] = Query("item_id", description="Lookup type"),
-    delete_files: bool = Query(False, description="Also delete local files"),
-    db: Session = Depends(get_db),
+    delete_files: bool = Query(False, description="Also delete GCS files"),
 ):
     """
     Delete archive by item_id or URL.
@@ -456,54 +482,61 @@ async def delete_archive(
     Query params:
     - identifier: item_id or URL value
     - type: "item_id" or "url" (default: "item_id")
-    - delete_files: Also delete local files (default: false)
+    - delete_files: Also delete GCS files (default: false)
     """
     # Lookup by type
     if type == "item_id":
-        archived_url = db.query(ArchivedUrl).filter(ArchivedUrl.item_id == identifier).first()
+        article = get_article(identifier)
+        item_id = identifier
     else:
-        archived_url = db.query(ArchivedUrl).filter(ArchivedUrl.url == identifier).first()
+        article = query_by_url(identifier)
+        item_id = article.get("item_id") if article else None
 
-    if not archived_url:
+    if not article:
         raise HTTPException(404, f"Archive not found: {identifier}")
 
     # Get artifacts
-    artifacts = db.query(ArchiveArtifact).filter(ArchiveArtifact.archived_url_id == archived_url.id).all()
-
-    deleted_rowids = [a.id for a in artifacts]
+    archives = article.get("archives", {})
     removed_files = []
     errors = []
 
-    # Delete files if requested
+    # Delete GCS files if requested
     if delete_files:
-        for artifact in artifacts:
-            if artifact.saved_path:
-                try:
-                    path = Path(artifact.saved_path)
-                    if path.exists():
-                        path.unlink()
-                        removed_files.append(str(path))
-                        logger.info(f"Deleted file: {path}")
-                except Exception as e:
-                    error_msg = f"Failed to delete {artifact.saved_path}: {e}"
-                    errors.append(error_msg)
-                    logger.error(error_msg)
+        from google.cloud import storage
 
-    # Delete database records
-    for artifact in artifacts:
-        db.delete(artifact)
+        try:
+            client = storage.Client(project=settings.gcs.project_id)
+            bucket = client.bucket(settings.gcs.bucket)
 
-    # Delete related summaries
-    db.query(ArticleSummary).filter(ArticleSummary.archived_url_id == archived_url.id).delete()
+            for archiver, arch_data in archives.items():
+                gcs_path = arch_data.get("gcs_path")
+                if gcs_path:
+                    try:
+                        # Extract blob name from gs:// URL
+                        blob_name = gcs_path.replace(f"gs://{settings.gcs.bucket}/", "")
+                        blob = bucket.blob(blob_name)
+                        blob.delete()
+                        removed_files.append(gcs_path)
+                        logger.info(f"Deleted GCS file: {gcs_path}")
+                    except Exception as e:
+                        error_msg = f"Failed to delete {gcs_path}: {e}"
+                        errors.append(error_msg)
+                        logger.error(error_msg)
+        except Exception as e:
+            error_msg = f"Failed to initialize GCS client: {e}"
+            errors.append(error_msg)
+            logger.error(error_msg)
 
-    # Delete URL record
-    db.delete(archived_url)
-    db.commit()
+    # Delete Firestore document
+    success = delete_article(item_id)
+
+    if not success:
+        raise HTTPException(500, "Failed to delete article from Firestore")
 
     return DeleteResponse(
         ok=True,
-        deleted_count=len(artifacts),
-        deleted_rowids=deleted_rowids,
+        deleted_count=len(archives),
+        deleted_rowids=[],  # Firestore doesn't have row IDs
         removed_files=removed_files if delete_files else None,
         errors=errors if errors else None,
     )
@@ -514,13 +547,12 @@ async def download_archive(
     item_id: str,
     archiver: str = Query(..., description="Archiver name"),
     expiration_hours: int = Query(24, ge=1, le=168, description="Signed URL expiration (hours)"),
-    db: Session = Depends(get_db),
 ):
     """
-    Download archived file or generate signed URL.
+    Generate GCS signed URL for archive download.
 
     Consolidates:
-    - GET /retrieve (local file download)
+    - GET /retrieve (local file download) - REMOVED
     - GET /firebase/download/{item_id}/{archiver} (GCS signed URL)
 
     Query params:
@@ -528,57 +560,44 @@ async def download_archive(
     - expiration_hours: For signed URLs (default: 24, max: 168)
 
     Returns:
-    - For local storage: File download
-    - For cloud storage: JSON with signed URL
+    - JSON with signed URL
     """
-    archived_url = db.query(ArchivedUrl).filter(ArchivedUrl.item_id == item_id).first()
-    if not archived_url:
+    article = get_article(item_id)
+    if not article:
         raise HTTPException(404, f"Archive not found: {item_id}")
 
-    artifact = (
-        db.query(ArchiveArtifact)
-        .filter(
-            ArchiveArtifact.archived_url_id == archived_url.id,
-            ArchiveArtifact.archiver == archiver,
-            ArchiveArtifact.success == True,
-        )
-        .first()
-    )
-
-    if not artifact:
+    # Get artifact from archives map
+    artifact = get_artifact(item_id, archiver)
+    if not artifact or artifact.get("status") != "success":
         raise HTTPException(404, f"No successful archive for archiver: {archiver}")
 
-    # If cloud storage, generate signed URL
-    if artifact.gcs_path:
-        try:
-            from shared.storage.gcs_file_storage import GCSFileStorage
+    gcs_path = artifact.get("gcs_path")
+    if not gcs_path:
+        raise HTTPException(404, "No GCS path available for this archive")
 
-            gcs = GCSFileStorage(
-                bucket_name=settings.gcs.bucket,
-                project_id=settings.gcs.project_id,
-            )
-            signed_url = gcs.generate_access_url(
-                artifact.gcs_path,
-                timedelta(hours=expiration_hours),
-            )
-            return {
-                "download_url": signed_url,
-                "expires_in": expiration_hours * 3600,
-                "archiver": archiver,
-                "item_id": item_id,
-            }
-        except Exception as e:
-            logger.error(f"Failed to generate signed URL: {e}")
-            raise HTTPException(500, f"Failed to generate download URL: {e}")
+    # Generate signed URL
+    try:
+        from google.cloud import storage
 
-    # If local storage, return file
-    if artifact.saved_path:
-        path = Path(artifact.saved_path)
-        if path.exists():
-            return FileResponse(
-                path,
-                media_type="application/octet-stream",
-                filename=path.name,
-            )
+        client = storage.Client(project=settings.gcs.project_id)
+        bucket = client.bucket(settings.gcs.bucket)
 
-    raise HTTPException(404, "No download available for this archive")
+        # Extract blob name from gs:// URL
+        blob_name = gcs_path.replace(f"gs://{settings.gcs.bucket}/", "")
+        blob = bucket.blob(blob_name)
+
+        signed_url = blob.generate_signed_url(
+            version="v4",
+            expiration=timedelta(hours=expiration_hours),
+            method="GET",
+        )
+
+        return {
+            "download_url": signed_url,
+            "expires_in": expiration_hours * 3600,
+            "archiver": archiver,
+            "item_id": item_id,
+        }
+    except Exception as e:
+        logger.error(f"Failed to generate signed URL: {e}", exc_info=True)
+        raise HTTPException(500, f"Failed to generate download URL: {e}")

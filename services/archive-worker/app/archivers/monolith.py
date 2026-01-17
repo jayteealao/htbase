@@ -22,9 +22,11 @@ class MonolithArchiver(BaseArchiver):
     name = "monolith"
     output_extension = "html"
 
-    def archive(self, *, url: str, item_id: str) -> ArchiveResult:
-        """Archive URL using Monolith."""
-        out_dir, out_path = self.get_output_path(item_id)
+    def archive(self, *, url: str, item_id: str, output_path) -> ArchiveResult:
+        """Archive URL using Monolith to provided output_path."""
+        from pathlib import Path
+
+        output_path = Path(output_path)
 
         logger.info(
             f"Archiving {item_id} {url}",
@@ -36,7 +38,7 @@ class MonolithArchiver(BaseArchiver):
         monolith_flags = os.getenv("MONOLITH_FLAGS", "")
 
         # Build command as list (safe from command injection)
-        cmd = [monolith_bin, url, "-o", str(out_path)]
+        cmd = [monolith_bin, url, "-o", str(output_path)]
 
         # Add optional flags if present
         if monolith_flags:
@@ -53,4 +55,4 @@ class MonolithArchiver(BaseArchiver):
         if result.timed_out:
             return ArchiveResult(success=False, exit_code=None, saved_path=None)
 
-        return self.create_result(path=out_path, exit_code=result.exit_code)
+        return self.create_result(path=output_path, exit_code=result.exit_code)
