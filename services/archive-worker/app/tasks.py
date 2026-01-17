@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../.."))
 from celery import Task
 from shared.celery_config import celery_app, configure_for_worker
 from shared.config import get_settings, configure_logging
-from shared.firestore_db import update_artifact, get_artifact
+from shared.firestore import update_artifact, get_artifact
 from shared.status import TaskStatus, ArchiveTaskResult
 
 # Configure for archive worker
@@ -155,7 +155,7 @@ def _store_readability_metadata(item_id: str, result: dict) -> None:
         archiver = _get_archiver("readability")
         # Get metadata from last run (stored in archiver instance)
         if hasattr(archiver, 'last_metadata') and archiver.last_metadata:
-            from shared.firestore_db import update_metadata
+            from shared.firestore import update_metadata
 
             metadata = archiver.last_metadata
             update_metadata(

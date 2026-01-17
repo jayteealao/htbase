@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 
 from shared.auth import verify_api_key
 from shared.celery_config import celery_app
-from shared.firestore_db import get_article, get_artifacts_by_status, update_artifact
+from shared.firestore import get_article, get_artifacts_by_status, update_artifact
 from shared.rate_limit import rate_limit_admin
 from shared.utils import rewrite_paywalled_url
 

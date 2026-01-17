@@ -26,7 +26,7 @@ from celery import chain, group
 
 from shared.auth import verify_api_key
 from shared.celery_config import celery_app
-from shared.firestore_db import (
+from shared.firestore import (
     create_article,
     get_article,
     article_exists,

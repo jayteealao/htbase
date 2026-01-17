@@ -4,9 +4,8 @@ Firestore data access layer for HTBase.
 Provides functions for CRUD operations on Firestore articles collection.
 Organized into focused modules by concern.
 
-This module re-exports all functions from submodules for backward compatibility.
-Existing imports like `from shared.firestore_db import create_article` will continue to work
-when importing from `shared.firestore`.
+This module re-exports all functions from submodules for convenience.
+All Firestore operations should import from `shared.firestore`.
 
 Document Structure:
     articles/{item_id}:
