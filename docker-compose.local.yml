@@ -33,13 +33,7 @@ services:
     ports:
       - "6379:6379"  # Always expose for debugging
 
-  postgres:
-    ports:
-      - "5432:5432"  # Always expose for local tools
-    environment:
-      POSTGRES_USER: htbase
-      POSTGRES_PASSWORD: htbase_dev
-      POSTGRES_DB: htbase_dev
+  # PostgreSQL removed - HTBase now uses Firestore exclusively
 
   # ===========================================================================
   # API Gateway - Development Mode
@@ -48,7 +42,7 @@ services:
   api-gateway:
     environment:
       <<: *local-env
-      DATABASE_URL: postgresql://htbase:htbase_dev@postgres:5432/htbase_dev
+      # PostgreSQL removed - HTBase uses Firestore
       WORKERS: 1
       RELOAD: "true"
       CORS_ORIGINS: "*"
@@ -102,7 +96,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/1
-      DATABASE_URL: postgresql://htbase:htbase_dev@postgres:5432/htbase_dev
+      # PostgreSQL removed - HTBase uses Firestore
       # Handle all archive queues
       WORKER_QUEUES: archive.singlefile,archive.monolith,archive.readability,archive.pdf,archive.screenshot
       WORKER_CONCURRENCY: 2
@@ -113,8 +107,6 @@ services:
       - ./data/artifacts:/app/artifacts
     depends_on:
       redis:
-        condition: service_healthy
-      postgres:
         condition: service_healthy
     networks:
       - htbase-network
@@ -132,7 +124,7 @@ services:
   summarization-worker:
     environment:
       <<: *local-env
-      DATABASE_URL: postgresql://htbase:htbase_dev@postgres:5432/htbase_dev
+      # PostgreSQL removed - HTBase uses Firestore
       WORKER_CONCURRENCY: 2
       # Use mock provider for testing without API costs
       LLM_PROVIDER: ${LLM_PROVIDER:-mock}
@@ -153,7 +145,7 @@ services:
   storage-worker:
     environment:
       <<: *local-env
-      DATABASE_URL: postgresql://htbase:htbase_dev@postgres:5432/htbase_dev
+      # PostgreSQL removed - HTBase uses Firestore
       WORKER_CONCURRENCY: 3
       COMPRESSION_ENABLED: "false"
       CLEANUP_AFTER_UPLOAD: "false"
@@ -171,24 +163,7 @@ services:
   # Development Tools
   # ===========================================================================
 
-  # pgAdmin for database management
-  pgadmin:
-    image: dpage/pgadmin4:latest
-    container_name: htbase-pgadmin
-    restart: unless-stopped
-    environment:
-      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@htbase.local}
-      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
-      PGADMIN_CONFIG_SERVER_MODE: "False"
-    ports:
-      - "${PGADMIN_PORT:-5050}:80"
-    volumes:
-      - pgadmin-data:/var/lib/pgadmin
-    depends_on:
-      postgres:
-        condition: service_healthy
-    networks:
-      - htbase-network
+  # pgAdmin removed - HTBase now uses Firestore exclusively
 
   # Mailhog for email testing (if needed)
   mailhog:
@@ -214,6 +189,4 @@ services:
       HTTP_USER: ""
       HTTP_PASSWORD: ""
 
-volumes:
-  pgadmin-data:
-    driver: local
+# PostgreSQL volumes removed - HTBase uses Firestore exclusively

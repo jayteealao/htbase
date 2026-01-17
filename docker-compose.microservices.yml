@@ -16,7 +16,8 @@ x-common-env: &common-env
   REDIS_URL: redis://redis:6379/0
   CELERY_BROKER_URL: redis://redis:6379/0
   CELERY_RESULT_BACKEND: redis://redis:6379/1
-  DATABASE_URL: postgresql://${DB_USER:-htbase}:${DB_PASSWORD:-htbase}@postgres:5432/${DB_NAME:-htbase}
+  # PostgreSQL removed - HTBase now uses Firestore exclusively
+  FIRESTORE_PROJECT_ID: ${GCS_PROJECT_ID:-}
   GCS_BUCKET: ${GCS_BUCKET:-}
   GCS_PROJECT_ID: ${GCS_PROJECT_ID:-}
   GOOGLE_APPLICATION_CREDENTIALS: /secrets/gcs-credentials.json
@@ -28,8 +29,6 @@ x-worker-base: &worker-base
   restart: unless-stopped
   depends_on:
     redis:
-      condition: service_healthy
-    postgres:
       condition: service_healthy
   networks:
     - archivebox_default
@@ -74,32 +73,7 @@ services:
       retries: 5
       start_period: 5s
 
-  postgres:
-    image: postgres:16-alpine
-    container_name: htbase-postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${DB_USER:-htbase}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-htbase}
-      POSTGRES_DB: ${DB_NAME:-htbase}
-      PGDATA: /var/lib/postgresql/data/pgdata
-    ports:
-      - "${DB_PORT:-5432}:5432"
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-      - ./infrastructure/postgres/init:/docker-entrypoint-initdb.d:ro
-    networks:
-      - archivebox_default
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-htbase} -d ${DB_NAME:-htbase}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-    deploy:
-      resources:
-        limits:
-          memory: 1G
+  # PostgreSQL service removed - HTBase now uses Firestore exclusively
 
   # ===========================================================================
   # API Gateway
@@ -125,8 +99,6 @@ services:
       ENABLE_SUMMARIZATION: ${ENABLE_SUMMARIZATION:-true}
     depends_on:
       redis:
-        condition: service_healthy
-      postgres:
         condition: service_healthy
     networks:
       - archivebox_default
@@ -417,8 +389,6 @@ networks:
 
 volumes:
   redis-data:
-    driver: local
-  postgres-data:
     driver: local
   artifacts:
     driver: local
