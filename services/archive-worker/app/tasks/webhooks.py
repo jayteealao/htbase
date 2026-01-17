@@ -20,11 +20,9 @@ from typing import Any, Optional
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../../.."))
 
 from celery import Task
-from sqlalchemy import select
-from sqlalchemy.orm import Session
 
 from shared.celery_config import celery_app, configure_for_worker
-from shared.db import get_session, ArchiveArtifact, ArchivedUrl
+from shared.firestore import get_article
 
 # Configure for archive worker
 configure_for_worker("archive")
@@ -249,105 +247,121 @@ def notify_webhook(
 def gather_status(
     self,
     previous_results: Any,
-    task_id: str,
+    item_id: str,
 ) -> dict:
     """
-    Gather workflow status from database for webhook payload.
+    Gather workflow status from Firestore for webhook payload.
 
     This task is called in a Celery chain after the archive tasks complete.
-    It queries the database to collect the results of all archive operations
-    for the given workflow/task ID.
+    It queries Firestore to collect the results of all archive operations
+    for the given article.
+
+    NOTE: This function was refactored to use Firestore instead of PostgreSQL.
+    The signature changed from task_id to item_id. Callers in archives.py
+    need to pass item_id instead of workflow_id/task_id.
 
     Args:
         self: Celery task context
         previous_results: Results from previous tasks in chain (ignored)
-        task_id: The workflow/task ID to gather status for
+        item_id: The article item_id to gather status for
 
     Returns:
         Dictionary with status data suitable for webhook payload
     """
     logger.info(
-        "Gathering workflow status",
-        extra={"task_id": task_id},
+        "Gathering workflow status from Firestore",
+        extra={"item_id": item_id},
     )
 
     try:
-        with get_session() as session:
-            # Find all artifacts for this task
-            artifacts = session.execute(
-                select(ArchiveArtifact, ArchivedUrl)
-                .join(ArchivedUrl, ArchiveArtifact.archived_url_id == ArchivedUrl.id)
-                .where(ArchiveArtifact.task_id == task_id)
-            ).all()
+        # Get article from Firestore
+        article = get_article(item_id)
 
-            if not artifacts:
-                logger.warning(
-                    f"No artifacts found for task {task_id}",
-                    extra={"task_id": task_id},
-                )
-                return {
-                    "status": "unknown",
-                    "items": [],
-                    "task_id": task_id,
-                }
-
-            # Build status data
-            items = []
-            all_success = True
-            any_success = False
-
-            for artifact, archived_url in artifacts:
-                item_status = {
-                    "url": archived_url.url,
-                    "id": archived_url.item_id,
-                    "archiver": artifact.archiver,
-                    "status": "success" if artifact.success else "failed",
-                    "exit_code": artifact.exit_code,
-                    "saved_path": artifact.saved_path,
-                }
-
-                items.append(item_status)
-
-                if artifact.success:
-                    any_success = True
-                else:
-                    all_success = False
-
-            # Determine overall status
-            if all_success:
-                overall_status = "completed"
-            elif any_success:
-                overall_status = "partial"
-            else:
-                overall_status = "failed"
-
-            status_data = {
-                "status": overall_status,
-                "items": items,
-                "task_id": task_id,
+        if not article:
+            logger.warning(
+                f"No article found for item_id {item_id}",
+                extra={"item_id": item_id},
+            )
+            return {
+                "status": "unknown",
+                "items": [],
+                "task_id": item_id,  # Keep for backward compatibility
             }
 
-            logger.info(
-                "Status gathered",
-                extra={
-                    "task_id": task_id,
-                    "status": overall_status,
-                    "item_count": len(items),
-                },
-            )
+        # Extract archive statuses from archives map
+        archives = article.get("archives", {})
 
-            return status_data
+        if not archives:
+            logger.warning(
+                f"No archives found for article {item_id}",
+                extra={"item_id": item_id},
+            )
+            return {
+                "status": "unknown",
+                "items": [],
+                "task_id": item_id,
+            }
+
+        # Build status data
+        items = []
+        all_success = True
+        any_success = False
+
+        for archiver_name, artifact_data in archives.items():
+            # Determine artifact status
+            is_success = artifact_data.get("success") or artifact_data.get("status") == "success"
+
+            item_status = {
+                "url": article.get("url"),
+                "id": item_id,
+                "archiver": archiver_name,
+                "status": "success" if is_success else "failed",
+                "exit_code": artifact_data.get("exit_code"),
+                "saved_path": artifact_data.get("gcs_path") or artifact_data.get("saved_path"),
+            }
+
+            items.append(item_status)
+
+            if is_success:
+                any_success = True
+            else:
+                all_success = False
+
+        # Determine overall status
+        if all_success:
+            overall_status = "completed"
+        elif any_success:
+            overall_status = "partial"
+        else:
+            overall_status = "failed"
+
+        status_data = {
+            "status": overall_status,
+            "items": items,
+            "task_id": item_id,  # Keep for backward compatibility
+        }
+
+        logger.info(
+            "Status gathered from Firestore",
+            extra={
+                "item_id": item_id,
+                "status": overall_status,
+                "item_count": len(items),
+            },
+        )
+
+        return status_data
 
     except Exception as e:
         logger.error(
             f"Failed to gather status: {e}",
             exc_info=True,
-            extra={"task_id": task_id},
+            extra={"item_id": item_id},
         )
         # Return error status
         return {
             "status": "error",
             "items": [],
-            "task_id": task_id,
+            "task_id": item_id,
             "error": str(e),
         }

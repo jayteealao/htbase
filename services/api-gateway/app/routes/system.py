@@ -20,13 +20,11 @@ from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import func, Integer
-from sqlalchemy.orm import Session
 
 from shared.auth import verify_api_key
 from shared.celery_config import celery_app
 from shared.config import get_settings
-from shared.db import ArchivedUrl, ArchiveArtifact, ArticleSummary
+from shared.firestore_client import get_articles_collection
 from shared.rate_limit import rate_limit_admin
 from shared.utils import sanitize_filename
 
@@ -37,14 +35,6 @@ router = APIRouter()
 
 # Available archivers
 AVAILABLE_ARCHIVERS = ["singlefile", "monolith", "readability", "pdf", "screenshot"]
-
-
-def get_db():
-    """Database session dependency."""
-    from shared.db import get_session
-
-    with get_session() as session:
-        yield session
 
 
 # Request/Response Models
@@ -97,9 +87,9 @@ class CommandResponse(BaseModel):
 
 
 @router.get("/system/stats", response_model=SystemStatsResponse, dependencies=[Depends(rate_limit_admin)])
-async def get_system_stats(db: Session = Depends(get_db)):
+async def get_system_stats():
     """
-    Get system statistics.
+    Get system statistics from Firestore.
 
     Replaces: GET /admin/stats
 
@@ -119,32 +109,46 @@ async def get_system_stats(db: Session = Depends(get_db)):
         }
     }
     """
-    url_count = db.query(func.count(ArchivedUrl.id)).scalar()
-    artifact_count = db.query(func.count(ArchiveArtifact.id)).scalar()
-    success_count = (
-        db.query(func.count(ArchiveArtifact.id))
-        .filter(ArchiveArtifact.success == True)
-        .scalar()
-    )
-    summary_count = db.query(func.count(ArticleSummary.id)).scalar()
+    collection = get_articles_collection()
 
-    # Size stats
-    total_size = (
-        db.query(func.sum(ArchiveArtifact.size_bytes))
-        .filter(ArchiveArtifact.size_bytes.isnot(None))
-        .scalar()
-    ) or 0
+    # Initialize counters
+    url_count = 0
+    artifact_count = 0
+    success_count = 0
+    summary_count = 0
+    total_size = 0
+    archiver_stats: Dict[str, Dict[str, int]] = {}
 
-    # Artifact counts by archiver
-    archiver_stats = (
-        db.query(
-            ArchiveArtifact.archiver,
-            func.count(ArchiveArtifact.id).label("total"),
-            func.sum(func.cast(ArchiveArtifact.success, Integer)).label("success"),
-        )
-        .group_by(ArchiveArtifact.archiver)
-        .all()
-    )
+    # Stream all articles and aggregate stats
+    for doc in collection.stream():
+        article = doc.to_dict()
+        url_count += 1
+
+        # Count archives (artifacts)
+        archives = article.get("archives", {})
+        for archiver_name, artifact_data in archives.items():
+            artifact_count += 1
+
+            # Initialize archiver stats if needed
+            if archiver_name not in archiver_stats:
+                archiver_stats[archiver_name] = {"total": 0, "success": 0}
+
+            archiver_stats[archiver_name]["total"] += 1
+
+            # Count successful artifacts
+            if artifact_data.get("success") or artifact_data.get("status") == "success":
+                success_count += 1
+                archiver_stats[archiver_name]["success"] += 1
+
+            # Sum file sizes
+            size = artifact_data.get("file_size") or artifact_data.get("size_bytes") or 0
+            if size:
+                total_size += size
+
+        # Count summaries
+        summary = article.get("summary", {})
+        if summary and (summary.get("text") or summary.get("summary_text") or summary.get("bullet_points")):
+            summary_count += 1
 
     return SystemStatsResponse(
         archived_urls=url_count,
@@ -152,13 +156,7 @@ async def get_system_stats(db: Session = Depends(get_db)):
         successful_artifacts=success_count,
         summaries=summary_count,
         total_size_bytes=total_size,
-        archivers={
-            stat.archiver: {
-                "total": stat.total,
-                "success": stat.success or 0,
-            }
-            for stat in archiver_stats
-        },
+        archivers=archiver_stats,
     )
 
 
@@ -186,27 +184,26 @@ async def list_archivers():
 @router.post("/system/summarize", response_model=SummarizeResponse, dependencies=[Depends(rate_limit_admin)])
 async def trigger_summarization(
     request: SummarizeRequest,
-    db: Session = Depends(get_db),
 ):
     """
     Manually trigger AI summarization for an article.
 
     Replaces: POST /admin/summarize
 
-    Finds the article by rowid, item_id, or URL and queues it for summarization.
-    Requires at least one lookup field (rowid, item_id, or url).
+    Finds the article by item_id or URL and queues it for summarization.
+    Requires either item_id or url.
 
     Request body:
     {
-        "rowid": 123,           # Option 1: Artifact row ID
-        "item_id": "article-123",  # Option 2: Article item_id
-        "url": "https://..."    # Option 3: Article URL
+        "rowid": 123,           # DEPRECATED: No longer used (Firestore has no row IDs)
+        "item_id": "article-123",  # Option 1: Article item_id (preferred)
+        "url": "https://..."    # Option 2: Article URL
     }
 
     Returns:
     {
         "ok": true,
-        "archived_url_id": 456,
+        "archived_url_id": null,  # Deprecated (always null in Firestore)
         "summary_created": false,  # false = queued, not yet created
         "task_id": "abc123"
     }
@@ -214,43 +211,42 @@ async def trigger_summarization(
     if not settings.summarization.enabled:
         raise HTTPException(status_code=503, detail="Summarization is disabled")
 
-    archived_url_id: Optional[int] = None
+    from shared.firestore import get_article, query_by_url
+
     item_id: Optional[str] = None
+    article = None
 
-    # Find the article by rowid, item_id, or URL
-    if request.rowid is not None:
-        artifact = db.query(ArchiveArtifact).filter(ArchiveArtifact.id == request.rowid).first()
-        if not artifact:
-            raise HTTPException(status_code=404, detail="Artifact not found")
-        archived_url_id = artifact.archived_url_id
-
-        archived_url = db.query(ArchivedUrl).filter(ArchivedUrl.id == archived_url_id).first()
-        if archived_url:
-            item_id = archived_url.item_id
-
-    elif request.item_id:
+    # Find the article by item_id or URL
+    if request.item_id:
         safe_id = sanitize_filename(request.item_id.strip())
-        archived_url = db.query(ArchivedUrl).filter(ArchivedUrl.item_id == safe_id).first()
-        if not archived_url:
+        article = get_article(safe_id)
+        if not article:
             raise HTTPException(status_code=404, detail="Article not found")
-        archived_url_id = archived_url.id
-        item_id = archived_url.item_id
+        item_id = safe_id
 
     elif request.url:
-        archived_url = db.query(ArchivedUrl).filter(ArchivedUrl.url == request.url).first()
-        if not archived_url:
-            raise HTTPException(status_code=404, detail="Article not found")
-        archived_url_id = archived_url.id
-        item_id = archived_url.item_id
+        articles = query_by_url(str(request.url))
+        if not articles:
+            raise HTTPException(status_code=404, detail="Article not found for URL")
+        # Use first match (should only be one)
+        article = articles[0]
+        item_id = article.get("item_id")
+
+    elif request.rowid is not None:
+        # DEPRECATED: rowid is a PostgreSQL concept, not supported in Firestore
+        raise HTTPException(
+            status_code=400,
+            detail="rowid lookup is deprecated. Use item_id or url instead."
+        )
 
     else:
         raise HTTPException(
             status_code=400,
-            detail="Provide one of: rowid, item_id, or url"
+            detail="Provide either item_id or url"
         )
 
-    if not archived_url_id:
-        raise HTTPException(status_code=404, detail="Unable to resolve archived URL")
+    if not item_id:
+        raise HTTPException(status_code=404, detail="Unable to resolve article")
 
     # Queue summarization task
     task_id = uuid.uuid4().hex
@@ -259,7 +255,7 @@ async def trigger_summarization(
         "services.summarization_worker.tasks.summarize_article",
         kwargs={
             "item_id": item_id,
-            "archived_url_id": archived_url_id,
+            "archived_url_id": None,  # Deprecated parameter, kept for worker compatibility
             "force": True,
         },
         queue="summarization",
@@ -267,12 +263,12 @@ async def trigger_summarization(
 
     logger.info(
         "Summarization task queued",
-        extra={"archived_url_id": archived_url_id, "item_id": item_id, "task_id": task_id},
+        extra={"item_id": item_id, "task_id": task_id},
     )
 
     return SummarizeResponse(
         ok=True,
-        archived_url_id=archived_url_id,
+        archived_url_id=None,  # Deprecated (Firestore doesn't use integer IDs)
         summary_created=False,  # It's queued, not yet created
         task_id=task_id,
     )
