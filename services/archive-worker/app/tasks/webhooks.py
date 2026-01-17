@@ -12,12 +12,8 @@ import hmac
 import json
 import logging
 import os
-import sys
 from datetime import datetime
 from typing import Any, Optional
-
-# Add shared module to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../../.."))
 
 from celery import Task
 

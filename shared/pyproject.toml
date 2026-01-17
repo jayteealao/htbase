@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "htbase-shared"
+version = "2.0.0"
+description = "Shared library for HTBase microservices"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+
+dependencies = [
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "google-cloud-firestore>=2.13.0",
+    "google-cloud-storage>=2.10.0",
+    "celery>=5.3.0",
+    "redis>=5.0.0",
+    "kombu>=5.3.0",
+    "httpx>=0.25.0",
+    "requests>=2.31.0",
+    "slowapi>=0.1.9",
+    "python-multipart>=0.0.6",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.1.0",
+    "black>=23.0.0",
+    "mypy>=1.5.0",
+    "ruff>=0.1.0",
+]
+
+[tool.setuptools]
+packages = ["shared"]
+package-dir = {"shared" = "."}
+
+[tool.setuptools.package-data]
+shared = ["py.typed"]
+
+[tool.black]
+line-length = 100
+target-version = ['py310', 'py311', 'py312']
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

@@ -37,3 +37,6 @@ monolith.md
 build
 dist
 *.egg-info
+
+# Exclude incomplete config refactoring (use shared/config.py instead)
+shared/config/

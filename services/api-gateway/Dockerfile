@@ -8,8 +8,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy shared module
+# Copy shared package and install it
 COPY shared /app/shared
+RUN pip install --no-cache-dir -e /app/shared
 
 # Copy service code
 COPY services/api-gateway /app/services/api-gateway
@@ -25,8 +26,8 @@ RUN pip install --no-cache-dir \
     google-cloud-storage \
     httpx
 
-# Set Python path
-ENV PYTHONPATH=/app:/app/services/api-gateway
+# Set Python path (for service code only)
+ENV PYTHONPATH=/app/services/api-gateway
 
 # Create non-root user
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app

@@ -18,9 +18,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi.errors import RateLimitExceeded
 
-# Add shared module to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../.."))
-
 from shared.config import get_settings, configure_logging
 from shared.models import HealthResponse
 from shared.rate_limit import slowapi_limiter, _rate_limit_exceeded_handler, RateLimitMiddleware
@@ -45,15 +42,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
 
     # Startup: verify connections
-    try:
-        from shared.db import check_connection
-
-        if check_connection():
-            logger.info("Database connection verified")
-        else:
-            logger.warning("Database connection failed - some features may not work")
-    except Exception as e:
-        logger.warning(f"Database check failed: {e}")
+    # Firestore connections are lazy-loaded, no need for startup check
 
     yield
 
@@ -139,16 +128,13 @@ def create_app() -> FastAPI:
         except Exception:
             services["celery"] = "unhealthy"
 
-        # Check database
+        # Check Firestore (lazy-loaded, assume healthy if configured)
         try:
-            from shared.db import check_connection
-
-            if check_connection():
-                services["database"] = "healthy"
-            else:
-                services["database"] = "unhealthy"
+            from shared.firestore_client import get_firestore_client
+            get_firestore_client()  # Will raise if not configured
+            services["firestore"] = "healthy"
         except Exception:
-            services["database"] = "unhealthy"
+            services["firestore"] = "unhealthy"
 
         status = "healthy" if all(v == "healthy" for v in services.values()) else "degraded"
 

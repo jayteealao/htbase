@@ -21,9 +21,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-# Add shared module to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../.."))
-
 from celery import Task
 from shared.celery_config import celery_app, configure_for_worker
 from shared.config import get_settings, configure_logging

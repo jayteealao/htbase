@@ -7,12 +7,8 @@ Provides archiver implementations for different archive formats.
 from __future__ import annotations
 
 import os
-import sys
 from functools import lru_cache
 from typing import Dict, Any, List, Optional
-
-# Add shared module to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../../.."))
 
 from shared.config import get_settings
 from shared.storage.file_storage import FileStorageProvider

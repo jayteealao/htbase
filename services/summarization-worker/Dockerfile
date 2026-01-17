@@ -8,8 +8,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy shared module
+# Copy shared package and install it
 COPY shared /app/shared
+RUN pip install --no-cache-dir -e /app/shared
 
 # Copy service code
 COPY services/summarization-worker /app/services/summarization-worker
@@ -24,8 +25,8 @@ RUN pip install --no-cache-dir \
     pydantic \
     chonkie
 
-# Set Python path
-ENV PYTHONPATH=/app:/app/services/summarization-worker
+# Set Python path (for service code only)
+ENV PYTHONPATH=/app/services/summarization-worker
 
 # Create data directory
 RUN mkdir -p /data && chmod 777 /data

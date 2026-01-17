@@ -21,8 +21,9 @@ RUN wget -q https://github.com/Y2Z/monolith/releases/latest/download/monolith-gn
 # Install single-file CLI
 RUN npm install -g single-file-cli
 
-# Copy shared module
+# Copy shared package and install it
 COPY shared /app/shared
+RUN pip install --no-cache-dir -e /app/shared
 
 # Copy service code
 COPY services/archive-worker /app/services/archive-worker
@@ -34,8 +35,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Install additional dependencies for archivers
 RUN pip install --no-cache-dir httpx readability-lxml
 
-# Set Python path
-ENV PYTHONPATH=/app:/app/services/archive-worker
+# Set Python path (for service code only)
+ENV PYTHONPATH=/app/services/archive-worker
 
 # Set binary paths
 ENV CHROMIUM_BIN=/usr/bin/chromium

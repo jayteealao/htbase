@@ -17,59 +17,6 @@ from pydantic import AliasChoices, BaseModel, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class DatabaseSettings(BaseModel):
-    """Database settings (for backward compatibility during PostgreSQL removal).
-
-    NOTE: HTBase now uses Firestore exclusively. This class remains only for
-    backward compatibility with legacy scripts during the transition period.
-    """
-
-    path: Optional[Path] = Field(
-        default=None,
-        validation_alias=AliasChoices("DB_PATH", "DATABASE__PATH"),
-    )
-    host: str = Field(
-        default="localhost",
-        validation_alias=AliasChoices("DB_HOST", "DATABASE__HOST"),
-    )
-    port: int = Field(
-        default=5432,
-        validation_alias=AliasChoices("DB_PORT", "DATABASE__PORT"),
-    )
-    name: str = Field(
-        default="htbase",
-        validation_alias=AliasChoices("DB_NAME", "DATABASE__NAME"),
-    )
-    user: str = Field(
-        default="postgres",
-        validation_alias=AliasChoices("DB_USER", "DATABASE__USER"),
-    )
-    password: SecretStr = Field(
-        default=SecretStr(""),
-        validation_alias=AliasChoices("DB_PASSWORD", "DATABASE__PASSWORD"),
-    )
-
-    def sqlalchemy_url(self) -> str:
-        """Generate SQLAlchemy database URL.
-
-        NOTE: This method is deprecated as HTBase no longer uses PostgreSQL.
-        It remains for backward compatibility with legacy scripts only.
-        """
-        if self.path:
-            return f"sqlite:///{self.path}"
-        user = quote_plus(self.user)
-        pwd = quote_plus(self.password.get_secret_value())
-        return f"postgresql+psycopg://{user}:{pwd}@{self.host}:{self.port}/{self.name}"
-
-    def resolved_path(self, data_dir: Path) -> Path:
-        """Get resolved database path with fallback to data_dir/app.db.
-
-        NOTE: This method is deprecated as HTBase no longer uses SQLite.
-        It remains for backward compatibility with legacy scripts only.
-        """
-        return self.path or (data_dir / "app.db")
-
-
 class RedisSettings(BaseModel):
     """Redis connection settings."""
 
@@ -357,10 +304,6 @@ class SharedSettings(BaseSettings):
         return v
 
     # Nested settings
-    database: DatabaseSettings = Field(
-        default_factory=DatabaseSettings,
-        description="Legacy database settings (deprecated - HTBase uses Firestore)"
-    )
     redis: RedisSettings = Field(default_factory=RedisSettings)
     gcs: GCSSettings = Field(default_factory=GCSSettings)
     firestore: FirestoreSettings = Field(default_factory=FirestoreSettings)
@@ -388,15 +331,6 @@ class SharedSettings(BaseSettings):
     def effective_celery_result_backend(self) -> str:
         """Get Celery result backend URL, defaulting to Redis."""
         return self.celery_result_backend or self.redis.url()
-
-    @property
-    def database_url(self) -> str:
-        """Get database connection string.
-
-        NOTE: This property is deprecated as HTBase no longer uses PostgreSQL.
-        It remains for backward compatibility with legacy scripts only.
-        """
-        return self.database.sqlalchemy_url()
 
     model_config = SettingsConfigDict(
         env_file=".env",
