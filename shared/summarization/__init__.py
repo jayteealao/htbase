@@ -1,8 +1,15 @@
 """
 Shared summarization module for HTBase microservices.
 
-Provides article chunking, prompt building, response parsing,
-and LLM provider abstraction for summary generation.
+Provides building blocks for summary generation:
+- ArticleChunker: Token-aware text splitting for large articles
+- PromptBuilder: Editorial-quality prompt templates
+- ResponseParser: Structured LLM output extraction
+- SummaryProvider & ProviderChain: Multi-provider LLM access with fallback
+
+Note: This module provides reusable components. The actual summarization
+orchestration logic lives in services/summarization-worker/app/tasks.py,
+which uses these components with Firestore for persistence.
 """
 
 from .chunker import ArticleChunker
@@ -16,8 +23,8 @@ from .providers import (
     HTTPProvider,
     HuggingFaceProvider,
 )
-from .service import SummaryService, create_summary_service
 
+# Clean exports - only active components
 __all__ = [
     "ArticleChunker",
     "PromptBuilder",
@@ -29,6 +36,9 @@ __all__ = [
     "ProviderChain",
     "HTTPProvider",
     "HuggingFaceProvider",
-    "SummaryService",
-    "create_summary_service",
 ]
+
+# Historical note: SummaryService and create_summary_service were removed
+# in 2026-01-17 as part of Wave 5F cleanup. The legacy SQLAlchemy-based
+# service was replaced by direct Firestore usage in:
+# services/summarization-worker/app/tasks.py
