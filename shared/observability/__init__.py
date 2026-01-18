@@ -8,6 +8,11 @@ from .events import (
     APIRequestEvent,
     ArchiveProcessingEvent,
     SummarizationEvent,
+    Outcome,
+    ErrorDetails,
+    AuthContext,
+    ArticleContext,
+    ArchiveRequestContext,
     emit_wide_event,
 )
 from .correlation import (
@@ -16,9 +21,20 @@ from .correlation import (
     get_request_id,
     set_request_id,
     generate_request_id,
+    get_or_create_request_id,
+    get_or_create_correlation_id,
 )
-from .sampling import should_sample
-from .middleware import correlation_middleware, wide_event_middleware
+from .sampling import should_sample, configure_sampling
+from .middleware import (
+    CorrelationMiddleware,
+    WideEventMiddleware,
+    enrich_api_event,
+)
+from .celery_integration import (
+    setup_celery_signals,
+    ArchiveTaskContext,
+    SummarizationTaskContext,
+)
 
 __all__ = [
     # Event types
@@ -26,6 +42,11 @@ __all__ = [
     "APIRequestEvent",
     "ArchiveProcessingEvent",
     "SummarizationEvent",
+    "Outcome",
+    "ErrorDetails",
+    "AuthContext",
+    "ArticleContext",
+    "ArchiveRequestContext",
     "emit_wide_event",
     # Correlation
     "get_correlation_id",
@@ -33,9 +54,17 @@ __all__ = [
     "get_request_id",
     "set_request_id",
     "generate_request_id",
+    "get_or_create_request_id",
+    "get_or_create_correlation_id",
     # Sampling
     "should_sample",
+    "configure_sampling",
     # Middleware
-    "correlation_middleware",
-    "wide_event_middleware",
+    "CorrelationMiddleware",
+    "WideEventMiddleware",
+    "enrich_api_event",
+    # Celery integration
+    "setup_celery_signals",
+    "ArchiveTaskContext",
+    "SummarizationTaskContext",
 ]
