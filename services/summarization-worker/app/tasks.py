@@ -22,6 +22,11 @@ from shared.firestore import (
     add_entities,
     add_tags,
 )
+from shared.observability import (
+    SummarizationTaskContext,
+    set_request_id,
+    set_correlation_id,
+)
 
 # Configure for summarization worker
 configure_for_worker("summarization")
@@ -52,6 +57,7 @@ def summarize_article(
     self,
     item_id: str,
     force: bool = False,
+    **kwargs,
 ) -> dict:
     """
     Summarize an article.
@@ -59,72 +65,105 @@ def summarize_article(
     Args:
         item_id: Item identifier
         force: Force re-summarization even if summary exists
+        **kwargs: Additional arguments (request_id, correlation_id, etc.)
 
     Returns:
         Summarization result dictionary
     """
-    logger.info(
-        "Starting summarization",
-        extra={
-            "task_id": self.request.id,
-            "item_id": item_id,
-        },
-    )
+    # Set up correlation context from kwargs
+    request_id = kwargs.get("request_id")
+    correlation_id = kwargs.get("correlation_id")
 
-    settings = get_settings()
+    if request_id:
+        set_request_id(request_id)
+    if correlation_id:
+        set_correlation_id(correlation_id)
 
-    # Check if summarization is enabled
-    if not settings.summarization.enabled:
-        logger.info("Summarization disabled")
-        return {"success": False, "reason": "summarization_disabled"}
+    # Create wide-event context manager
+    with SummarizationTaskContext(
+        task_id=self.request.id,
+        item_id=item_id,
+        service_name="summarization-worker",
+        version="2.0.0",
+    ) as ctx:
+        try:
+            settings = get_settings()
 
-    # Check for existing summary
-    if not force:
-        existing = get_summary(item_id)
-        if existing and existing.get("text"):
-            logger.info("Summary already exists")
-            return {
-                "success": True,
-                "reason": "existing",
-                "summary": existing.get("text"),
-            }
+            # Check if summarization is enabled
+            if not settings.summarization.enabled:
+                logger.info("Summarization disabled")
+                return {"success": False, "reason": "summarization_disabled"}
 
-    # Get content from Firestore metadata
-    content = _get_article_content(item_id, settings)
-    if not content:
-        logger.warning("No content found for summarization")
-        return {"success": False, "reason": "no_content"}
+            # Check for existing summary
+            if not force:
+                existing = get_summary(item_id)
+                if existing and existing.get("text"):
+                    logger.info("Summary already exists")
+                    return {
+                        "success": True,
+                        "reason": "existing",
+                        "summary": existing.get("text"),
+                    }
 
-    # Generate summary
-    try:
-        summary_result = _generate_summary(content, settings)
+            # Get content from Firestore metadata
+            content = _get_article_content(item_id, settings)
+            if not content:
+                logger.warning("No content found for summarization")
+                ctx.mark_error(
+                    error=ValueError("No content found"),
+                    error_code="no_content",
+                    retriable=False,
+                )
+                return {"success": False, "reason": "no_content"}
 
-        if summary_result:
-            # Store summary in Firestore
-            create_summary(
-                item_id=item_id,
-                summary_text=summary_result["summary"],
-                bullet_points=summary_result.get("bullet_points"),
-                lede=summary_result.get("lede"),
-                model_name=summary_result.get("model_name"),
+            # Set content context
+            ctx.set_content_context(
+                source=kwargs.get("source", "readability"),  # TODO: Track actual source
+                content_length_chars=len(content),
+                word_count=len(content.split()),
             )
 
-            logger.info(
-                "Summary created",
-                extra={"item_id": item_id},
+            # Generate summary
+            summary_result = _generate_summary(content, settings)
+
+            if summary_result:
+                # Store summary in Firestore
+                create_summary(
+                    item_id=item_id,
+                    summary_text=summary_result["summary"],
+                    bullet_points=summary_result.get("bullet_points"),
+                    lede=summary_result.get("lede"),
+                    model_name=summary_result.get("model_name"),
+                )
+
+                # Mark success in wide event with metrics
+                ctx.mark_success(
+                    provider=summary_result.get("provider", "unknown"),
+                    model=summary_result.get("model_name", "unknown"),
+                    tokens_used=summary_result.get("tokens_used"),
+                    summary_length_chars=len(summary_result["summary"]),
+                )
+
+                return {
+                    "success": True,
+                    "summary_text": summary_result["summary"],
+                    "bullet_points": summary_result.get("bullet_points"),
+                }
+            else:
+                ctx.mark_error(
+                    error=RuntimeError("Summary generation failed"),
+                    error_code="generation_failed",
+                    retriable=True,
+                )
+                return {"success": False, "reason": "generation_failed"}
+
+        except Exception as e:
+            ctx.mark_error(
+                error=e,
+                error_code=type(e).__name__,
+                retriable=True,
             )
-
-            return {
-                "success": True,
-                "summary_text": summary_result["summary"],
-                "bullet_points": summary_result.get("bullet_points"),
-            }
-        else:
-            return {"success": False, "reason": "generation_failed"}
-
-    except Exception as e:
-        logger.error(f"Summarization failed: {e}", exc_info=True)
-        raise
+            raise
 
 
 @celery_app.task(base=SummarizationTask, bind=True, name="services.summarization_worker.tasks.extract_entities")

@@ -21,6 +21,7 @@ from slowapi.errors import RateLimitExceeded
 from shared.config import get_settings, configure_logging
 from shared.models import HealthResponse
 from shared.rate_limit import slowapi_limiter, _rate_limit_exceeded_handler, RateLimitMiddleware
+from shared.observability import CorrelationMiddleware, WideEventMiddleware
 
 from app.routes import tasks, sync, archives, artifacts, system
 
@@ -69,6 +70,18 @@ def create_app() -> FastAPI:
 
     # Add rate limit middleware for response headers
     app.add_middleware(RateLimitMiddleware)
+
+    # Wide-event observability middleware
+    # NOTE: Middleware executes in reverse order of addition
+    # CorrelationMiddleware must execute BEFORE WideEventMiddleware
+    deployment_id = os.getenv("DEPLOYMENT_ID", "local")
+    app.add_middleware(
+        WideEventMiddleware,
+        service_name="api-gateway",
+        version="2.0.0",
+        deployment_id=deployment_id,
+    )
+    app.add_middleware(CorrelationMiddleware)
 
     # CORS middleware - configure allowed origins from environment
     cors_origins = settings.cors_origins if hasattr(settings, 'cors_origins') else []

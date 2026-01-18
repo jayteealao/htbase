@@ -28,6 +28,7 @@ from shared.infrastructure.celery import celery_app
 from shared.firestore import get_article, get_artifacts_by_status, update_artifact
 from shared.rate_limit import rate_limit_admin
 from shared.utils import rewrite_paywalled_url
+from shared.observability import get_request_id, get_correlation_id
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +124,10 @@ async def retry_artifacts(
             if a["archiver"] in request.archivers
         ]
 
+    # Get correlation IDs for passing to workers
+    request_id = get_request_id()
+    correlation_id = get_correlation_id()
+
     # Create new task ID
     task_id = uuid.uuid4().hex
 
@@ -144,6 +149,8 @@ async def retry_artifacts(
                 kwargs={
                     "item_id": item_id,
                     "url": fetch_url,
+                    "request_id": request_id,
+                    "correlation_id": correlation_id,
                 },
             )
         )

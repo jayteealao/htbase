@@ -27,6 +27,7 @@ from shared.config import get_settings
 from shared.infrastructure.firestore import get_articles_collection
 from shared.rate_limit import rate_limit_admin
 from shared.utils import sanitize_filename
+from shared.observability import get_request_id, get_correlation_id
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -248,6 +249,10 @@ async def trigger_summarization(
     if not item_id:
         raise HTTPException(status_code=404, detail="Unable to resolve article")
 
+    # Get correlation IDs for passing to worker
+    request_id = get_request_id()
+    correlation_id = get_correlation_id()
+
     # Queue summarization task
     task_id = uuid.uuid4().hex
 
@@ -257,6 +262,8 @@ async def trigger_summarization(
             "item_id": item_id,
             "archived_url_id": None,  # Deprecated parameter, kept for worker compatibility
             "force": True,
+            "request_id": request_id,
+            "correlation_id": correlation_id,
         },
         queue="summarization",
     )

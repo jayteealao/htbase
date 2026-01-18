@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, HttpUrl
 from celery import chain, group
 
@@ -28,6 +28,14 @@ from shared.rate_limit import rate_limit_archive, rate_limit_batch, rate_limit_a
 from shared.models import TaskAccepted, DeleteResponse
 from shared.utils import sanitize_filename, rewrite_paywalled_url
 from shared.config import get_settings
+from shared.observability import (
+    enrich_api_event,
+    ArticleContext,
+    ArchiveRequestContext,
+    get_request_id,
+    get_correlation_id,
+)
+from shared.logging_utils import sanitize_url_for_logging
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -64,6 +72,7 @@ class CreateArchiveRequest(BaseModel):
 @router.post("/archives", response_model=TaskAccepted)
 @rate_limit_archive
 async def create_archive(
+    req: Request,
     request: CreateArchiveRequest,
     api_key: str = Depends(verify_api_key),
     article_repo: ArticleRepoType = None,  # Injected dependency!
@@ -87,6 +96,10 @@ async def create_archive(
         }
         ```
     """
+    # Get correlation IDs for passing to workers
+    request_id = get_request_id()
+    correlation_id = get_correlation_id()
+
     # Resolve archivers
     if "all" in request.archivers:
         archivers = AVAILABLE_ARCHIVERS
@@ -99,24 +112,72 @@ async def create_archive(
             detail=f"No valid archivers selected. Available: {AVAILABLE_ARCHIVERS}"
         )
 
-    # Check if articles already exist (using injected repository!)
+    # Track task IDs for wide event
+    task_ids = {}
+    all_tasks = []
+
+    # Check if articles already exist and dispatch tasks
     for item in request.items:
-        if article_repo.exists(item.id):
-            logger.warning(f"Article {item.id} already exists, will update")
-        else:
+        article_exists = article_repo.exists(item.id)
+
+        # Enrich wide event with first article context (for single item requests)
+        if len(request.items) == 1:
+            enrich_api_event(
+                req,
+                article=ArticleContext(
+                    id=item.id,
+                    url=sanitize_url_for_logging(str(item.url)),
+                    exists=article_exists,
+                ),
+            )
+
+        if not article_exists:
             # Create article in Firestore
             article_repo.create(
                 item_id=item.id,
                 url=str(item.url),
             )
 
-    # Dispatch Celery tasks for each URL + archiver combination
-    # (Task dispatching logic would go here)
+        # Dispatch tasks for each archiver
+        for archiver in archivers:
+            fetch_url = rewrite_paywalled_url(str(item.url))
+            task_name = f"services.archive_worker.app.tasks.archive_{archiver}"
 
+            task = celery_app.signature(
+                task_name,
+                kwargs={
+                    "item_id": item.id,
+                    "url": fetch_url,
+                    "request_id": request_id,
+                    "correlation_id": correlation_id,
+                },
+            )
+            all_tasks.append(task)
+
+            # Track first task ID for each archiver (for single item)
+            if len(request.items) == 1 and archiver not in task_ids:
+                # Task ID will be generated when applied
+                task_ids[archiver] = f"pending_{archiver}"
+
+    # Dispatch all tasks
+    if all_tasks:
+        group(all_tasks).apply_async()
+
+    # Enrich wide event with archive request context
+    if len(request.items) == 1:
+        enrich_api_event(
+            req,
+            archive_request=ArchiveRequestContext(
+                archivers_requested=archivers,
+                celery_task_ids=task_ids,
+            ),
+        )
+
+    total_tasks = len(request.items) * len(archivers)
     return TaskAccepted(
-        task_id="example-task-id",
+        task_id=request_id or "unknown",
         status="accepted",
-        message=f"Archive tasks created for {len(request.items)} items with {len(archivers)} archivers"
+        message=f"Archive tasks created: {len(request.items)} items × {len(archivers)} archivers = {total_tasks} tasks"
     )
 
 

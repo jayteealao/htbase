@@ -26,6 +26,12 @@ from shared.infrastructure.celery import celery_app, configure_for_worker
 from shared.config import get_settings, configure_logging
 from shared.firestore import update_artifact, get_artifact
 from shared.status import TaskStatus, ArchiveTaskResult
+from shared.observability import (
+    ArchiveTaskContext,
+    set_request_id,
+    set_correlation_id,
+)
+from shared.logging_utils import sanitize_url_for_logging
 
 # Configure for archive worker
 configure_for_worker("archive")
@@ -188,7 +194,7 @@ def _create_archiver_task(archiver_name: str, post_process_hook=None):
         bind=True,
         name=f"services.archive_worker.tasks.archive_{archiver_name}"
     )
-    def archiver_task(self, item_id: str, url: str) -> dict:
+    def archiver_task(self, item_id: str, url: str, **kwargs) -> dict:
         """Archive URL using {archiver_name}.
 
         Uploads directly to GCS with no local file storage.
@@ -196,48 +202,64 @@ def _create_archiver_task(archiver_name: str, post_process_hook=None):
         Args:
             item_id: Item identifier
             url: URL to archive
+            **kwargs: Additional arguments (request_id, correlation_id, etc.)
 
         Returns:
             Archive result dictionary
         """
-        logger.info(
-            f"Starting {archiver_name} archive",
-            extra={
-                "task_id": self.request.id,
-                "item_id": item_id,
-                "url": url,
-                "archiver": archiver_name,
-            },
-        )
+        # Set up correlation context from kwargs
+        request_id = kwargs.get("request_id")
+        correlation_id = kwargs.get("correlation_id")
 
-        result = _execute_archive_task(
-            archiver_name=archiver_name,
-            url=url,
-            item_id=item_id,
+        if request_id:
+            set_request_id(request_id)
+        if correlation_id:
+            set_correlation_id(correlation_id)
+
+        # Create wide-event context manager
+        with ArchiveTaskContext(
             task_id=self.request.id,
-        )
-
-        # Run post-processing hook if provided
-        if post_process_hook and result["success"]:
+            archiver=archiver_name,
+            item_id=item_id,
+            url=sanitize_url_for_logging(url),
+            service_name="archive-worker",
+            version="2.0.0",
+        ) as ctx:
             try:
-                post_process_hook(item_id, result)
-            except Exception as e:
-                logger.error(
-                    f"Post-processing failed for {archiver_name}: {e}",
-                    exc_info=True
+                result = _execute_archive_task(
+                    archiver_name=archiver_name,
+                    url=url,
+                    item_id=item_id,
+                    task_id=self.request.id,
                 )
 
-        logger.info(
-            f"{archiver_name.capitalize()} archive completed",
-            extra={
-                "task_id": self.request.id,
-                "success": result["success"],
-                "gcs_path": result.get("gcs_path"),
-                "archiver": archiver_name,
-            },
-        )
+                # Run post-processing hook if provided
+                if post_process_hook and result["success"]:
+                    try:
+                        post_process_hook(item_id, result)
+                    except Exception as e:
+                        logger.error(
+                            f"Post-processing failed for {archiver_name}: {e}",
+                            exc_info=True
+                        )
 
-        return result
+                # Mark success in wide event with metrics
+                ctx.mark_success(
+                    exit_code=result.get("exit_code", 0),
+                    gcs_path=result.get("gcs_path"),
+                    file_size_bytes=result.get("file_size"),
+                )
+
+                return result
+
+            except Exception as e:
+                # Mark error in wide event
+                ctx.mark_error(
+                    error=e,
+                    error_code=type(e).__name__,
+                    retriable=True,
+                )
+                raise
 
     # Update docstring with actual archiver name
     archiver_task.__doc__ = f"""Archive URL using {archiver_name}.
