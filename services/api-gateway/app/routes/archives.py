@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field, HttpUrl
 from celery import chain, group
 
 from shared.auth import verify_api_key
-from shared.celery_config import celery_app
+from shared.infrastructure.celery import celery_app
 from shared.web.dependencies import ArticleRepoType, ArtifactRepoType
 from shared.rate_limit import rate_limit_archive, rate_limit_batch, rate_limit_admin, rate_limit_download
 from shared.models import TaskAccepted, DeleteResponse

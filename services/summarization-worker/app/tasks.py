@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Optional, List
 
 from celery import Task
-from shared.celery_config import celery_app, configure_for_worker
+from shared.infrastructure.celery import celery_app, configure_for_worker
 from shared.config import get_settings, configure_logging
 from shared.firestore import (
     get_article,

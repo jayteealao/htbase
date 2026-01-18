@@ -17,7 +17,7 @@ from typing import Any, Optional
 
 from celery import Task
 
-from shared.celery_config import celery_app, configure_for_worker
+from shared.infrastructure.celery import celery_app, configure_for_worker
 from shared.firestore import get_article
 
 # Configure for archive worker

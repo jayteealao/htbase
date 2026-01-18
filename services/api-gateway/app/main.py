@@ -121,7 +121,7 @@ def create_app() -> FastAPI:
 
         # Check Redis/Celery
         try:
-            from shared.celery_config import celery_app
+            from shared.infrastructure.celery import celery_app
 
             celery_app.control.ping(timeout=1)
             services["celery"] = "healthy"
@@ -130,7 +130,7 @@ def create_app() -> FastAPI:
 
         # Check Firestore (lazy-loaded, assume healthy if configured)
         try:
-            from shared.firestore_client import get_firestore_client
+            from shared.infrastructure.firestore import get_firestore_client
             get_firestore_client()  # Will raise if not configured
             services["firestore"] = "healthy"
         except Exception:

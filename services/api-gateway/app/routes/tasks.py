@@ -16,7 +16,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from shared.auth import verify_api_key
-from shared.celery_config import celery_app
+from shared.infrastructure.celery import celery_app
 from shared.rate_limit import rate_limit_status, rate_limit_admin
 
 logger = logging.getLogger(__name__)

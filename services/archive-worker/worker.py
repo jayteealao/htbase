@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 
 from shared.config import get_settings, configure_logging
-from shared.celery_config import celery_app, configure_for_worker
+from shared.infrastructure.celery import celery_app, configure_for_worker
 
 # Import tasks to register them
 from app import tasks  # noqa: F401

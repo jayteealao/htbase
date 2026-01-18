@@ -22,9 +22,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from shared.auth import verify_api_key
-from shared.celery_config import celery_app
+from shared.infrastructure.celery import celery_app
 from shared.config import get_settings
-from shared.firestore_client import get_articles_collection
+from shared.infrastructure.firestore import get_articles_collection
 from shared.rate_limit import rate_limit_admin
 from shared.utils import sanitize_filename
 
