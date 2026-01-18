@@ -8,7 +8,7 @@ Provides type-safe domain classes with encapsulated business logic:
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 from enum import Enum
 
@@ -73,14 +73,14 @@ class Archive:
         """Mark archive as completed."""
         self.status = "completed"
         self.gcs_path = gcs_path
-        self.created_at = datetime.utcnow()
+        self.created_at = datetime.now(timezone.utc)
         self.error = None
 
     def mark_failed(self, error: str) -> None:
         """Mark archive as failed."""
         self.status = "failed"
         self.error = error
-        self.created_at = datetime.utcnow()
+        self.created_at = datetime.now(timezone.utc)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Archive":
@@ -127,7 +127,7 @@ class Summary:
     def mark_completed(self, model: str, tokens_used: int) -> None:
         """Mark summary as completed."""
         self.status = "completed"
-        self.created_at = datetime.utcnow()
+        self.created_at = datetime.now(timezone.utc)
         self.model = model
         self.tokens_used = tokens_used
         self.error = None
@@ -136,7 +136,7 @@ class Summary:
         """Mark summary as failed."""
         self.status = "failed"
         self.error = error
-        self.created_at = datetime.utcnow()
+        self.created_at = datetime.now(timezone.utc)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Summary":
@@ -197,7 +197,7 @@ class Article:
     def add_archive(self, archive_type: str, archive: Archive) -> None:
         """Add an archive to this article."""
         self.archives[archive_type] = archive
-        self.updated_at = datetime.utcnow()
+        self.updated_at = datetime.now(timezone.utc)
 
     def has_archive(self, archive_type: str) -> bool:
         """Check if article has specific archive type."""
@@ -209,7 +209,7 @@ class Article:
     def set_summary(self, summary: Summary) -> None:
         """Set the article summary."""
         self.summary = summary
-        self.updated_at = datetime.utcnow()
+        self.updated_at = datetime.now(timezone.utc)
 
     def has_summary(self) -> bool:
         """Check if article has a completed summary."""
@@ -218,12 +218,12 @@ class Article:
     def mark_completed(self) -> None:
         """Mark article processing as completed."""
         self.status = ArticleStatus.COMPLETED
-        self.updated_at = datetime.utcnow()
+        self.updated_at = datetime.now(timezone.utc)
 
     def mark_failed(self, error: Optional[str] = None) -> None:
         """Mark article processing as failed."""
         self.status = ArticleStatus.FAILED
-        self.updated_at = datetime.utcnow()
+        self.updated_at = datetime.now(timezone.utc)
         if error and self.metadata:
             self.metadata.error = error
 
@@ -253,7 +253,7 @@ class Article:
         doc = {
             "url": self.url,
             "status": self.status.value,
-            "updated_at": self.updated_at or datetime.utcnow(),
+            "updated_at": self.updated_at or datetime.now(timezone.utc),
         }
         if self.title:
             doc["title"] = self.title

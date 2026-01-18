@@ -18,22 +18,39 @@ from .api_gateway import APIGatewaySettings
 from .archive_worker import ArchiveWorkerSettings, GCSSettings
 from .summarization_worker import SummarizationWorkerSettings
 
-# Legacy compatibility - import SharedSettings from old config.py
-# This allows gradual migration from SharedSettings to service-specific settings
-import sys
-from pathlib import Path
-
-# Add parent directory to path to import old config.py
-_parent_dir = str(Path(__file__).parent.parent)
-if _parent_dir not in sys.path:
-    sys.path.insert(0, _parent_dir)
-
+# Legacy compatibility - for gradual migration keep old SharedSettings available
+# Import from parent shared/config.py (the monolithic config file)
 try:
-    from config import SharedSettings, get_settings
+    # Import relative to shared package
+    import sys
+    import os
+    _shared_dir = os.path.dirname(os.path.dirname(__file__))
+    _config_path = os.path.join(_shared_dir, 'config.py')
+
+    if os.path.exists(_config_path):
+        # Import from the old config.py file
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("_old_config", _config_path)
+        if spec and spec.loader:
+            _old_config = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(_old_config)
+            SharedSettings = _old_config.SharedSettings
+            get_settings = _old_config.get_settings
+        else:
+            raise ImportError("Could not load config.py")
+    else:
+        raise ImportError("config.py not found")
 except ImportError:
-    # If old config.py doesn't exist, create stub for backward compatibility
-    SharedSettings = None
-    get_settings = None
+    # Fallback: create minimal stubs (shouldn't happen in practice)
+    from .base import BaseSettings, configure_logging as _configure_logging
+    SharedSettings = BaseSettings  # type: ignore
+
+    from functools import lru_cache
+    @lru_cache
+    def get_settings():
+        return BaseSettings()
+
+    configure_logging = _configure_logging
 
 __all__ = [
     # Base settings components
