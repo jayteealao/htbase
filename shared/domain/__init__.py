@@ -6,6 +6,9 @@ Provides rich domain classes that encapsulate business logic:
 - Summary: Article summary with metadata (mark_completed, mark_failed)
 - Metadata: Extracted article metadata
 - ArticleStatus: Enum for article processing states
+
+Also provides TypedDict definitions for Firestore documents:
+- ArticleDict, ArchiveDict, SummaryDict, MetadataDict, ArtifactDict
 """
 
 from .models import (
@@ -16,10 +19,25 @@ from .models import (
     ArticleStatus,
 )
 
+from .types import (
+    ArticleDict,
+    ArchiveDict,
+    SummaryDict,
+    MetadataDict,
+    ArtifactDict,
+)
+
 __all__ = [
+    # Domain models
     "Article",
     "Archive",
     "Summary",
     "Metadata",
     "ArticleStatus",
+    # TypedDict definitions
+    "ArticleDict",
+    "ArchiveDict",
+    "SummaryDict",
+    "MetadataDict",
+    "ArtifactDict",
 ]
