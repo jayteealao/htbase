@@ -13,6 +13,13 @@ from google.cloud import firestore
 from google.cloud.firestore import Client, CollectionReference
 from google.cloud.firestore_v1.base_query import FieldFilter
 
+# Import domain models for rich domain support
+try:
+    from shared.domain import Article, Archive, Summary, Metadata
+    DOMAIN_MODELS_AVAILABLE = True
+except ImportError:
+    DOMAIN_MODELS_AVAILABLE = False
+
 
 class FirestoreClientProtocol(Protocol):
     """Protocol defining Firestore client interface."""
@@ -223,6 +230,76 @@ class ArticleRepository:
                 articles.append(doc.to_dict())
 
         return articles
+
+    # Domain model methods (requires shared.domain package)
+
+    def get_article(self, item_id: str) -> Optional["Article"]:
+        """Get article as domain model.
+
+        Args:
+            item_id: Article identifier
+
+        Returns:
+            Article domain object or None if not found
+
+        Requires:
+            shared.domain package must be available
+        """
+        if not DOMAIN_MODELS_AVAILABLE:
+            raise ImportError(
+                "Domain models not available. Install shared.domain package."
+            )
+
+        data = self.get(item_id)
+        if not data:
+            return None
+
+        return Article.from_firestore(item_id, data)
+
+    def create_article(self, article: "Article") -> Dict[str, Any]:
+        """Create article from domain model.
+
+        Args:
+            article: Article domain object
+
+        Returns:
+            Created article data dictionary
+
+        Requires:
+            shared.domain package must be available
+        """
+        if not DOMAIN_MODELS_AVAILABLE:
+            raise ImportError(
+                "Domain models not available. Install shared.domain package."
+            )
+
+        collection = self._collection()
+        doc_ref = collection.document(article.id)
+
+        article_data = article.to_firestore()
+        doc_ref.set(article_data)
+
+        return article_data
+
+    def update_article(self, article: "Article") -> None:
+        """Update article from domain model.
+
+        Args:
+            article: Article domain object with updated fields
+
+        Requires:
+            shared.domain package must be available
+        """
+        if not DOMAIN_MODELS_AVAILABLE:
+            raise ImportError(
+                "Domain models not available. Install shared.domain package."
+            )
+
+        collection = self._collection()
+        doc_ref = collection.document(article.id)
+
+        article_data = article.to_firestore()
+        doc_ref.update(article_data)
 
 
 class ArtifactRepository:
