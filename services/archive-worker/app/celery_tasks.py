@@ -165,6 +165,9 @@ def _store_readability_metadata(item_id: str, result: dict) -> None:
                 item_id=item_id,
                 word_count=metadata.get("word_count"),
                 text_content=metadata.get("text"),
+                title=metadata.get("title"),
+                site_name=metadata.get("site_name"),
+                # byline, excerpt, published_time not extracted by readability
             )
             logger.info(f"Stored readability metadata for {item_id}")
     except Exception as e:

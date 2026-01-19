@@ -38,12 +38,19 @@ def create_article(
     Returns:
         Created article data dictionary
     """
+    from urllib.parse import urlparse
+
     collection = get_articles_collection()
     doc_ref = collection.document(item_id)
+
+    # Extract domain from URL
+    parsed_url = urlparse(url)
+    domain = parsed_url.netloc
 
     article_data = {
         "item_id": item_id,
         "url": url,
+        "domain": domain,
         "title": title,
         "byline": byline,
         "excerpt": excerpt,
@@ -55,6 +62,11 @@ def create_article(
         "summary": {},  # AI summary
         "entities": [],  # Named entities
         "tags": [],  # Article tags
+        "stats": {
+            "last_accessed": firestore.SERVER_TIMESTAMP,
+            "total_views": 0,
+            "total_saves": 1,
+        },
     }
 
     doc_ref.set(article_data)

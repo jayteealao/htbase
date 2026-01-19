@@ -40,6 +40,9 @@ class ReadabilityArchiver(BaseArchiver):
             content = self._extract_content(url)
 
             if content:
+                # Store metadata for post-processing hook
+                self.last_metadata = content
+
                 # Save as JSON
                 with open(output_path, "w", encoding="utf-8") as f:
                     json.dump(content, f, ensure_ascii=False, indent=2)
@@ -70,14 +73,25 @@ class ReadabilityArchiver(BaseArchiver):
             # Try to use readability-lxml if available
             try:
                 from readability import Document
+                from urllib.parse import urlparse
 
                 doc = Document(html)
+                text_content = self._html_to_text(doc.summary())
+
+                # Calculate word count
+                word_count = len(text_content.split()) if text_content else 0
+
+                # Extract site name from URL
+                parsed_url = urlparse(url)
+                site_name = parsed_url.netloc
 
                 return {
                     "title": doc.title(),
                     "content": doc.summary(),
-                    "text": self._html_to_text(doc.summary()),
+                    "text": text_content,
                     "url": url,
+                    "word_count": word_count,
+                    "site_name": site_name,
                 }
             except ImportError:
                 # Fall back to basic extraction
@@ -112,11 +126,21 @@ class ReadabilityArchiver(BaseArchiver):
         extractor = TitleExtractor()
         extractor.feed(html)
 
+        from urllib.parse import urlparse
+
+        text_content = self._html_to_text(html)
+        word_count = len(text_content.split()) if text_content else 0
+
+        parsed_url = urlparse(url)
+        site_name = parsed_url.netloc
+
         return {
             "title": extractor.title.strip(),
             "content": html,
-            "text": self._html_to_text(html),
+            "text": text_content,
             "url": url,
+            "word_count": word_count,
+            "site_name": site_name,
         }
 
     def _html_to_text(self, html: str) -> str:

@@ -20,6 +20,11 @@ def update_metadata(
     item_id: str,
     word_count: Optional[int] = None,
     text_content: Optional[str] = None,
+    title: Optional[str] = None,
+    byline: Optional[str] = None,
+    excerpt: Optional[str] = None,
+    site_name: Optional[str] = None,
+    published_time: Optional[str] = None,
     **kwargs,
 ) -> None:
     """Update article metadata.
@@ -28,6 +33,11 @@ def update_metadata(
         item_id: Article identifier
         word_count: Word count
         text_content: Full text content (camelCase: textContent)
+        title: Article title
+        byline: Author/byline
+        excerpt: Article excerpt
+        site_name: Website name
+        published_time: Publication timestamp
         **kwargs: Additional metadata fields
     """
     collection = get_articles_collection()
@@ -39,6 +49,16 @@ def update_metadata(
         metadata["wordCount"] = word_count
     if text_content is not None:
         metadata["textContent"] = text_content
+    if title is not None:
+        metadata["title"] = title
+    if byline is not None:
+        metadata["byline"] = byline
+    if excerpt is not None:
+        metadata["excerpt"] = excerpt
+    if site_name is not None:
+        metadata["siteName"] = site_name
+    if published_time is not None:
+        metadata["publishedTime"] = published_time
 
     metadata.update(kwargs)
 
