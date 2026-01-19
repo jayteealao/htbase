@@ -202,7 +202,7 @@ Repeat until DONE_DEFINITION is satisfied:
 
 From the plan (section 5), select the next unimplemented step.
 Each step should be:
-- Small (1-4 hours ideally)
+- Small (~50-200 LOC ideally)
 - Independently testable
 - Reversible
 
@@ -487,7 +487,7 @@ See decision note: `.claude/{SESSION_SLUG}/decisions/decision-{date}-{slug}.md`
 This command enforces **small, verifiable checkpoints**:
 1. **Each checkpoint must be independently testable**
 2. **Each checkpoint must compile and pass existing tests**
-3. **Checkpoints should be small** (1-4 hours, ≤200 LOC ideally)
+3. **Checkpoints should be small** (~50-200 LOC ideally)
 4. **Log every checkpoint** before moving to the next
 5. **Verify every checkpoint** with tests/lint/typecheck
 

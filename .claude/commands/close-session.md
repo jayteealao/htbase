@@ -11,7 +11,7 @@ color: "blue"
 - At the end of a work session (whether complete, paused, or abandoned)
 - Before switching to a different task/project
 - When creating a PR for session work
-- To document session outcomes for team visibility
+- To document session outcomes for future reference
 
 **INPUTS**:
 ```
@@ -22,7 +22,7 @@ OUTCOME: <1-3 sentence outcome summary>
 PR_OR_COMMIT: <optional: PR URL(s) or commit hashes>
 ROLL_OUT: <none|canary|phased|full>
 FOLLOW_UPS:
-  - <optional bullets: remaining work, risks, debt items, owner/team>
+  - <optional bullets: remaining work, risks, debt items, owner (if applicable)>
 ARTIFACTS_COMPLETED:
   - <bullets of key artifacts created/updated in this session>
 ```
@@ -54,8 +54,8 @@ ARTIFACTS_COMPLETED:
   - `full`: Deployed to 100% of production
 
 - **FOLLOW_UPS**: Remaining work, blockers, or risks (optional)
-  - Include owner/team for each item
-  - Example: "Add rate limiting to new endpoints (@security team)"
+  - Include owner (if applicable) for each item
+  - Example: "Add rate limiting to new endpoints (security review needed)"
   - Use "None" if no follow-ups
 
 - **ARTIFACTS_COMPLETED**: Key files/features created or updated
@@ -300,7 +300,7 @@ Each session directory contains:
 
 ### Step 5: Produce Closure Summary
 
-**Task**: Generate 5-10 bullet points suitable for PR description or team update.
+**Task**: Generate 5-10 bullet points suitable for PR description or project update.
 
 **Format**:
 ```markdown
@@ -348,7 +348,7 @@ Each session directory contains:
 - [ ] 5-10 bullets provided
 - [ ] Bullets are specific and concrete
 - [ ] Include quantitative metrics where applicable
-- [ ] Suitable for PR description or team update
+- [ ] Suitable for PR description or project update
 - [ ] Follow-ups clearly stated
 
 ---
@@ -404,8 +404,8 @@ OUTCOME: Completed OAuth2 integration with Google and GitHub providers. Added 15
 PR_OR_COMMIT: https://github.com/myorg/myapp/pull/456
 ROLL_OUT: phased
 FOLLOW_UPS:
-  - Add rate limiting to OAuth endpoints (@security team)
-  - Update documentation with OAuth setup guide (@docs team)
+  - Add rate limiting to OAuth endpoints (security review needed)
+  - Update documentation with OAuth setup guide (documentation needed)
 ARTIFACTS_COMPLETED:
   - src/auth/oauth2.ts - OAuth2 client implementation
   - src/auth/providers/google.ts - Google OAuth provider
@@ -444,8 +444,8 @@ ARTIFACTS_COMPLETED:
 
 ### Follow-ups
 
-- Add rate limiting to OAuth endpoints (@security team)
-- Update documentation with OAuth setup guide (@docs team)
+- Add rate limiting to OAuth endpoints (security review needed)
+- Update documentation with OAuth setup guide (documentation needed)
 
 ---
 
@@ -508,8 +508,8 @@ OAuth configuration stored in YAML with environment-specific overrides. Supports
   - `tests/auth/oauth2.test.ts` - 15 unit tests
   - `config/oauth.yaml` - OAuth configuration schema
 - **Follow-ups**:
-  - Add rate limiting to OAuth endpoints (@security team)
-  - Update documentation with OAuth setup guide (@docs team)
+  - Add rate limiting to OAuth endpoints (security review needed)
+  - Update documentation with OAuth setup guide (documentation needed)
 ```
 
 `.claude/README.md`:
@@ -550,9 +550,9 @@ OUTCOME: Completed payment processing migration to Stripe v2 API. Blocked on leg
 PR_OR_COMMIT: https://github.com/myorg/myapp/pull/789
 ROLL_OUT: none
 FOLLOW_UPS:
-  - Legal review of PCI compliance docs (ETA: 1 week) (@legal team)
-  - Security penetration test after legal approval (@security team)
-  - Load testing with 10k req/s target (@platform team)
+  - Legal review of PCI compliance docs (ETA: next deployment phase) (legal review needed)
+  - Security penetration test after legal approval (security review needed)
+  - Load testing with 10k req/s target (infrastructure work)
 ARTIFACTS_COMPLETED:
   - src/payment/stripe-v2.ts - Stripe v2 API client
   - src/payment/webhooks.ts - Stripe webhook handlers
@@ -589,9 +589,9 @@ ARTIFACTS_COMPLETED:
 
 ### Follow-ups
 
-- Legal review of PCI compliance docs (ETA: 1 week) (@legal team)
-- Security penetration test after legal approval (@security team)
-- Load testing with 10k req/s target (@platform team)
+- Legal review of PCI compliance docs (ETA: next deployment phase) (legal review needed)
+- Security penetration test after legal approval (security review needed)
+- Load testing with 10k req/s target (infrastructure work)
 
 ---
 
@@ -609,12 +609,12 @@ ARTIFACTS_COMPLETED:
 /close-session
 SESSION_SLUG: graphql-migration
 STATUS: Abandoned
-OUTCOME: GraphQL migration abandoned due to team decision to stick with REST API. Completed research and prototype, but approach doesn't align with team's expertise and timeline constraints.
+OUTCOME: GraphQL migration abandoned due to decision to stick with REST API. Completed research and prototype, but approach doesn't align with your expertise and timeline constraints.
 PR_OR_COMMIT: N/A
 ROLL_OUT: none
 FOLLOW_UPS:
   - Document learnings in architecture decision record (@tech-leads)
-  - Archive prototype code to internal-tools repo (@platform team)
+  - Archive prototype code to internal-tools repo (infrastructure work)
 ARTIFACTS_COMPLETED:
   - research/graphql-evaluation.md - GraphQL vs REST comparison
   - prototypes/graphql-server/ - Apollo Server prototype
@@ -633,13 +633,13 @@ ARTIFACTS_COMPLETED:
 
 ### Key Accomplishments
 
-1. **Completed comprehensive evaluation** of GraphQL vs REST for our use case, documenting tradeoffs in schema complexity, caching, and team expertise
+1. **Completed comprehensive evaluation** of GraphQL vs REST for our use case, documenting tradeoffs in schema complexity, caching, and your expertise
 
 2. **Built functional prototype** with Apollo Server demonstrating federated schema across 3 services
 
 3. **Documented migration plan** with 4-phase rollout strategy (deprecated but preserved for future reference)
 
-4. **Team decision to abandon** - GraphQL benefits don't outweigh migration costs given timeline and team expertise constraints
+4. **Decision to abandon** - GraphQL benefits don't outweigh migration costs given timeline and your expertise constraints
 
 ### Deliverables
 
@@ -650,7 +650,7 @@ ARTIFACTS_COMPLETED:
 ### Follow-ups
 
 - Document learnings in architecture decision record (@tech-leads)
-- Archive prototype code to internal-tools repo (@platform team)
+- Archive prototype code to internal-tools repo (infrastructure work)
 
 ---
 
@@ -675,7 +675,7 @@ ARTIFACTS_COMPLETED:
 - Cost reductions
 
 ### 3. Document Blockers for Paused Sessions
-- Who is blocking (team/person)
+- Who is blocking (person (if delegated))
 - What they need to do
 - Expected timeline (ETA)
 
@@ -692,7 +692,7 @@ ARTIFACTS_COMPLETED:
 
 ### 6. Make Follow-ups Actionable
 - ❌ "Need to do more testing"
-- ✅ "Load test with 10k req/s target (@platform team, ETA: 1 week)"
+- ✅ "Load test with 10k req/s target (infrastructure work, ETA: next deployment phase)"
 
 ### 7. Use Consistent Status Tags
 - Always use `[DONE]`, `[PAUSED]`, `[ABANDONED]` in brackets
@@ -731,7 +731,7 @@ Before finishing, verify:
 - [ ] Quantitative metrics included
 - [ ] Deliverables listed with descriptions
 - [ ] Follow-ups actionable with owners
-- [ ] Suitable for PR description or team update
+- [ ] Suitable for PR description or project update
 
 ---
 

@@ -138,7 +138,7 @@ Phase 3 (CONTRACT): Remove old field
 
 **Breaking change:** Rename `name` → `full_name` in User API
 
-**Phase 1: EXPAND (Week 1)**
+**Phase 1: EXPAND (Phase 1)**
 ```typescript
 // API returns BOTH fields
 interface User {
@@ -176,18 +176,18 @@ async function updateUser(id: string, data: Partial<User>): Promise<User> {
 - Old clients (v1.x): Use `name` field ✅
 - New clients (v2.0): Use `full_name` field ✅
 
-**Phase 2: MIGRATE (Weeks 2-4)**
+**Phase 2: MIGRATE (Phases 2-4)**
 ```typescript
 // Update clients to use new field
 
-// Web app: Deploy immediately (Week 2)
+// Web app: Deploy immediately (Phase 2)
 fetch('/api/users/123').then(user => {
   console.log(user.full_name); // Use new field
 });
 
-// Mobile app: Gradual rollout (Weeks 2-4)
-// - v2.0 released Week 2
-// - Monitor adoption: 50% Week 3, 90% Week 4, 98% Week 5
+// Mobile app: Gradual rollout (Phases 2-4)
+// - v2.0 released Phase 2
+// - Monitor adoption: 50% Phase 3, 90% Phase 4, 98% Phase 5
 // - Force upgrade at 95%+ adoption
 
 // Monitor old field usage
@@ -201,7 +201,7 @@ metrics.count('api.users.field.full_name.usage');   // Increasing
 - Android: 97% (Play Store adoption)
 - API integrations: 100% (contacted partners)
 
-**Phase 3: CONTRACT (Week 6)**
+**Phase 3: CONTRACT (Phase 6)**
 ```typescript
 // Remove old field (after >98% adoption)
 
@@ -240,7 +240,7 @@ async function updateUser(id: string, data: Partial<User>): Promise<User> {
 - Old clients (v1.x): Breaking! Should be <2% at this point
 - New clients (v2.0): Works perfectly ✅
 
-**Migration complete:** 6 weeks from start to finish
+**Migration complete:** Phased rollout (4 deployment stages)
 
 ---
 
@@ -248,7 +248,7 @@ async function updateUser(id: string, data: Partial<User>): Promise<User> {
 
 **Breaking change:** Make `email` field required in User creation
 
-**Phase 1: EXPAND (Week 1)**
+**Phase 1: EXPAND (Phase 1)**
 ```typescript
 // API accepts optional email, but logs warning
 
@@ -282,7 +282,7 @@ async function createUser(data: CreateUserRequest): Promise<User> {
 - Old clients (v1.x): Don't send email, still works ✅ (but logged)
 - New clients (v2.0): Send email ✅
 
-**Phase 2: MIGRATE (Weeks 2-4)**
+**Phase 2: MIGRATE (Phases 2-4)**
 ```typescript
 // Update clients to always send email
 
@@ -297,16 +297,16 @@ TextField(
 
 // Monitor: How many users created without email?
 metrics.gauge('api.users.create.no_email.pct', percentage);
-// Week 1: 80%
-// Week 2: 45%
-// Week 3: 15%
-// Week 4: 3%
-// Week 5: 0.5%
+// Phase 1: 80%
+// Phase 2: 45%
+// Phase 3: 15%
+// Phase 4: 3%
+// Phase 5: 0.5%
 ```
 
 **Wait criteria:** <1% of user creations without email
 
-**Phase 3: CONTRACT (Week 6)**
+**Phase 3: CONTRACT (Phase 6)**
 ```typescript
 // Make email required (reject requests without email)
 
@@ -341,7 +341,7 @@ async function createUser(data: CreateUserRequest): Promise<User> {
 
 **Breaking change:** Change `age` from `string` to `number`
 
-**Phase 1: EXPAND (Week 1)**
+**Phase 1: EXPAND (Phase 1)**
 ```typescript
 // Accept BOTH string and number, return number
 
@@ -382,7 +382,7 @@ async function updateUser(id: string, data: UpdateUserRequest): Promise<User> {
 - New clients (v2.0): Send number 25 ✅
 - Response always number (old clients must handle this!)
 
-**Phase 2: MIGRATE (Weeks 2-4)**
+**Phase 2: MIGRATE (Phases 2-4)**
 ```typescript
 // Update clients to send number
 
@@ -402,7 +402,7 @@ await fetch('/api/users/123', {
 metrics.count('api.users.update.age.type', { type: typeof age });
 ```
 
-**Phase 3: CONTRACT (Week 6)**
+**Phase 3: CONTRACT (Phase 6)**
 ```typescript
 // Only accept number
 
@@ -460,7 +460,7 @@ Phase 4 (CONTRACT): Drop old column
 
 **Breaking change:** Rename `users.name` → `users.full_name`
 
-**Phase 1: EXPAND (Deploy 1, Week 1)**
+**Phase 1: EXPAND (Deploy 1, Phase 1)**
 ```sql
 -- Add new column
 ALTER TABLE users ADD COLUMN full_name VARCHAR(255);
@@ -501,7 +501,7 @@ async function getUser(id: string): Promise<User> {
 - ✅ New code reads from old column
 - ✅ Rollback safe (just revert code)
 
-**Phase 2: MIGRATE (Background job, Week 1-2)**
+**Phase 2: MIGRATE (Background job, Phase 1-2)**
 ```sql
 -- Backfill new column from old column
 UPDATE users
@@ -539,7 +539,7 @@ async function backfillFullName() {
 
 **Wait criteria:** Backfill 100% complete (verify with query)
 
-**Phase 3: TRANSITION (Deploy 2, Week 2)**
+**Phase 3: TRANSITION (Deploy 2, Phase 2)**
 ```typescript
 // Code: Read from NEW column
 async function getUser(id: string): Promise<User> {
@@ -565,7 +565,7 @@ async function createUser(data: { fullName: string }): Promise<User> {
 - ✅ New code still writes to both columns
 - ✅ Rollback safe (revert to Deploy 1, reads from old column)
 
-**Phase 4: CONTRACT (Deploy 3, Week 3)**
+**Phase 4: CONTRACT (Deploy 3, Phase 3)**
 ```typescript
 // Code: Stop writing to old column
 async function createUser(data: { fullName: string }): Promise<User> {
@@ -580,9 +580,9 @@ async function createUser(data: { fullName: string }): Promise<User> {
 - ✅ Code only writes to new column
 - ✅ Rollback possible (but old column will be stale)
 
-**Wait period:** 1 week (ensure no issues)
+**Stabilization period:** Monitor for issues before proceeding
 
-**Phase 5: DROP (Deploy 4, Week 4)**
+**Phase 5: DROP (Deploy 4, Phase 4)**
 ```sql
 -- Drop old column (IRREVERSIBLE!)
 ALTER TABLE users DROP COLUMN name;
@@ -592,7 +592,7 @@ ALTER TABLE users DROP COLUMN name;
 - ✅ Old column removed
 - ❌ Rollback NOT safe (column gone)
 
-**Total timeline:** 4 weeks, 4 deploys
+**Total timeline:** 4 deployment phases
 
 ---
 
@@ -600,7 +600,7 @@ ALTER TABLE users DROP COLUMN name;
 
 **Breaking change:** Make `users.email` NOT NULL
 
-**Phase 1: EXPAND (Deploy 1, Week 1)**
+**Phase 1: EXPAND (Deploy 1, Phase 1)**
 ```sql
 -- Add column as nullable (if doesn't exist)
 -- ALTER TABLE users ADD COLUMN email VARCHAR(255);
@@ -654,7 +654,7 @@ SELECT COUNT(*) FROM users WHERE email IS NULL;
 -- Should be 0
 ```
 
-**Phase 3: CONTRACT (Deploy 2, Week 2)**
+**Phase 3: CONTRACT (Deploy 2, Phase 2)**
 ```sql
 -- Add NOT NULL constraint (after all nulls removed)
 ALTER TABLE users ALTER COLUMN email SET NOT NULL;
@@ -681,7 +681,7 @@ async function createUser(data: { name: string; email: string }): Promise<User> 
 
 **Breaking change:** Change `users.age` from VARCHAR to INTEGER
 
-**Phase 1: EXPAND (Deploy 1, Week 1)**
+**Phase 1: EXPAND (Deploy 1, Phase 1)**
 ```sql
 -- Add new column with new type
 ALTER TABLE users ADD COLUMN age_int INTEGER;
@@ -710,7 +710,7 @@ async function getUser(id: string): Promise<User> {
 }
 ```
 
-**Phase 2: MIGRATE (Background job, Week 1)**
+**Phase 2: MIGRATE (Background job, Phase 1)**
 ```sql
 -- Backfill new column from old column
 UPDATE users
@@ -722,7 +722,7 @@ SELECT COUNT(*) FROM users WHERE age IS NOT NULL AND age_int IS NULL;
 -- Should be 0
 ```
 
-**Phase 3: TRANSITION (Deploy 2, Week 2)**
+**Phase 3: TRANSITION (Deploy 2, Phase 2)**
 ```typescript
 // Code: Read from NEW column
 async function getUser(id: string): Promise<User> {
@@ -743,7 +743,7 @@ async function updateUser(id: string, data: { age: number }): Promise<User> {
 }
 ```
 
-**Phase 4: CONTRACT (Deploy 3, Week 3)**
+**Phase 4: CONTRACT (Deploy 3, Phase 3)**
 ```sql
 -- Drop old column
 ALTER TABLE users DROP COLUMN age;
@@ -752,7 +752,7 @@ ALTER TABLE users DROP COLUMN age;
 ALTER TABLE users RENAME COLUMN age_int TO age;
 ```
 
-**Total timeline:** 3 weeks, 3 deploys
+**Total timeline:** 3 deployment phases
 
 ## Step 5: Event Schema Compatibility
 
@@ -891,7 +891,7 @@ eventBus.subscribe('user.created', (event: UserCreatedEvent) => {
 
 **Breaking change:** Add required `email` field to `user.created` event
 
-**Phase 1: EXPAND (Deploy 1, Week 1)**
+**Phase 1: EXPAND (Deploy 1, Phase 1)**
 ```typescript
 // Add optional field
 interface UserCreatedEvent {
@@ -929,7 +929,7 @@ eventBus.subscribe('user.created', (event: UserCreatedEvent) => {
 - Update all producers to always send email
 - Monitor events: % with email field
 
-**Phase 3: CONTRACT (Deploy 2, Week 2)**
+**Phase 3: CONTRACT (Deploy 2, Phase 2)**
 ```typescript
 // Make field required
 interface UserCreatedEvent {
@@ -1074,11 +1074,11 @@ Track which client versions are compatible with which server versions.
 
 **Deprecation timeline:**
 ```
-Week 1: Announce deprecation (in-app banner, email)
-Week 2: Show upgrade prompt on every launch
-Week 4: Disable deprecated features (show error message)
-Week 6: Force upgrade (app won't launch)
-Week 8: Server stops supporting old version
+Phase 1: Announce deprecation (in-app banner, email)
+Phase 2: Show upgrade prompt on every launch
+Phase 4: Disable deprecated features (show error message)
+Phase 6: Force upgrade (app won't launch)
+Phase 8: Server stops supporting old version
 ```
 
 **Force upgrade implementation:**
@@ -1129,7 +1129,7 @@ Generate comprehensive report at `.claude/<SESSION_SLUG>/compatibility-<change-s
 
 **Breaking changes:** [count]
 **Migration phases:** [count]
-**Estimated timeline:** [X weeks]
+**Estimated timeline:** [X deployment phases]
 
 **Top risks:**
 1. [Risk 1]
@@ -1172,13 +1172,13 @@ Generate comprehensive report at `.claude/<SESSION_SLUG>/compatibility-<change-s
 
 ## Timeline
 
-[Week-by-week deployment plan]
+[Phase-by-phase deployment plan]
 
 ---
 
 ## Sign-off
 
-[Stakeholder approvals]
+[Project owner approvals (if needed)]
 ```
 
 ## Summary

@@ -33,10 +33,12 @@ class ScreenshotArchiver(BaseArchiver):
             extra={"item_id": item_id, "archiver": "screenshot"},
         )
 
+        import tempfile
+
         # Get binary path from environment
         chromium_bin = os.getenv("CHROMIUM_BIN", "/usr/bin/chromium")
-        user_data_dir = self.settings.data_dir / "chromium-user-data"
-        user_data_dir.mkdir(parents=True, exist_ok=True)
+        # Use unique temp dir to avoid SingletonLock conflicts
+        user_data_dir = Path(tempfile.mkdtemp(prefix="chrome-screenshot-"))
 
         # Get window size from environment
         window_width = os.getenv("SCREENSHOT_WIDTH", "1920")
@@ -65,6 +67,13 @@ class ScreenshotArchiver(BaseArchiver):
             timeout=60.0,
             archiver=self.name,
         )
+
+        # Clean up temp Chrome user data directory
+        import shutil
+        try:
+            shutil.rmtree(user_data_dir, ignore_errors=True)
+        except Exception:
+            pass
 
         if result.timed_out:
             return ArchiveResult(success=False, exit_code=None, saved_path=None)

@@ -1,13 +1,13 @@
 {
   "version": "1.0.0",
-  "installedAt": "2026-01-17T22:21:47.137Z",
-  "updatedAt": "2026-01-18T23:37:57.086Z",
+  "installedAt": "2026-01-19T01:32:17.834Z",
+  "updatedAt": "2026-01-19T01:32:23.909Z",
   "plugins": [
     {
       "name": "session-workflow",
-      "version": "1.1.0",
+      "version": "1.8.1",
       "sourcePath": "C:\\Users\\jayte\\Documents\\dev\\agent-skills",
-      "installedAt": "2026-01-17T22:21:47.137Z",
+      "installedAt": "2026-01-19T01:32:17.834Z",
       "components": {
         "agents": 5,
         "commands": 46,
@@ -86,7 +86,7 @@
       "name": "release-automation",
       "version": "2.0.0",
       "sourcePath": "C:\\Users\\jayte\\Documents\\dev\\agent-skills",
-      "installedAt": "2026-01-18T23:37:57.086Z",
+      "installedAt": "2026-01-19T01:32:23.909Z",
       "components": {
         "agents": 0,
         "commands": 1,

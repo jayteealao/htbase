@@ -142,7 +142,7 @@ For MVP, define:
 ### 4.4: Demo script
 - Exact steps a user would take
 - Shows core value
-- Takes < 5 minutes to demo
+- Quick to demonstrate
 
 ## Step 5: Define subsequent milestones
 
@@ -329,7 +329,7 @@ related:
 
 {3-7 total acceptance criteria}
 
-### Demo Script (< 5 minutes)
+### Demo Script (Brief)
 
 **Setup:**
 {Any setup needed}
@@ -502,7 +502,7 @@ related:
 
 ## Next Steps
 
-1. Review this triage with stakeholders
+1. Review this triage with project owners
 2. Get alignment on recommended MVP (Option B)
 3. If spec doesn't exist yet, run `/spec-crystallize` for MVP scope only
 4. Run `/research-plan MILESTONE:mvp` for MVP implementation
@@ -599,7 +599,7 @@ The goal is to make large projects **shippable** by breaking them into **indepen
 Use `/scope-triage` when:
 - Greenfield app (lots of unknowns, need to phase)
 - Large feature (> 4 weeks effort)
-- Multiple stakeholders with different priorities
+- Multiple project owners with different priorities
 - Need to prove value incrementally
 - Resource constraints force sequencing
 

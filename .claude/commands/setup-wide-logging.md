@@ -1692,7 +1692,7 @@ describe('Wide Event Middleware', () => {
 });
 ```
 
-## Step 10: Create Runbook for Team
+## Step 10: Create Runbook for You
 
 Document how to use wide events for debugging.
 
@@ -1787,7 +1787,7 @@ At the end of this command, you should have:
 5. **Migration Examples** (before/after code)
 6. **Query Examples** (SQL for CloudWatch/Datadog/Elastic)
 7. **Tests** (middleware and sampling tests)
-8. **Runbook** (debugging guide for team)
+8. **Runbook** (debugging guide saved)
 
 ## Success Metrics
 

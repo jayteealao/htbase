@@ -1068,7 +1068,7 @@ Generate comprehensive test strategy at `.claude/<SESSION_SLUG>/test-matrix-<fea
 
 ## Sign-off
 
-[Stakeholder approvals]
+[Project owner approvals (if needed)]
 ```
 
 ## Summary

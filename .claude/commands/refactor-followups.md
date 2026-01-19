@@ -236,11 +236,11 @@ function analyzeCode(filePath: string): CodeAnalysis {
 
 ---
 
-## NOW: Mechanical Refactorings (This PR, 1 day)
+## NOW: Mechanical Refactorings (This PR, ~200-400 LOC)
 
 **Goal:** Quick wins, zero risk
 
-### 1.1: Rename unclear variables [15 min]
+### 1.1: Rename unclear variables [~10-20 LOC]
 
 **Current:**
 ```typescript
@@ -409,17 +409,17 @@ logPaymentEvent('payment_completed', req, payment, {
 
 **NOW Summary:**
 - 4 refactorings
-- 1 day effort
+- ~200-400 LOC effort
 - Zero risk (all mechanical)
 - Commit after each refactoring
 
 ---
 
-## NEXT SPRINT: Structural Refactorings (3 days)
+## NEXT PHASE: Structural Refactorings (~600-1000 LOC)
 
 **Goal:** Reduce complexity, improve boundaries
 
-### 2.1: Split processOrder into smaller functions [1 day]
+### 2.1: Split processOrder into smaller functions [~200-400 LOC]
 
 **Current (180 lines, complexity 15):**
 ```typescript
@@ -541,7 +541,7 @@ async function sendNotifications(order: Order): Promise<void> {
 
 ---
 
-### 2.2: Extract PaymentGateway interface [1 day]
+### 2.2: Extract PaymentGateway interface [~200-400 LOC]
 
 **Current (tightly coupled to Stripe):**
 ```typescript
@@ -624,7 +624,7 @@ async function processPayment(
 
 ---
 
-### 2.3: Add missing test coverage [1 day]
+### 2.3: Add missing test coverage [~200-400 LOC]
 
 **Current coverage:** 45%
 **Target coverage:** 85%
@@ -684,26 +684,26 @@ describe('POST /api/orders', () => {
 
 **NEXT SPRINT Summary:**
 - 3 refactorings
-- 3 days effort
+- ~600-1000 LOC effort
 - Medium risk (structural changes)
 - Comprehensive test coverage added
 
 ---
 
-## LATER: Architectural Refactorings (Next Quarter, 2 weeks)
+## LATER: Architectural Refactorings (Future Work, major rewrite (~2000+ LOC))
 
 **Goal:** Major architectural improvements
 
-### 3.1: Extract OrderService to microservice [2 weeks]
+### 3.1: Extract OrderService to microservice [major rewrite (~2000+ LOC)]
 
 **Current:** Monolith with OrderService embedded
 
 **After:** Separate order-api service
 
 **Plan:**
-1. Week 1: Create new service skeleton
-2. Week 1: Extract order logic
-3. Week 1: Add API endpoints
+1. Phase-set 1: Create new service skeleton
+2. Phase-set 1: Extract order logic
+3. Phase-set 1: Add API endpoints
 4. Week 2: Gradual traffic migration (1% → 10% → 100%)
 5. Week 2: Remove old code from monolith
 
@@ -721,14 +721,14 @@ describe('POST /api/orders', () => {
 
 **This is later because:**
 - High complexity
-- Requires team coordination
+- Requires coordination (if needed)
 - Blocks other work during migration
 
 ---
 
 **LATER Summary:**
 - 1 major refactoring
-- 2 weeks effort
+- major rewrite (~2000+ LOC) effort
 - High risk (architectural change)
 - Do only when necessary (current pain justifies effort)
 ```
@@ -1111,7 +1111,7 @@ Produce comprehensive, staged refactoring plan:
 **Goal:** Reduce complexity from 28 → 12, improve testability, reduce duplication
 **Timeline:** 3 sprints (NOW → NEXT → LATER)
 **Risk level:** Medium
-**Total effort:** 10 days
+**Total effort:** comprehensive refactor (~2000 LOC)
 
 ---
 
@@ -1142,7 +1142,7 @@ Produce comprehensive, staged refactoring plan:
 
 ## Refactoring Stages
 
-### NOW: Mechanical (This PR, 1 day)
+### NOW: Mechanical (This PR, ~200-400 LOC)
 
 **Goal:** Quick wins, zero risk
 
@@ -1153,7 +1153,7 @@ Produce comprehensive, staged refactoring plan:
 | 1.3 | Extract duplicated validation | Mechanical | 30m | ⭐ | Yes |
 | 1.4 | Extract logging helper | Mechanical | 20m | ⭐ | Yes |
 
-**Total: 1 day, 4 commits**
+**Total: ~200-400 LOC, 4 commits**
 
 **Regression controls:**
 - ✅ Run tests after each commit
@@ -1162,7 +1162,7 @@ Produce comprehensive, staged refactoring plan:
 
 ---
 
-### NEXT SPRINT: Structural (3 days)
+### NEXT PHASE: Structural (~600-1000 LOC)
 
 **Goal:** Reduce complexity, improve boundaries
 
@@ -1172,7 +1172,7 @@ Produce comprehensive, staged refactoring plan:
 | 2.2 | Extract PaymentGateway interface | Structural | 1d | ⭐⭐ | +8 tests |
 | 2.3 | Add missing test coverage (45% → 85%) | Testing | 1d | ⭐ | +30 tests |
 
-**Total: 3 days, +53 tests**
+**Total: ~600-1000 LOC, +53 tests**
 
 **Regression controls:**
 - ✅ Unit tests for each extracted function
@@ -1184,7 +1184,7 @@ Produce comprehensive, staged refactoring plan:
 
 ---
 
-### LATER: Architectural (Next Quarter, 2 weeks)
+### LATER: Architectural (Future Work, major rewrite (~2000+ LOC))
 
 **Goal:** Major architectural improvement (only if needed)
 
@@ -1192,7 +1192,7 @@ Produce comprehensive, staged refactoring plan:
 |---|-------------|------|--------|------|-----------|
 | 3.1 | Extract OrderService to microservice | Architectural | 2w | ⭐⭐⭐ | Gradual |
 
-**Total: 2 weeks**
+**Total: major rewrite (~2000+ LOC)**
 
 **Regression controls:**
 - ✅ Contract tests (API compatibility)
@@ -1202,13 +1202,13 @@ Produce comprehensive, staged refactoring plan:
 - ✅ Monitoring (error rate, latency, throughput)
 - ✅ Runbook for rollback
 
-**Note:** Only do this if current pain justifies 2 weeks of effort.
+**Note:** Only do this if current pain justifies major rewrite (~2000+ LOC) of effort.
 
 ---
 
 ## Detailed Refactorings
 
-### 1.1: Rename unclear variables [15 min] ⭐
+### 1.1: Rename unclear variables [~10-20 LOC] ⭐
 
 **Before:**
 ```typescript
@@ -1255,7 +1255,7 @@ function processOrder(orderRequest: OrderRequest) {
 
 ---
 
-### 2.1: Split processOrder [1 day] ⭐⭐
+### 2.1: Split processOrder [~200-400 LOC] ⭐⭐
 
 [Detailed steps for splitting function...]
 
@@ -1383,41 +1383,41 @@ featureFlags.set('refactored_order_processor', { enabled: false });
 
 ## Timeline
 
-**Week 1 (NOW):**
-- Monday: Refactorings 1.1, 1.2 (morning)
-- Monday: Refactorings 1.3, 1.4 (afternoon)
-- Tuesday: PR review, merge
+**Phase-set 1 (NOW):**
+- Phase 1: Refactorings 1.1, 1.2 (morning)
+- Phase 1: Refactorings 1.3, 1.4 (afternoon)
+- Phase 2: PR review, merge
 
-**Week 2-3 (NEXT SPRINT):**
-- Monday-Tuesday: Refactoring 2.1 (split function)
-- Wednesday-Thursday: Refactoring 2.2 (extract interface)
-- Friday: Refactoring 2.3 (add tests)
-- Monday: Deploy to staging, test
-- Tuesday: Deploy to production (gradual)
-- Wednesday: Monitor, verify success
+**Phase-set 2 (NEXT SPRINT):**
+- Monday-Phase 2: Refactoring 2.1 (split function)
+- Phase 3-4: Refactoring 2.2 (extract interface)
+- Phase 5: Refactoring 2.3 (add tests)
+- Phase 1: Deploy to staging, test
+- Phase 2: Deploy to production (gradual)
+- Phase 3: Monitor, verify success
 
 **Q2 (LATER):**
 - Only if pain justifies effort
-- Requires team planning, coordination
+- Requires planning, coordination
 - 2-week focused effort
 
 ---
 
 ## Success Criteria
 
-**After NOW (1 day):**
+**After NOW (~200-400 LOC):**
 - [x] 4 refactorings completed
 - [x] All tests pass
 - [x] Code clarity improved (no magic numbers, clear names)
 
-**After NEXT SPRINT (3 days):**
+**After NEXT SPRINT (~600-1000 LOC):**
 - [ ] Complexity < 15 (target: 12)
 - [ ] Test coverage > 80% (target: 85%)
 - [ ] All functions < 50 lines
 - [ ] PaymentService decoupled from Stripe
 - [ ] No production issues (24h monitoring)
 
-**After LATER (2 weeks):**
+**After LATER (major rewrite (~2000+ LOC)):**
 - [ ] OrderService extracted to microservice
 - [ ] Independent deployment
 - [ ] Scalable architecture
@@ -1434,7 +1434,7 @@ featureFlags.set('refactored_order_processor', { enabled: false });
 **What to improve:**
 - Add more integration tests before structural refactorings
 - Test on staging longer (24h vs 2h)
-- Communicate refactoring plan to team earlier
+- Communicate refactoring plan with others earlier
 
 **Recommendations for next refactoring:**
 - Always start with mechanical (rename, extract constants)

@@ -34,14 +34,13 @@ class SingleFileArchiver(BaseArchiver):
             extra={"item_id": item_id, "archiver": "singlefile"},
         )
 
+        import tempfile
+
         # Get binary paths from environment
         singlefile_bin = os.getenv("SINGLEFILE_BIN", "/usr/local/bin/single-file")
         chromium_bin = os.getenv("CHROMIUM_BIN", "/usr/bin/chromium")
-        user_data_dir = self.settings.data_dir / "chromium-user-data"
-        user_data_dir.mkdir(parents=True, exist_ok=True)
-
-        # Clean up Chromium singleton locks
-        self._cleanup_chromium_locks(user_data_dir)
+        # Use unique temp dir to avoid SingletonLock conflicts
+        user_data_dir = Path(tempfile.mkdtemp(prefix="chrome-singlefile-"))
 
         # Build browser args
         browser_args = [
@@ -71,11 +70,15 @@ class SingleFileArchiver(BaseArchiver):
             archiver=self.name,
         )
 
+        # Clean up temp Chrome user data directory
+        import shutil
+        try:
+            shutil.rmtree(user_data_dir, ignore_errors=True)
+        except Exception:
+            pass
+
         if result.timed_out:
             return ArchiveResult(success=False, exit_code=None, saved_path=None)
-
-        # Clean up locks after archiving
-        self._cleanup_chromium_locks(user_data_dir)
 
         return self.create_result(path=output_path, exit_code=result.exit_code)
 

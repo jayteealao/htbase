@@ -24,7 +24,7 @@ args:
   AUDIENCE:
     description: Who needs to understand this decision
     required: false
-    choices: [engineers, cross-functional, leadership]
+    choices: [engineers, broader audience, executive]
   SCOPE:
     description: Scope of the work
     required: false
@@ -77,7 +77,7 @@ From CONTEXT, session context, and any existing artifacts, infer:
 
 2. **DECISION_DRIVERS** (if not provided)
    - Extract from CONTEXT or session constraints
-   - Common drivers: simplicity, security, performance, cost, maintainability, time-to-market, team expertise
+   - Common drivers: simplicity, security, performance, cost, maintainability, time-to-market, project expertise
    - Rank by importance
 
 3. **STATUS** (if not provided)
@@ -88,8 +88,8 @@ From CONTEXT, session context, and any existing artifacts, infer:
 4. **AUDIENCE** (if not provided)
    - Infer from decision scope:
      - Technical implementation details → `engineers`
-     - Product direction or user impact → `cross-functional`
-     - Strategic or resource allocation → `leadership`
+     - Product direction or user impact → `broader audience`
+     - Strategic or resource allocation → `executive`
    - Default to `engineers`
 
 5. **SCOPE/TARGET** (if not provided)
@@ -147,7 +147,7 @@ session_slug: {SESSION_SLUG}
 date: {YYYY-MM-DD}
 decision_topic: {DECISION_TOPIC}
 status: {proposed | accepted | superseded | deprecated}
-audience: {engineers | cross-functional | leadership}
+audience: {engineers | broader audience | executive}
 scope: {SCOPE}
 target: {TARGET}
 related:
@@ -161,7 +161,7 @@ related:
 **Status:** {proposed | accepted | superseded | deprecated}
 **Date:** {YYYY-MM-DD}
 **Scope/Target:** {SCOPE} / {TARGET}
-**Audience:** {engineers | cross-functional | leadership}
+**Audience:** {engineers | broader audience | executive}
 
 ---
 

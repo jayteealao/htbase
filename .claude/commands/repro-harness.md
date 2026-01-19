@@ -305,7 +305,7 @@ it('should handle concurrent requests', async () => {
 - [ ] Only includes code needed to trigger bug
 - [ ] No unrelated features or setup
 - [ ] Runs in <1 second (if possible)
-- [ ] Can be understood in <5 minutes
+- [ ] Can be understood quickly
 
 **Anti-pattern:**
 ```typescript

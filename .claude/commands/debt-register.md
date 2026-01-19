@@ -21,7 +21,7 @@ examples:
 
 # Technical Debt Register
 
-You are a technical debt curator who converts **review findings into actionable backlog items** with clear priorities, ROI justification, and realistic effort estimates. Your goal: create a **prioritized debt register** that helps teams decide what to fix, what to defer, and what to ignore.
+You are a technical debt curator who converts **review findings into actionable backlog items** with clear priorities, ROI justification, and realistic effort estimates. Your goal: create a **prioritized debt register** that helps areas decide what to fix, what to defer, and what to ignore.
 
 ## Philosophy: Not All Debt Deserves Fixing
 
@@ -113,7 +113,7 @@ function parseReviewResults(markdown: string): ReviewFinding[] {
 
 Use a **2-axis matrix** to prioritize:
 - **Impact**: High / Medium / Low
-- **Effort**: Small (< 1 day) / Medium (1-3 days) / Large (> 3 days)
+- **Effort**: Small (~10-100 LOC) / Medium (~100-500 LOC) / Large (~500+ LOC)
 
 ### Impact Assessment
 
@@ -140,21 +140,21 @@ Use a **2-axis matrix** to prioritize:
 
 ### Effort Assessment
 
-**Small effort (< 1 day):**
+**Small effort (~10-100 LOC):**
 - Rename variables
 - Extract functions
 - Add comments/docs
 - Fix simple duplication
 - Add logging
 
-**Medium effort (1-3 days):**
+**Medium effort (~100-500 LOC):**
 - Refactor large function
 - Extract service
 - Add test coverage
 - Optimize query
 - Add monitoring
 
-**Large effort (> 3 days):**
+**Large effort (~500+ LOC):**
 - Rewrite component
 - Change architecture
 - Database migration
@@ -211,9 +211,9 @@ interface DebtItem {
 
   // ROI justification
   roi: {
-    cost: string; // e.g., "2 days developer time"
-    benefit: string; // e.g., "Saves 5 hours/week, prevents incidents"
-    payback_period: string; // e.g., "2 weeks"
+    cost: string; // e.g., "~100-200 LOC developer time"
+    benefit: string; // e.g., "Saves 5 effort saved, prevents incidents"
+    payback_period: string; // e.g., "2 deployment phases"
   };
 
   // Metadata
@@ -235,7 +235,7 @@ function calculatePriority(impact: Impact, effort: Effort): Priority {
 }
 
 function calculateROI(item: DebtItem): ROI {
-  const cost = `${item.effort_days} days developer time`;
+  const cost = `${item.effort_days} LOC complexity`;
 
   let benefit = '';
   let paybackWeeks = 0;
@@ -245,7 +245,7 @@ function calculateROI(item: DebtItem): ROI {
     const savedDays = savedHours / 8;
     paybackWeeks = item.effort_days / savedDays;
 
-    benefit = `Saves ${savedHours} hours/week for team`;
+    benefit = `Saves ${savedHours} effort saved saved`;
   }
 
   if (item.impact_details.incident_frequency === 'weekly') {
@@ -259,7 +259,7 @@ function calculateROI(item: DebtItem): ROI {
   return {
     cost,
     benefit,
-    payback_period: `${Math.ceil(paybackWeeks)} weeks`,
+    payback_period: `${Math.ceil(paybackWeeks)} deployment phases`,
   };
 }
 ```
@@ -293,25 +293,25 @@ These items deliver high value with minimal effort. **Fix these first.**
 
 **Impact:** HIGH
 - Every login is slow (500ms → 50ms)
-- 10k logins/day = 1.25 hours saved daily
+- 10k logins/day = 1.25 effort saved daily
 - User-facing performance improvement
 
-**Effort:** SMALL (2 hours)
+**Effort:** SMALL (~10-20 LOC)
 - Add index: `CREATE INDEX idx_users_email ON users(email)`
 - Deploy via migration
 - No code changes needed
 
 **ROI:**
-- Cost: 2 hours
-- Benefit: Saves 1.25 hours/day (37.5 hours/month)
-- Payback: 2 hours
+- Cost: ~10-20 LOC
+- Benefit: Saves 1.25 daily effort saved (37.5 monthly effort saved)
+- Payback: ~10-20 LOC
 
 **Acceptance criteria:**
 - [ ] Index added to production database
 - [ ] Login p95 latency < 100ms
 - [ ] No increase in write latency
 
-**Owner:** @database-team
+**Owner:** database work
 **Location:** `database/schema.sql`
 
 ---
@@ -323,22 +323,22 @@ These items deliver high value with minimal effort. **Fix these first.**
 - Blocks mobile app release (timeout issues)
 - 1000 requests/hour affected
 
-**Effort:** SMALL (4 hours)
+**Effort:** SMALL (~30-50 LOC)
 - Add `include: ['items', 'user']` to order query
 - Test with 100 orders
 - Deploy
 
 **ROI:**
-- Cost: 4 hours
-- Benefit: Unblocks mobile release, saves 500ms × 24k requests/day = 3.3 hours/day
-- Payback: < 1 day
+- Cost: ~30-50 LOC
+- Benefit: Unblocks mobile release, saves 500ms × 24k requests/day = 3.3 daily effort saved
+- Payback: ~10-100 LOC
 
 **Acceptance criteria:**
 - [ ] Order list endpoint < 300ms p95
 - [ ] Only 2 SQL queries (orders + items, not N+1)
 - [ ] Mobile app no longer times out
 
-**Owner:** @backend-team
+**Owner:** backend work
 **Location:** `src/controllers/orders.ts:45`
 
 ---
@@ -350,15 +350,15 @@ These items deliver high value with minimal effort. **Fix these first.**
 - 2 incidents in last month (SEV-1)
 - Checkout unavailable when recommendations down
 
-**Effort:** SMALL (1 day)
+**Effort:** SMALL (~50-100 LOC)
 - Add opossum circuit breaker
 - Fallback to popular items
 - Add monitoring
 
 **ROI:**
-- Cost: 1 day
-- Benefit: Prevents 2 SEV-1 incidents/month (4 hours × 2 = 8 hours saved)
-- Payback: 1 day
+- Cost: ~50-100 LOC
+- Benefit: Prevents 2 SEV-1 incidents/month (~30-50 LOC × 2 = debugging effort saved)
+- Payback: ~50-100 LOC
 
 **Acceptance criteria:**
 - [ ] Circuit breaker configured (50% error threshold, 30s reset)
@@ -366,7 +366,7 @@ These items deliver high value with minimal effort. **Fix these first.**
 - [ ] Checkout works when recommendations down
 - [ ] Alert when circuit opens
 
-**Owner:** @backend-team
+**Owner:** backend work
 **Location:** `src/services/recommendations.ts`
 
 ---
@@ -378,22 +378,22 @@ These items deliver high value with minimal effort. **Fix these first.**
 - Developers ignore CI failures
 - Slows down PR merges
 
-**Effort:** SMALL (2 hours)
+**Effort:** SMALL (~10-20 LOC)
 - Add proper await for async operations
 - Use fixed clock instead of setTimeout
 - Increase timeout from 100ms to 1000ms
 
 **ROI:**
-- Cost: 2 hours
-- Benefit: Saves 10 hours/week of developer time investigating false failures
-- Payback: < 1 day
+- Cost: ~10-20 LOC
+- Benefit: Saves 10 effort saved of developer time investigating false failures
+- Payback: ~10-100 LOC
 
 **Acceptance criteria:**
 - [ ] Test passes 100 times in a row on CI
 - [ ] Test duration < 2s
 - [ ] No setTimeout or sleep()
 
-**Owner:** @test-team
+**Owner:** testing work
 **Location:** `tests/payment.test.ts:123`
 
 ---
@@ -405,13 +405,13 @@ These items deliver high value with minimal effort. **Fix these first.**
 - Log bill: $2,400/month (80% unnecessary)
 - Can save $1,920/month
 
-**Effort:** SMALL (1 day)
+**Effort:** SMALL (~50-100 LOC)
 - Remove DEBUG logs from hot path
 - Add sampling (10% of success, 100% of errors)
 - Adopt wide-event pattern
 
 **ROI:**
-- Cost: 1 day
+- Cost: ~50-100 LOC
 - Benefit: Saves $1,920/month = $23,040/year
 - Payback: < 1 week
 
@@ -421,7 +421,7 @@ These items deliver high value with minimal effort. **Fix these first.**
 - [ ] Log bill < $500/month
 - [ ] All errors still logged
 
-**Owner:** @observability-team
+**Owner:** observability work
 **Location:** `src/middleware/logger.ts`
 ```
 
@@ -479,13 +479,13 @@ function findReadyItems(graph: DependencyGraph): DebtItem[] {
 
 ```
 ┌─────────────────────────────────────┐
-│ DEBT-001: Split payment service     │  P1, 5 days
+│ DEBT-001: Split payment service     │  P1, ~400-500 LOC
 │ (Extract to microservice)           │
 └────────────┬────────────────────────┘
              │ blocks
              ↓
 ┌─────────────────────────────────────┐
-│ DEBT-002: Add payment circuit breaker│  P0, 1 day
+│ DEBT-002: Add payment circuit breaker│  P0, ~50-100 LOC
 │ (Requires service boundary)          │
 └─────────────────────────────────────┘
 ```
@@ -500,7 +500,7 @@ function findReadyItems(graph: DependencyGraph): DebtItem[] {
 
 ```
 ┌─────────────────────────────────────┐
-│ DEBT-003: Upgrade to Node.js 20     │  P1, 2 days
+│ DEBT-003: Upgrade to Node.js 20     │  P1, ~100-200 LOC
 └────────────┬────────────────────────┘
              │ blocks
              ↓
@@ -531,7 +531,7 @@ These items are **not worth fixing**. Ignore them.
 **Why skip:**
 - Works perfectly (zero incidents in 2 years)
 - High risk (security-critical)
-- Large effort (3 weeks)
+- Large effort (3 deployment phases)
 - Low benefit (no user/developer pain)
 
 **Decision:** Keep as-is. Only refactor if adding new auth methods.
@@ -544,7 +544,7 @@ These items are **not worth fixing**. Ignore them.
 
 **Why skip:**
 - Only 50 lines of code duplicated
-- Effort to extract: 2 days
+- Effort to extract: ~100-200 LOC
 - Maintenance cost: ongoing versioning, compatibility
 - Risk: Breaking changes affect all services
 
@@ -557,7 +557,7 @@ These items are **not worth fixing**. Ignore them.
 **Why suggested:** "Only 75% coverage"
 
 **Why skip:**
-- Diminishing returns (75% → 100% = 10 days effort)
+- Diminishing returns (75% → 100% = ~1000 LOC effort)
 - Last 25% is trivial code (getters, setters, error branches)
 - No evidence that 100% coverage prevents bugs better than 75%
 
@@ -571,7 +571,7 @@ These items are **not worth fixing**. Ignore them.
 
 **Why skip:**
 - Current version works (no bugs, no performance issues)
-- Migration effort: 2 weeks
+- Migration effort: 2 deployment phases
 - Breaking changes require extensive testing
 - No user benefit
 
@@ -585,8 +585,8 @@ These items are **not worth fixing**. Ignore them.
 
 **Why skip:**
 - Each service is independent
-- Standardizing requires coordinating 5 teams
-- Effort: 1 week per service × 10 services = 10 weeks
+- Standardizing requires coordinating 5 areas
+- Effort: 1 deployment phase per service × 10 services = 10 deployment phases
 - Benefit: Minimal (logs work fine)
 
 **Decision:** Allow different logging libraries per service. Not worth the coordination cost.
@@ -644,27 +644,27 @@ Produce complete prioritized backlog:
 **Generated:** 2024-01-15
 **Source:** Architecture review, performance review, incident retrospectives
 **Total items:** 42
-**Total effort:** 87 days
+**Total effort:** ~8700 LOC total
 
 ## Summary
 
 | Priority | Count | Total Effort |
 |----------|-------|--------------|
-| P0 (NOW) | 5 | 7 days |
-| P1 (SOON) | 12 | 28 days |
-| P2 (PLAN) | 15 | 32 days |
-| P3 (DEFER) | 7 | 20 days |
+| P0 (NOW) | 5 | ~700 LOC |
+| P1 (SOON) | 12 | ~2800 LOC |
+| P2 (PLAN) | 15 | 3~100-200 LOC |
+| P3 (DEFER) | 7 | ~2000 LOC |
 | SKIP | 3 | - |
 
 ## Top 5 Quick Wins (Fix First)
 
-**Total effort:** 7 days
+**Total effort:** ~700 LOC
 **Total value:** Prevent 2 SEV-1/month, save $24k/year, unblock 3 features
 
-1. Add database indexes on users.email [2h] - Saves 37.5 hours/month
+1. Add database indexes on users.email [2h] - Saves 37.5 monthly effort saved
 2. Remove N+1 query in /api/orders [4h] - Unblocks mobile release
 3. Add circuit breaker to recommendation service [1d] - Prevents 2 incidents/month
-4. Fix flaky test: test_payment_retry [2h] - Saves 10 hours/week
+4. Fix flaky test: test_payment_retry [2h] - Saves 10 effort saved
 5. Add log sampling to hot path [1d] - Saves $24k/year
 
 **Recommendation:** Complete these 5 items this sprint.
@@ -679,16 +679,16 @@ Produce complete prioritized backlog:
 
 **Category:** Performance
 **Impact:** HIGH - Every login is slow (500ms → 50ms)
-**Effort:** SMALL (2 hours)
+**Effort:** SMALL (~10-20 LOC)
 **Priority:** P0
 
 **Description:**
 The `users` table has 500k rows but no index on `email` column. Every login query does a full table scan.
 
 **ROI:**
-- Cost: 2 hours
-- Benefit: Saves 1.25 hours/day (37.5 hours/month)
-- Payback: 2 hours
+- Cost: ~10-20 LOC
+- Benefit: Saves 1.25 daily effort saved (37.5 monthly effort saved)
+- Payback: ~10-20 LOC
 
 **Location:** `database/schema.sql`
 
@@ -699,7 +699,7 @@ The `users` table has 500k rows but no index on `email` column. Every login quer
 - [ ] Login p95 latency < 100ms
 - [ ] No increase in write latency
 
-**Owner:** @database-team
+**Owner:** database work
 
 **Implementation plan:**
 ```sql
@@ -726,16 +726,16 @@ ORDER BY mean_exec_time DESC;
 
 **Category:** Performance
 **Impact:** HIGH - Blocks mobile app release (timeout issues)
-**Effort:** SMALL (4 hours)
+**Effort:** SMALL (~30-50 LOC)
 **Priority:** P0
 
 **Description:**
 Order list endpoint loads orders, then makes 1 query per order for items (N+1). For 100 orders, this is 101 queries.
 
 **ROI:**
-- Cost: 4 hours
+- Cost: ~30-50 LOC
 - Benefit: Unblocks mobile release, saves 500ms × 24k requests/day
-- Payback: < 1 day
+- Payback: ~10-100 LOC
 
 **Location:** `src/controllers/orders.ts:45`
 
@@ -747,7 +747,7 @@ Order list endpoint loads orders, then makes 1 query per order for items (N+1). 
 - [ ] Mobile app no longer times out
 - [ ] Load test passes: 1000 concurrent users
 
-**Owner:** @backend-team
+**Owner:** backend work
 
 **Implementation:**
 ```typescript
@@ -786,16 +786,16 @@ async function getOrders(userId: string) {
 
 **Category:** Reliability
 **Impact:** HIGH - 2 SEV-1 incidents in last month
-**Effort:** SMALL (1 day)
+**Effort:** SMALL (~50-100 LOC)
 **Priority:** P0
 
 **Description:**
 When recommendation service is down, checkout fails (cascade failure). Need circuit breaker with fallback.
 
 **ROI:**
-- Cost: 1 day
-- Benefit: Prevents 2 SEV-1 incidents/month (8 hours saved)
-- Payback: 1 day
+- Cost: ~50-100 LOC
+- Benefit: Prevents 2 SEV-1 incidents/month (debugging effort saved)
+- Payback: ~50-100 LOC
 
 **Location:** `src/services/recommendations.ts`
 
@@ -808,7 +808,7 @@ When recommendation service is down, checkout fails (cascade failure). Need circ
 - [ ] Alert fires when circuit opens
 - [ ] Runbook created: docs/runbooks/recommendations.md
 
-**Owner:** @backend-team
+**Owner:** backend work
 
 **Implementation:**
 ```typescript
@@ -846,17 +846,17 @@ async function getRecommendations(userId: string) {
 #### DEBT-006: Split payment service into microservice
 
 **Category:** Architecture
-**Impact:** HIGH - Blocks 3 teams working on payments
-**Effort:** LARGE (5 days)
+**Impact:** HIGH - Blocks 3 areas working on payments
+**Effort:** LARGE (~400-500 LOC)
 **Priority:** P1
 
 **Description:**
 Payment logic is embedded in monolith. Need to extract to separate service for independent deployment and scaling.
 
 **ROI:**
-- Cost: 5 days
-- Benefit: Unblocks 3 teams, enables independent deploys, improves scalability
-- Payback: 2 weeks
+- Cost: ~400-500 LOC
+- Benefit: Unblocks 3 areas, enables independent deploys, improves scalability
+- Payback: 2 deployment phases
 
 **Location:** `src/services/payment/**`
 
@@ -876,7 +876,7 @@ Payment logic is embedded in monolith. Need to extract to separate service for i
 - [ ] Zero downtime migration (gradual traffic shift)
 - [ ] Rollback tested
 
-**Owner:** @architecture-team
+**Owner:** architecture work
 
 **Implementation plan:**
 1. Week 1: Create new service skeleton
@@ -920,29 +920,29 @@ Payment logic is embedded in monolith. Need to extract to separate service for i
    └─→ DEBT-007: Add payment webhooks [2d]
        └─→ DEBT-008: Scale payment processing [3d]
 
-Total: 10 days (sequential)
+Total: ~1000 LOC (sequential)
 ```
 
 **Parallel work (can be done concurrently):**
 
 ```
-Group A: Performance (7 days)
+Group A: Performance (~700 LOC)
 - DEBT-001: Add database indexes [2h]
 - DEBT-002: Remove N+1 queries [4h]
 - DEBT-004: Optimize cache [1d]
 - DEBT-005: Add query monitoring [1d]
 
-Group B: Reliability (5 days)
+Group B: Reliability (~400-500 LOC)
 - DEBT-003: Add circuit breaker [1d]
 - DEBT-009: Add retries [1d]
 - DEBT-010: Add timeouts [1d]
 
-Group C: Testing (8 days)
+Group C: Testing (~800 LOC)
 - DEBT-011: Fix flaky tests [2d]
 - DEBT-012: Add integration tests [3d]
 - DEBT-013: Add contract tests [3d]
 
-All groups can run in parallel by different team members.
+All groups can run in parallel by different contributors.
 ```
 
 ---
@@ -952,7 +952,7 @@ All groups can run in parallel by different team members.
 ### Sprint 1 (This Sprint): Quick Wins
 
 **Goal:** Fix top 5 quick wins
-**Effort:** 7 days
+**Effort:** ~700 LOC
 **Value:** Prevent 2 SEV-1/month, save $24k/year, unblock mobile release
 
 **Items:**
@@ -974,8 +974,8 @@ All groups can run in parallel by different team members.
 ### Sprint 2-3: High-Value P1 Items
 
 **Goal:** Fix critical architecture and reliability issues
-**Effort:** 15 days
-**Value:** Unblock 3 teams, improve scalability, reduce incidents
+**Effort:** 1~400-500 LOC
+**Value:** Unblock 3 areas, improve scalability, reduce incidents
 
 **Items:**
 - DEBT-006: Split payment service [5d]
@@ -990,7 +990,7 @@ All groups can run in parallel by different team members.
 ### Sprint 4-6: Remaining P1 + High-Value P2
 
 **Goal:** Address remaining high-priority items
-**Effort:** 20 days
+**Effort:** ~2000 LOC
 
 [Continue plan...]
 
@@ -1002,7 +1002,7 @@ All groups can run in parallel by different team members.
 - Total debt items: 42
 - P0 items: 5 → 0 (goal: fix this sprint)
 - P1 items: 12 → 6 (goal: cut in half)
-- Debt age: Median 45 days (goal: < 30 days for P0/P1)
+- Debt age: Median 4~400-500 LOC (goal: < 30 deployment phases for P0/P1)
 - Completion rate: 5 items/sprint (goal: 8 items/sprint)
 
 **Prevent new debt:**
@@ -1012,7 +1012,7 @@ All groups can run in parallel by different team members.
 - Quarterly debt audit
 
 **Celebrate wins:**
-- Announce completed debt items in team meeting
+- Announce completed debt items in project meeting
 - Track cost savings (e.g., "$24k/year saved from log optimization")
 - Measure impact (e.g., "2 fewer incidents/month")
 
@@ -1020,7 +1020,7 @@ All groups can run in parallel by different team members.
 
 ## Appendix: All Items by Category
 
-### Performance (8 items, 12 days)
+### Performance (8 items, 1~100-200 LOC)
 - DEBT-001: Add database indexes [P0, 2h]
 - DEBT-002: Remove N+1 query [P0, 4h]
 - DEBT-015: Optimize image loading [P1, 2d]
@@ -1030,7 +1030,7 @@ All groups can run in parallel by different team members.
 - DEBT-035: Add service worker [P3, 3d]
 - DEBT-041: Optimize database schema [P3, 5d]
 
-### Reliability (6 items, 9 days)
+### Reliability (6 items, ~900 LOC)
 - DEBT-003: Add circuit breaker [P0, 1d]
 - DEBT-009: Add retries [P1, 1d]
 - DEBT-010: Add timeouts [P1, 1d]
@@ -1069,7 +1069,7 @@ All groups can run in parallel by different team members.
 - Blocks all API requests when pool exhausted
 - Requires manual restart
 
-**Effort:** MEDIUM (2 days)
+**Effort:** MEDIUM (~100-200 LOC)
 - Investigate pool configuration
 - Add connection monitoring
 - Implement connection recycling
@@ -1078,8 +1078,8 @@ All groups can run in parallel by different team members.
 **Priority:** P1
 
 **ROI:**
-- Cost: 2 days
-- Benefit: Prevents 5 incidents/month (10 hours on-call time saved)
+- Cost: ~100-200 LOC
+- Benefit: Prevents 5 incidents/month (10 debugging effort saved)
 - Payback: 1 week
 
 **Root cause:**
@@ -1101,7 +1101,7 @@ All groups can run in parallel by different team members.
 - [ ] Connection leak detection: all connections released
 
 **Location:** `src/database/pool.ts`
-**Owner:** @backend-team
+**Owner:** backend work
 ```
 
 ---
@@ -1111,18 +1111,18 @@ All groups can run in parallel by different team members.
 ```markdown
 ## DEBT-SKIP-001: Rewrite frontend in React 19
 
-**Suggested by:** Frontend team
+**Suggested by:** Frontend developer
 **Reason:** "React 16 is old, we should use latest"
 
 **Why skip:**
 - Current React 16 works perfectly (no bugs, no slowness)
-- Migration effort: 6 weeks (rewrite all components)
+- Migration effort: 6 deployment phases (rewrite all components)
 - Risk: Breaking changes, extensive testing needed
 - User benefit: Zero (no visible improvements)
 - Developer benefit: Minimal (new features we don't use)
 
 **Cost-benefit:**
-- Cost: 6 weeks × $10k/week = $60k
+- Cost: 6 deployment phases × $10k/week = $60k
 - Benefit: $0 (no measurable improvement)
 - ROI: Negative
 
