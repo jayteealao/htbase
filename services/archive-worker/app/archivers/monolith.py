@@ -42,8 +42,9 @@ class MonolithArchiver(BaseArchiver):
 
         # Add optional flags if present
         if monolith_flags:
-            # Split flags by whitespace and add to command
-            cmd.extend(monolith_flags.split())
+            # Use shlex.split to properly handle quoted strings
+            import shlex
+            cmd.extend(shlex.split(monolith_flags))
 
         # Execute command
         result = self.command_runner.execute(

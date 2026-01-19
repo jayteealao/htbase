@@ -60,11 +60,18 @@ class BaseArchiver(abc.ABC):
         min_size: int = 1,
     ) -> bool:
         """Validate that archiver output meets success criteria."""
-        return (
-            exit_code == 0
-            and path.exists()
-            and path.stat().st_size >= min_size
-        )
+        exists = path.exists()
+        size = path.stat().st_size if exists else 0
+
+        valid = exit_code == 0 and exists and size >= min_size
+
+        if not valid:
+            logger.warning(
+                f"Validation failed: exit_code={exit_code}, exists={exists}, size={size}, min_size={min_size}",
+                extra={"archiver": self.name, "path": str(path)}
+            )
+
+        return valid
 
     def create_result(
         self,

@@ -58,10 +58,10 @@ class CommandRunner:
 
         # Log command as string for readability, but limit length
         command_str = " ".join(command)
-        logger.debug(
-            "Executing command",
+        logger.info(
+            f"Executing {archiver} command: {command_str[:500]}",
             extra={
-                "command": command_str[:200],
+                "command": command_str[:500],
                 "timeout": timeout,
                 "archiver": archiver,
             },
@@ -90,6 +90,15 @@ class CommandRunner:
                     },
                 )
             else:
+                # Also log stdout/stderr for successful commands to help debug
+                if result.stdout or result.stderr:
+                    logger.info(
+                        f"Command output - stdout: {result.stdout[:200]}, stderr: {result.stderr[:200]}",
+                        extra={
+                            "exit_code": result.returncode,
+                            "archiver": archiver,
+                        },
+                    )
                 logger.debug(
                     "Command completed",
                     extra={

@@ -42,15 +42,11 @@ class SingleFileArchiver(BaseArchiver):
         # Use unique temp dir to avoid SingletonLock conflicts
         user_data_dir = Path(tempfile.mkdtemp(prefix="chrome-singlefile-"))
 
-        # Build browser args
+        # Build browser args - keep it minimal to avoid JSON parsing issues
+        # Only include essential flags for Docker
         browser_args = [
-            f"--user-data-dir={user_data_dir}",
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--disable-features=LockProfileCookieDatabase",
             "--no-sandbox",
             "--disable-dev-shm-usage",
-            "--disable-gpu",
         ]
         browser_args_json = json.dumps(browser_args)
 
