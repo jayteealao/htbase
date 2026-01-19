@@ -6,7 +6,6 @@ Archives web pages using the SingleFile CLI tool.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 
@@ -29,34 +28,24 @@ class SingleFileArchiver(BaseArchiver):
 
         output_path = Path(output_path)
 
+        # Ensure output file doesn't exist - single-file renames output if file exists
+        if output_path.exists():
+            output_path.unlink()
+
         logger.info(
             f"Archiving {item_id} {url}",
             extra={"item_id": item_id, "archiver": "singlefile"},
         )
 
-        import tempfile
-
-        # Get binary paths from environment
-        singlefile_bin = os.getenv("SINGLEFILE_BIN", "/usr/local/bin/single-file")
-        chromium_bin = os.getenv("CHROMIUM_BIN", "/usr/bin/chromium")
-        # Use unique temp dir to avoid SingletonLock conflicts
-        user_data_dir = Path(tempfile.mkdtemp(prefix="chrome-singlefile-"))
-
-        # Build browser args - keep it minimal to avoid JSON parsing issues
-        # Only include essential flags for Docker
-        browser_args = [
-            "--no-sandbox",
-            "--disable-dev-shm-usage",
-        ]
-        browser_args_json = json.dumps(browser_args)
+        # Use wrapper script to work around Python subprocess issues
+        # The wrapper automatically includes --browser-executable-path
+        singlefile_bin = os.getenv("SINGLEFILE_BIN", "/usr/local/bin/single-file-wrapper")
 
         # Build command as list (safe from command injection)
         cmd = [
             singlefile_bin,
             url,
             str(output_path),
-            f"--browser-executable-path={chromium_bin}",
-            f"--browser-args={browser_args_json}",
         ]
 
         # Execute command
@@ -66,12 +55,18 @@ class SingleFileArchiver(BaseArchiver):
             archiver=self.name,
         )
 
-        # Clean up temp Chrome user data directory
-        import shutil
-        try:
-            shutil.rmtree(user_data_dir, ignore_errors=True)
-        except Exception:
-            pass
+        # Debug: Check file immediately after command
+        if output_path.exists():
+            size = output_path.stat().st_size
+            logger.info(
+                f"SingleFile output file: size={size}, exit_code={result.exit_code}",
+                extra={"item_id": item_id, "path": str(output_path), "size": size}
+            )
+        else:
+            logger.warning(
+                f"SingleFile output file does not exist: {output_path}",
+                extra={"item_id": item_id}
+            )
 
         if result.timed_out:
             return ArchiveResult(success=False, exit_code=None, saved_path=None)

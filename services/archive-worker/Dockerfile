@@ -21,6 +21,22 @@ RUN wget -q https://github.com/Y2Z/monolith/releases/latest/download/monolith-gn
 # Install single-file CLI
 RUN npm install -g single-file-cli
 
+# Create chromium wrapper script that adds --no-sandbox and unique user-data-dir
+RUN echo '#!/bin/bash\n\
+TEMP_DIR=$(mktemp -d -t chrome-XXXXXXXXXX)\n\
+trap "rm -rf $TEMP_DIR" EXIT\n\
+exec /usr/bin/chromium.real --no-sandbox --disable-dev-shm-usage --user-data-dir="$TEMP_DIR" "$@"\n\
+' > /usr/local/bin/chromium-wrapper \
+    && chmod +x /usr/local/bin/chromium-wrapper \
+    && mv /usr/bin/chromium /usr/bin/chromium.real \
+    && ln -s /usr/local/bin/chromium-wrapper /usr/bin/chromium
+
+# Create single-file wrapper to work around Python subprocess issues
+RUN echo '#!/bin/bash\n\
+exec /usr/local/bin/single-file "$@" --browser-executable-path=/usr/bin/chromium\n\
+' > /usr/local/bin/single-file-wrapper \
+    && chmod +x /usr/local/bin/single-file-wrapper
+
 # Copy shared package and install it
 COPY shared /app/shared
 RUN pip install --no-cache-dir -e /app/shared
@@ -40,7 +56,7 @@ ENV PYTHONPATH=/app/services/archive-worker
 
 # Set binary paths
 ENV CHROMIUM_BIN=/usr/bin/chromium
-ENV SINGLEFILE_BIN=/usr/local/bin/single-file
+ENV SINGLEFILE_BIN=/usr/local/bin/single-file-wrapper
 ENV MONOLITH_BIN=/usr/local/bin/monolith
 
 # Create data directory

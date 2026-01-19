@@ -87,11 +87,27 @@ class ArticleTag:
 
 
 @dataclass
+class PocketData:
+    """Pocket integration data (legacy, minimal stub for compatibility)."""
+
+    item_id: str
+    resolved_id: Optional[str] = None
+    word_count: Optional[int] = None
+    time_added: Optional[int] = None
+    time_read: Optional[int] = None
+    favorite: bool = False
+    status: Optional[str] = None
+    images: Optional[List[Dict[str, Any]]] = None
+    authors: Optional[List[Dict[str, Any]]] = None
+
+
+@dataclass
 class ArticleRecord:
     """Complete article record with all related data."""
 
     metadata: ArticleMetadata
     archives: List[ArchiveArtifact]
+    pocket: Optional["PocketData"] = None
     summary: Optional[ArticleSummary] = None
     entities: Optional[List[ArticleEntity]] = None
     tags: Optional[List[ArticleTag]] = None

@@ -90,15 +90,16 @@ class CommandRunner:
                     },
                 )
             else:
-                # Also log stdout/stderr for successful commands to help debug
-                if result.stdout or result.stderr:
-                    logger.info(
-                        f"Command output - stdout: {result.stdout[:200]}, stderr: {result.stderr[:200]}",
-                        extra={
-                            "exit_code": result.returncode,
-                            "archiver": archiver,
-                        },
-                    )
+                # Always log stdout/stderr for debugging (even if empty)
+                logger.info(
+                    f"Command output - stdout: '{result.stdout[:500]}', stderr: '{result.stderr[:500]}'",
+                    extra={
+                        "exit_code": result.returncode,
+                        "archiver": archiver,
+                        "stdout_len": len(result.stdout),
+                        "stderr_len": len(result.stderr),
+                    },
+                )
                 logger.debug(
                     "Command completed",
                     extra={
