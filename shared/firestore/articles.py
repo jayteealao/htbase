@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 from google.cloud import firestore
 from google.cloud.firestore_v1.base_query import FieldFilter
 
-from shared.firestore_client import get_articles_collection
+from shared.infrastructure.firestore import get_articles_collection
 
 logger = logging.getLogger(__name__)
 

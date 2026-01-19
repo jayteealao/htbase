@@ -1,7 +1,7 @@
 {
   "version": "1.0.0",
   "installedAt": "2026-01-17T22:21:47.137Z",
-  "updatedAt": "2026-01-17T22:21:47.137Z",
+  "updatedAt": "2026-01-18T23:37:57.086Z",
   "plugins": [
     {
       "name": "session-workflow",
@@ -77,6 +77,40 @@
           ],
           "skills": [
             "wide-event-observability"
+          ],
+          "isSymlinked": false
+        }
+      }
+    },
+    {
+      "name": "release-automation",
+      "version": "2.0.0",
+      "sourcePath": "C:\\Users\\jayte\\Documents\\dev\\agent-skills",
+      "installedAt": "2026-01-18T23:37:57.086Z",
+      "components": {
+        "agents": 0,
+        "commands": 1,
+        "skills": 7,
+        "mcpServers": 0,
+        "variants": 0
+      },
+      "installedTo": [
+        "claude"
+      ],
+      "installedFiles": {
+        "claude": {
+          "agents": [],
+          "commands": [
+            "release.md"
+          ],
+          "skills": [
+            "changelog-update",
+            "detect-project-type",
+            "detect-release-scope",
+            "documentation-sync",
+            "git-release-workflow",
+            "pre-release-validation",
+            "version-bump"
           ],
           "isSymlinked": false
         }

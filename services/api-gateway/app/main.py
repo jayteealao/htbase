@@ -23,7 +23,7 @@ from shared.models import HealthResponse
 from shared.rate_limit import slowapi_limiter, _rate_limit_exceeded_handler, RateLimitMiddleware
 from shared.observability import CorrelationMiddleware, WideEventMiddleware
 
-from app.routes import tasks, sync, archives, artifacts, system
+from app.routes import tasks, archives, artifacts, system
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +111,6 @@ def create_app() -> FastAPI:
     app.include_router(artifacts.router, prefix="/api/v1", tags=["artifacts"])
     app.include_router(system.router, prefix="/api/v1", tags=["system"])
     app.include_router(tasks.router, prefix="/api/v1", tags=["tasks"])
-    app.include_router(sync.router, prefix="/api/v1", tags=["sync"])
 
     # Exception handlers
     @app.exception_handler(Exception)

@@ -37,16 +37,15 @@ def get_storage_providers() -> List[FileStorageProvider]:
     settings = get_settings()
     providers = []
 
-    # Add GCS provider if configured
-    if settings.storage_backend == "gcs" and settings.gcs.is_configured():
-        try:
-            from shared.storage.gcs_file_storage import GCSFileStorage
-            providers.append(GCSFileStorage(
-                bucket_name=settings.gcs.bucket,
-                project_id=settings.gcs.project_id,
-            ))
-        except Exception:
-            pass
+    # Add GCS provider (required for HTBase)
+    try:
+        from shared.storage.gcs_file_storage import GCSFileStorage
+        providers.append(GCSFileStorage(
+            bucket_name=settings.gcs.bucket,
+            project_id=settings.gcs.project_id,
+        ))
+    except Exception:
+        pass
 
     return providers
 
@@ -56,13 +55,12 @@ def get_database_storage() -> Optional[DatabaseStorageProvider]:
     """Get configured database storage provider."""
     settings = get_settings()
 
-    # Configure Firestore if available
-    if settings.firestore.is_configured():
-        try:
-            from shared.storage.firestore_storage import FirestoreStorage
-            return FirestoreStorage(project_id=settings.firestore.project_id)
-        except Exception:
-            pass
+    # Configure Firestore (required for HTBase)
+    try:
+        from shared.storage.firestore_storage import FirestoreStorage
+        return FirestoreStorage(project_id=settings.firestore.project_id)
+    except Exception:
+        pass
 
     return None
 
@@ -96,15 +94,9 @@ def get_archiver(name: str, with_storage: bool = True) -> BaseArchiver:
     if not archiver_class:
         raise ValueError(f"Unknown archiver: {name}. Available: {list(archivers.keys())}")
 
-    # Get storage providers if requested
-    file_providers = get_storage_providers() if with_storage else []
-    db_storage = get_database_storage() if with_storage else None
-
     return archiver_class(
         settings=settings,
         command_runner=command_runner,
-        file_storage_providers=file_providers,
-        db_storage=db_storage,
     )
 
 

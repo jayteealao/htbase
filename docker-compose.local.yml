@@ -2,8 +2,8 @@
 # HT Base - Local Development Override
 # =============================================================================
 # Usage:
-#   docker compose -f docker-compose.microservices.yml -f docker-compose.local.yml up
-#   docker compose -f docker-compose.microservices.yml -f docker-compose.local.yml up api-gateway
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up api-gateway
 #
 # Features:
 #   - Uses local file storage instead of GCS
@@ -17,12 +17,11 @@ x-local-env: &local-env
   ENVIRONMENT: development
   LOG_LEVEL: DEBUG
   LOG_FORMAT: pretty
-  # Use local storage provider
-  STORAGE_PROVIDER: local
-  LOCAL_STORAGE_PATH: /app/artifacts
-  # Disable GCS
-  GCS_BUCKET: ""
-  GCS_PROJECT_ID: ""
+  # GCS and Firestore settings (will use values from .env file)
+  FIRESTORE_PROJECT_ID: ${FIRESTORE_PROJECT_ID}
+  GCS_BUCKET: ${GCS_BUCKET}
+  GCS_PROJECT_ID: ${GCS_PROJECT_ID}
+  GOOGLE_APPLICATION_CREDENTIALS: /secrets/gcs-credentials.json
 
 services:
   # ===========================================================================
@@ -40,18 +39,26 @@ services:
   # ===========================================================================
 
   api-gateway:
+    env_file:
+      - .env
     environment:
       <<: *local-env
       # PostgreSQL removed - HTBase uses Firestore
       WORKERS: 1
       RELOAD: "true"
-      CORS_ORIGINS: "*"
+      # CORS_ORIGINS: Use default from SharedSettings
       API_RATE_LIMIT: "1000/minute"
+      API_KEYS: ${API_KEYS:-test-api-key-12345}
+      # Redis connection settings
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_DB: 0
     volumes:
       # Mount source code for hot reload
       - ./services/api-gateway/app:/app/app:ro
       - ./shared:/app/shared:ro
-      - ./data/artifacts:/app/artifacts
+      # GCS credentials (using path from .env)
+      - ${GCS_CREDENTIALS_PATH:-./secrets/gcs-credentials.json}:/secrets/gcs-credentials.json:ro
     deploy:
       resources:
         limits:
@@ -91,6 +98,8 @@ services:
       dockerfile: services/archive-worker/Dockerfile
     container_name: htbase-archive-worker-dev
     restart: unless-stopped
+    env_file:
+      - .env
     environment:
       <<: *local-env
       REDIS_URL: redis://redis:6379/0
@@ -104,12 +113,13 @@ services:
     volumes:
       - ./services/archive-worker/app:/app/app:ro
       - ./shared:/app/shared:ro
-      - ./data/artifacts:/app/artifacts
+      # GCS credentials (using path from .env)
+      - ${GCS_CREDENTIALS_PATH:-./secrets/gcs-credentials.json}:/secrets/gcs-credentials.json:ro
     depends_on:
       redis:
         condition: service_healthy
     networks:
-      - htbase-network
+      - archivebox_default
     shm_size: 2gb
     deploy:
       resources:
@@ -122,6 +132,8 @@ services:
   # ===========================================================================
 
   summarization-worker:
+    env_file:
+      - .env
     environment:
       <<: *local-env
       # PostgreSQL removed - HTBase uses Firestore
@@ -139,27 +151,6 @@ services:
           memory: 512M
 
   # ===========================================================================
-  # Storage Worker - Development Mode
-  # ===========================================================================
-
-  storage-worker:
-    environment:
-      <<: *local-env
-      # PostgreSQL removed - HTBase uses Firestore
-      WORKER_CONCURRENCY: 3
-      COMPRESSION_ENABLED: "false"
-      CLEANUP_AFTER_UPLOAD: "false"
-    volumes:
-      - ./services/storage-worker/app:/app/app:ro
-      - ./shared:/app/shared:ro
-      - ./data/artifacts:/app/artifacts
-    deploy:
-      resources:
-        limits:
-          cpus: "0.5"
-          memory: 256M
-
-  # ===========================================================================
   # Development Tools
   # ===========================================================================
 
@@ -173,7 +164,7 @@ services:
       - "1025:1025"   # SMTP
       - "8025:8025"   # Web UI
     networks:
-      - htbase-network
+      - archivebox_default
     profiles:
       - email
 

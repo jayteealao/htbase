@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field, HttpUrl
 from celery import chain, group
 
@@ -70,11 +70,11 @@ class CreateArchiveRequest(BaseModel):
 
 
 @router.post("/archives", response_model=TaskAccepted)
-@rate_limit_archive
 async def create_archive(
     req: Request,
+    response: Response,
     request: CreateArchiveRequest,
-    api_key: str = Depends(verify_api_key),
+    api_key: str = Depends(rate_limit_archive),
     article_repo: ArticleRepoType = None,  # Injected dependency!
 ):
     """Create archive for one or more URLs.
@@ -141,7 +141,7 @@ async def create_archive(
         # Dispatch tasks for each archiver
         for archiver in archivers:
             fetch_url = rewrite_paywalled_url(str(item.url))
-            task_name = f"services.archive_worker.app.tasks.archive_{archiver}"
+            task_name = f"services.archive_worker.tasks.archive_{archiver}"
 
             task = celery_app.signature(
                 task_name,
@@ -161,24 +161,51 @@ async def create_archive(
 
     # Dispatch all tasks
     if all_tasks:
-        group(all_tasks).apply_async()
+        try:
+            logger.info(f"Dispatching {len(all_tasks)} tasks to Celery workers")
+            result = group(all_tasks).apply_async()
+            logger.info(f"Tasks dispatched successfully, group_id: {result.id}")
+        except Exception as e:
+            logger.error(
+                f"Failed to dispatch Celery tasks: {e}",
+                exc_info=True,
+                extra={
+                    "task_count": len(all_tasks),
+                    "archivers": archivers,
+                    "error_type": type(e).__name__,
+                }
+            )
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to dispatch archive tasks: {str(e)}"
+            )
 
     # Enrich wide event with archive request context
-    if len(request.items) == 1:
-        enrich_api_event(
-            req,
-            archive_request=ArchiveRequestContext(
-                archivers_requested=archivers,
-                celery_task_ids=task_ids,
-            ),
-        )
+    try:
+        if len(request.items) == 1:
+            enrich_api_event(
+                req,
+                archive_request=ArchiveRequestContext(
+                    archivers_requested=archivers,
+                    celery_task_ids=task_ids,
+                ),
+            )
+    except Exception as e:
+        logger.error(f"Failed to enrich API event: {e}", exc_info=True)
+        # Don't fail the request for logging issues
 
-    total_tasks = len(request.items) * len(archivers)
-    return TaskAccepted(
-        task_id=request_id or "unknown",
-        status="accepted",
-        message=f"Archive tasks created: {len(request.items)} items × {len(archivers)} archivers = {total_tasks} tasks"
-    )
+    try:
+        total_tasks = len(request.items) * len(archivers)
+        response = TaskAccepted(
+            task_id=request_id or "unknown",
+            count=total_tasks,
+            message=f"Archive tasks created: {len(request.items)} items × {len(archivers)} archivers = {total_tasks} tasks"
+        )
+        logger.info(f"Returning success response: {response}")
+        return response
+    except Exception as e:
+        logger.error(f"Failed to create response: {e}", exc_info=True)
+        raise
 
 
 @router.get("/archives/{item_id}")
@@ -197,10 +224,10 @@ async def get_archive(
 
 
 @router.delete("/archives/{item_id}", response_model=DeleteResponse)
-@rate_limit_admin
 async def delete_archive(
+    response: Response,
     item_id: str,
-    api_key: str = Depends(verify_api_key),
+    api_key: str = Depends(rate_limit_admin),
     article_repo: ArticleRepoType = None,  # Injected dependency!
 ):
     """Delete an archive and all its artifacts."""

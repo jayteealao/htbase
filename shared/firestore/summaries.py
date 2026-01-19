@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 
 from google.cloud import firestore
 
-from shared.firestore_client import get_articles_collection
+from shared.infrastructure.firestore import get_articles_collection
 from shared.firestore.articles import get_article
 
 logger = logging.getLogger(__name__)

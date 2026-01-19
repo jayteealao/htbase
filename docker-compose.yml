@@ -81,7 +81,7 @@ services:
       <<: *common-env
       PORT: 8080
       WORKERS: ${API_WORKERS:-4}
-      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      # CORS_ORIGINS: Use default from SharedSettings
       API_RATE_LIMIT: ${API_RATE_LIMIT:-100/minute}
       DEFAULT_ARCHIVERS: ${DEFAULT_ARCHIVERS:-singlefile,monolith,readability,pdf,screenshot}
       ENABLE_SUMMARIZATION: ${ENABLE_SUMMARIZATION:-true}

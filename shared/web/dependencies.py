@@ -10,7 +10,7 @@ from typing import Annotated
 from fastapi import Depends
 
 from shared.database.repositories import ArticleRepository, ArtifactRepository
-from shared.firestore_client import get_firestore_client
+from shared.infrastructure.firestore import get_firestore_client
 
 
 def get_article_repository() -> ArticleRepository:

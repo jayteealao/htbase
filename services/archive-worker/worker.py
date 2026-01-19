@@ -11,8 +11,14 @@ import os
 from shared.config import get_settings, configure_logging
 from shared.infrastructure.celery import celery_app, configure_for_worker
 
-# Import tasks to register them
-from app import tasks  # noqa: F401
+# Import archiver tasks to register them with Celery
+from app.celery_tasks import (  # noqa: F401
+    archive_singlefile,
+    archive_monolith,
+    archive_readability,
+    archive_pdf,
+    archive_screenshot,
+)
 
 # Configure worker
 configure_for_worker("archive")

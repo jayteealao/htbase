@@ -5,8 +5,6 @@ Provides environment-based configuration with Pydantic settings.
 Each service can extend this base configuration with service-specific settings.
 """
 
-from __future__ import annotations
-
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -17,7 +15,7 @@ from pydantic import AliasChoices, BaseModel, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class RedisSettings(BaseModel):
+class RedisSettings(BaseSettings):
     """Redis connection settings."""
 
     host: str = Field(
@@ -44,7 +42,7 @@ class RedisSettings(BaseModel):
         return f"redis://{self.host}:{self.port}/{self.db}"
 
 
-class GCSSettings(BaseModel):
+class GCSSettings(BaseSettings):
     """Google Cloud Storage settings - now required for all storage operations."""
 
     bucket: str = Field(
@@ -66,7 +64,7 @@ class GCSSettings(BaseModel):
     )
 
 
-class FirestoreSettings(BaseModel):
+class FirestoreSettings(BaseSettings):
     """Firestore settings - now the primary database for HTBase."""
 
     project_id: str = Field(
@@ -87,7 +85,7 @@ class FirestoreSettings(BaseModel):
         return bool(self.project_id)
 
 
-class ArchiverSettings(BaseModel):
+class ArchiverSettings(BaseSettings):
     """Archiver execution timeout settings (in seconds)."""
 
     singlefile_timeout: float = Field(
@@ -122,7 +120,7 @@ class ArchiverSettings(BaseModel):
     )
 
 
-class TaskSettings(BaseModel):
+class TaskSettings(BaseSettings):
     """Celery task retry and timeout settings."""
 
     default_retry_delay: int = Field(
@@ -169,7 +167,7 @@ class TaskSettings(BaseModel):
     )
 
 
-class HTTPSettings(BaseModel):
+class HTTPSettings(BaseSettings):
     """HTTP client timeout settings (in seconds)."""
 
     default_timeout: float = Field(
@@ -195,7 +193,7 @@ class HTTPSettings(BaseModel):
 # - worker_max_tasks_per_child: Hardcoded in Celery worker configs
 # If you need these to be configurable, use the constants directly where needed.
 
-class SummarizationSettings(BaseModel):
+class SummarizationSettings(BaseSettings):
     """Summarization service settings."""
 
     enabled: bool = Field(
