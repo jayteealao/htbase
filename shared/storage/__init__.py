@@ -1,8 +1,9 @@
 """
 Shared storage module for HTBase microservices.
 
-Provides file storage and database storage provider interfaces
-and implementations.
+HTBase uses:
+- GCS for artifact/file storage
+- Firestore for database storage
 """
 
 from shared.storage.file_storage import (
@@ -11,7 +12,6 @@ from shared.storage.file_storage import (
     FileStorageProvider,
 )
 from shared.storage.gcs_file_storage import GCSFileStorage
-from shared.storage.local_file_storage import LocalFileStorage
 from shared.storage.database_storage import (
     ArchiveStatus,
     ArticleMetadata,
@@ -23,9 +23,6 @@ from shared.storage.database_storage import (
     DatabaseStorageProvider,
 )
 from shared.storage.firestore_storage import FirestoreStorage
-from shared.storage.postgres_storage import PostgresStorage
-from shared.storage.dual_database_storage import DualDatabaseStorage
-from shared.storage.sync_filter import SyncFilter
 
 __all__ = [
     # File storage - models
@@ -34,7 +31,6 @@ __all__ = [
     # File storage - providers
     "FileStorageProvider",
     "GCSFileStorage",
-    "LocalFileStorage",
     # Database storage - models
     "ArchiveStatus",
     "ArticleMetadata",
@@ -46,8 +42,4 @@ __all__ = [
     # Database storage - providers
     "DatabaseStorageProvider",
     "FirestoreStorage",
-    "PostgresStorage",
-    "DualDatabaseStorage",
-    # Utilities
-    "SyncFilter",
 ]

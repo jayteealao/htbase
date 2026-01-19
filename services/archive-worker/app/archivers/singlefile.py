@@ -49,6 +49,9 @@ class SingleFileArchiver(BaseArchiver):
             "--no-first-run",
             "--no-default-browser-check",
             "--disable-features=LockProfileCookieDatabase",
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-gpu",
         ]
         browser_args_json = json.dumps(browser_args)
 

@@ -79,14 +79,25 @@ class CommandRunner:
 
             duration = (datetime.utcnow() - start_time).total_seconds()
 
-            logger.debug(
-                "Command completed",
-                extra={
-                    "exit_code": result.returncode,
-                    "duration": duration,
-                    "archiver": archiver,
-                },
-            )
+            # Log stderr if command failed
+            if result.returncode != 0 and result.stderr:
+                logger.warning(
+                    f"Command failed: {result.stderr[:500]}",
+                    extra={
+                        "exit_code": result.returncode,
+                        "duration": duration,
+                        "archiver": archiver,
+                    },
+                )
+            else:
+                logger.debug(
+                    "Command completed",
+                    extra={
+                        "exit_code": result.returncode,
+                        "duration": duration,
+                        "archiver": archiver,
+                    },
+                )
 
             return CommandResult(
                 exit_code=result.returncode,
