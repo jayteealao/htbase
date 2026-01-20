@@ -7,6 +7,7 @@ It handles HTTP requests and dispatches tasks to Celery workers.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import sys
@@ -21,11 +22,50 @@ from slowapi.errors import RateLimitExceeded
 from shared.config import get_settings, configure_logging
 from shared.models import HealthResponse
 from shared.rate_limit import slowapi_limiter, _rate_limit_exceeded_handler, RateLimitMiddleware
-from shared.observability import CorrelationMiddleware, WideEventMiddleware
+from shared.observability import CorrelationMiddleware, WideEventMiddleware, PrometheusMiddleware, get_metrics_response
+from shared.metrics import celery_queue_depth
+from shared.sentry import init_sentry_fastapi
+from shared.tracing import init_tracing_fastapi
 
 from app.routes import tasks, archives, artifacts, system
 
 logger = logging.getLogger(__name__)
+
+# Celery queues to monitor
+CELERY_QUEUES = [
+    "archive.singlefile",
+    "archive.monolith",
+    "archive.readability",
+    "archive.pdf",
+    "archive.screenshot",
+    "summarization",
+]
+
+
+async def update_queue_metrics():
+    """Background task to periodically update Celery queue depth metrics."""
+    import redis.asyncio as redis
+
+    settings = get_settings()
+
+    try:
+        redis_client = redis.from_url(settings.redis.url())
+    except Exception as e:
+        logger.error(f"Failed to connect to Redis for queue metrics: {e}")
+        return
+
+    while True:
+        try:
+            for queue in CELERY_QUEUES:
+                try:
+                    depth = await redis_client.llen(queue)
+                    celery_queue_depth.labels(queue=queue).set(depth)
+                except Exception as e:
+                    logger.warning(f"Failed to get depth for queue {queue}: {e}")
+        except Exception as e:
+            logger.error(f"Error updating queue metrics: {e}")
+
+        await asyncio.sleep(10)  # Update every 10 seconds
 
 
 @asynccontextmanager
@@ -33,6 +73,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan handler."""
     settings = get_settings()
     configure_logging(settings)
+
+    # Initialize Sentry for error tracking
+    init_sentry_fastapi(
+        dsn=settings.sentry_dsn,
+        environment=settings.environment,
+        version=settings.version,
+        service_name="api-gateway",
+        traces_sample_rate=settings.sentry_traces_sample_rate,
+    )
+
+    # Initialize OpenTelemetry tracing
+    init_tracing_fastapi(
+        service_name="api-gateway",
+        otel_endpoint=settings.otel_endpoint,
+        version=settings.version,
+        environment=settings.environment,
+    )
 
     logger.info(
         "Starting API Gateway",
@@ -45,9 +102,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Startup: verify connections
     # Firestore connections are lazy-loaded, no need for startup check
 
+    # Start background task for queue metrics
+    queue_metrics_task = asyncio.create_task(update_queue_metrics())
+
     yield
 
     # Shutdown
+    queue_metrics_task.cancel()
+    try:
+        await queue_metrics_task
+    except asyncio.CancelledError:
+        pass
     logger.info("Shutting down API Gateway")
 
 
@@ -71,10 +136,15 @@ def create_app() -> FastAPI:
     # Add rate limit middleware for response headers
     app.add_middleware(RateLimitMiddleware)
 
-    # Wide-event observability middleware
+    # Observability middleware
     # NOTE: Middleware executes in reverse order of addition
-    # CorrelationMiddleware must execute BEFORE WideEventMiddleware
+    # CorrelationMiddleware -> WideEventMiddleware -> PrometheusMiddleware
     deployment_id = os.getenv("DEPLOYMENT_ID", "local")
+
+    # Prometheus metrics middleware (records request counts and latency)
+    app.add_middleware(PrometheusMiddleware)
+
+    # Wide-event middleware (canonical log lines)
     app.add_middleware(
         WideEventMiddleware,
         service_name="api-gateway",
@@ -164,6 +234,11 @@ def create_app() -> FastAPI:
             "version": "2.0.0",
             "docs": "/docs",
         }
+
+    @app.get("/metrics")
+    async def metrics():
+        """Prometheus metrics endpoint."""
+        return get_metrics_response()
 
     return app
 

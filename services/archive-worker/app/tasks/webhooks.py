@@ -174,13 +174,12 @@ def notify_webhook(
                 raise self.retry(exc=Exception(f"Server error: {response.status_code}"))
 
             elif response.status_code >= 400:
-                # Client error - don't retry
+                # Client error - don't retry (response body not logged to avoid PII)
                 logger.error(
                     f"Webhook rejected by endpoint: {response.status_code}",
                     extra={
                         "status_code": response.status_code,
                         "webhook_url": webhook_url,
-                        "response_body": response.text[:500],
                     },
                 )
                 # Don't raise - accept 4xx as permanent failure

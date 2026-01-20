@@ -20,6 +20,10 @@ x-common-env: &common-env
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
   LOG_FORMAT: ${LOG_FORMAT:-json}
   ENVIRONMENT: ${ENVIRONMENT:-production}
+  # Observability
+  SENTRY_DSN: ${SENTRY_DSN:-}
+  OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_ENDPOINT:-http://jaeger:4317}
+  VERSION: ${VERSION:-latest}
 
 x-worker-base: &worker-base
   restart: unless-stopped

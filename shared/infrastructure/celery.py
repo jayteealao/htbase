@@ -161,6 +161,34 @@ def configure_for_worker(worker_type: str) -> None:
     Args:
         worker_type: One of 'archive', 'summarization', 'storage', 'migration'
     """
+    # Initialize Sentry for error tracking
+    try:
+        from shared.config import get_settings
+        from shared.sentry import init_sentry_celery
+        from shared.tracing import init_tracing_celery
+
+        settings = get_settings()
+        service_name = f"{worker_type}-worker"
+
+        init_sentry_celery(
+            dsn=settings.sentry_dsn,
+            environment=settings.environment,
+            version=settings.version,
+            service_name=service_name,
+            traces_sample_rate=settings.sentry_traces_sample_rate,
+        )
+
+        # Initialize OpenTelemetry tracing
+        init_tracing_celery(
+            service_name=service_name,
+            otel_endpoint=settings.otel_endpoint,
+            version=settings.version,
+            environment=settings.environment,
+        )
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"Failed to initialize observability: {e}")
+
     if worker_type == "archive":
         # Archive workers need more memory and longer timeouts
         celery_app.conf.update(

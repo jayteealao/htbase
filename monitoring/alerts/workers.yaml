@@ -1,0 +1,142 @@
+# HTBase Worker Alert Rules
+# These rules monitor archive and summarization workers for failures and queue issues.
+# Use with Prometheus Alertmanager.
+
+groups:
+  - name: htbase_archive_workers
+    rules:
+      # Low Archive Success Rate
+      - alert: HTBaseLowArchiveSuccessRate
+        expr: |
+          sum(rate(htbase_archive_tasks_total{status="success"}[10m])) by (archiver)
+          / sum(rate(htbase_archive_tasks_total[10m])) by (archiver) < 0.8
+        for: 10m
+        labels:
+          severity: warning
+          service: archive-worker
+        annotations:
+          summary: "Archive success rate < 80% for {{ $labels.archiver }}"
+          description: "The {{ $labels.archiver }} archiver has a success rate of {{ $value | humanizePercentage }}."
+          runbook_url: "https://github.com/yourorg/htbase/blob/main/docs/runbooks/archive-failures.md"
+
+      # Very Low Archive Success Rate (Critical)
+      - alert: HTBaseVeryLowArchiveSuccessRate
+        expr: |
+          sum(rate(htbase_archive_tasks_total{status="success"}[10m])) by (archiver)
+          / sum(rate(htbase_archive_tasks_total[10m])) by (archiver) < 0.5
+        for: 5m
+        labels:
+          severity: critical
+          service: archive-worker
+        annotations:
+          summary: "Archive success rate < 50% for {{ $labels.archiver }}"
+          description: "The {{ $labels.archiver }} archiver is failing more than half of all tasks."
+          runbook_url: "https://github.com/yourorg/htbase/blob/main/docs/runbooks/archive-failures.md"
+
+      # High Queue Depth
+      - alert: HTBaseHighQueueDepth
+        expr: htbase_celery_queue_depth > 100
+        for: 5m
+        labels:
+          severity: warning
+          service: archive-worker
+        annotations:
+          summary: "High queue depth for {{ $labels.queue }}"
+          description: "The {{ $labels.queue }} queue has {{ $value }} pending tasks."
+          runbook_url: "https://github.com/yourorg/htbase/blob/main/docs/runbooks/queue-backlog.md"
+
+      # Very High Queue Depth (Critical)
+      - alert: HTBaseVeryHighQueueDepth
+        expr: htbase_celery_queue_depth > 500
+        for: 5m
+        labels:
+          severity: critical
+          service: archive-worker
+        annotations:
+          summary: "Critical queue depth for {{ $labels.queue }}"
+          description: "The {{ $labels.queue }} queue has {{ $value }} pending tasks. Consider scaling workers."
+          runbook_url: "https://github.com/yourorg/htbase/blob/main/docs/runbooks/queue-backlog.md"
+
+      # Slow Archive Tasks
+      - alert: HTBaseSlowArchiveTasks
+        expr: |
+          histogram_quantile(0.95, rate(htbase_archive_task_duration_seconds_bucket[10m])) > 300
+        for: 10m
+        labels:
+          severity: warning
+          service: archive-worker
+        annotations:
+          summary: "Archive tasks are slow"
+          description: "95th percentile archive task duration is {{ $value | humanizeDuration }}."
+          runbook_url: "https://github.com/yourorg/htbase/blob/main/docs/runbooks/archive-failures.md"
+
+      # No Archive Tasks Being Processed
+      - alert: HTBaseNoArchiveTasksProcessed
+        expr: |
+          sum(rate(htbase_archive_tasks_total[10m])) == 0
+          and sum(htbase_celery_queue_depth) > 0
+        for: 15m
+        labels:
+          severity: critical
+          service: archive-worker
+        annotations:
+          summary: "Archive workers not processing tasks"
+          description: "No archive tasks have been processed in 15 minutes while queues have pending tasks."
+          runbook_url: "https://github.com/yourorg/htbase/blob/main/docs/runbooks/archive-failures.md"
+
+  - name: htbase_summarization_workers
+    rules:
+      # Low Summarization Success Rate
+      - alert: HTBaseLowSummarizationSuccessRate
+        expr: |
+          sum(rate(htbase_summarization_tasks_total{status="success"}[10m])) by (provider)
+          / sum(rate(htbase_summarization_tasks_total[10m])) by (provider) < 0.8
+        for: 10m
+        labels:
+          severity: warning
+          service: summarization-worker
+        annotations:
+          summary: "Summarization success rate < 80% for {{ $labels.provider }}"
+          description: "The {{ $labels.provider }} provider has a success rate of {{ $value | humanizePercentage }}."
+          runbook_url: "https://github.com/yourorg/htbase/blob/main/docs/runbooks/archive-failures.md"
+
+      # High Token Usage
+      - alert: HTBaseHighTokenUsage
+        expr: |
+          sum(rate(htbase_summarization_tokens_used_sum[1h])) by (provider) > 100000
+        for: 30m
+        labels:
+          severity: warning
+          service: summarization-worker
+        annotations:
+          summary: "High token usage for {{ $labels.provider }}"
+          description: "Token usage rate is {{ $value }} tokens/hour. Monitor API costs."
+
+  - name: htbase_infrastructure
+    rules:
+      # GCS Upload Failures
+      - alert: HTBaseGCSUploadFailures
+        expr: |
+          sum(rate(htbase_gcs_upload_total{status="failed"}[10m])) by (archiver)
+          / sum(rate(htbase_gcs_upload_total[10m])) by (archiver) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          service: archive-worker
+        annotations:
+          summary: "GCS upload failures > 10% for {{ $labels.archiver }}"
+          description: "The {{ $labels.archiver }} archiver has elevated GCS upload failures."
+          runbook_url: "https://github.com/yourorg/htbase/blob/main/docs/runbooks/archive-failures.md"
+
+      # Webhook Delivery Failures
+      - alert: HTBaseWebhookDeliveryFailures
+        expr: |
+          sum(rate(htbase_webhook_deliveries_total{status="failed"}[10m]))
+          / sum(rate(htbase_webhook_deliveries_total[10m])) > 0.2
+        for: 10m
+        labels:
+          severity: warning
+          service: archive-worker
+        annotations:
+          summary: "Webhook delivery failure rate > 20%"
+          description: "{{ $value | humanizePercentage }} of webhook deliveries are failing."

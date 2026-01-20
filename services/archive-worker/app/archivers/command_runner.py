@@ -79,33 +79,28 @@ class CommandRunner:
 
             duration = (datetime.utcnow() - start_time).total_seconds()
 
-            # Log stderr if command failed
-            if result.returncode != 0 and result.stderr:
+            # Log details on failure, minimal info on success
+            if result.returncode != 0:
                 logger.warning(
-                    f"Command failed: {result.stderr[:500]}",
+                    f"Command failed - stderr: '{result.stderr[:500]}'",
                     extra={
                         "exit_code": result.returncode,
                         "duration": duration,
-                        "archiver": archiver,
-                    },
-                )
-            else:
-                # Always log stdout/stderr for debugging (even if empty)
-                logger.info(
-                    f"Command output - stdout: '{result.stdout[:500]}', stderr: '{result.stderr[:500]}'",
-                    extra={
-                        "exit_code": result.returncode,
                         "archiver": archiver,
                         "stdout_len": len(result.stdout),
                         "stderr_len": len(result.stderr),
                     },
                 )
+            else:
+                # Success: only log at DEBUG with summary info (no output content)
                 logger.debug(
-                    "Command completed",
+                    "Command completed successfully",
                     extra={
                         "exit_code": result.returncode,
                         "duration": duration,
                         "archiver": archiver,
+                        "stdout_len": len(result.stdout),
+                        "stderr_len": len(result.stderr),
                     },
                 )
 

@@ -264,6 +264,32 @@ class SharedSettings(BaseSettings):
         default="development",
         validation_alias=AliasChoices("ENVIRONMENT", "ENV"),
     )
+    version: str = Field(
+        default="2.0.0",
+        validation_alias=AliasChoices("VERSION"),
+        description="Application version for release tracking",
+    )
+
+    # Sentry error tracking
+    sentry_dsn: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("SENTRY_DSN"),
+        description="Sentry DSN for error tracking (optional)",
+    )
+    sentry_traces_sample_rate: float = Field(
+        default=0.1,
+        ge=0.0,
+        le=1.0,
+        validation_alias=AliasChoices("SENTRY_TRACES_SAMPLE_RATE"),
+        description="Sentry performance tracing sample rate (0.0-1.0)",
+    )
+
+    # OpenTelemetry tracing
+    otel_endpoint: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_ENDPOINT"),
+        description="OpenTelemetry OTLP endpoint for distributed tracing (optional)",
+    )
 
     # Data directory
     data_dir: Path = Field(

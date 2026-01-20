@@ -35,6 +35,10 @@ from .celery_integration import (
     ArchiveTaskContext,
     SummarizationTaskContext,
 )
+from .prometheus import (
+    PrometheusMiddleware,
+    get_metrics_response,
+)
 
 __all__ = [
     # Event types
@@ -67,4 +71,7 @@ __all__ = [
     "setup_celery_signals",
     "ArchiveTaskContext",
     "SummarizationTaskContext",
+    # Prometheus
+    "PrometheusMiddleware",
+    "get_metrics_response",
 ]

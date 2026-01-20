@@ -21,6 +21,14 @@ from .events import (
     ContentContext,
     emit_wide_event,
 )
+from shared.metrics import (
+    archive_tasks_total,
+    archive_task_duration_seconds,
+    archive_file_size_bytes,
+    summarization_tasks_total,
+    summarization_task_duration_seconds,
+    summarization_tokens_used,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +143,7 @@ class ArchiveTaskContext:
         from .events import CommandExecution, StorageMetrics
 
         duration_ms = int((time.time() - self.start_time) * 1000)
+        duration_seconds = duration_ms / 1000.0
 
         self.event.outcome = Outcome.SUCCESS
         self.event.duration_ms = duration_ms
@@ -154,6 +163,12 @@ class ArchiveTaskContext:
             ) if gcs_path else None,
         )
 
+        # Emit Prometheus metrics
+        archive_tasks_total.labels(archiver=self.archiver, status="success").inc()
+        archive_task_duration_seconds.labels(archiver=self.archiver, status="success").observe(duration_seconds)
+        if file_size_bytes:
+            archive_file_size_bytes.labels(archiver=self.archiver).observe(file_size_bytes)
+
     def mark_error(
         self,
         error: Exception,
@@ -163,6 +178,7 @@ class ArchiveTaskContext:
     ):
         """Mark the task as failed with error details."""
         duration_ms = int((time.time() - self.start_time) * 1000)
+        duration_seconds = duration_ms / 1000.0
 
         self.event.outcome = Outcome.ERROR
         self.event.duration_ms = duration_ms
@@ -173,6 +189,10 @@ class ArchiveTaskContext:
             retriable=retriable,
             command_exit_code=exit_code,
         )
+
+        # Emit Prometheus metrics
+        archive_tasks_total.labels(archiver=self.archiver, status="failed").inc()
+        archive_task_duration_seconds.labels(archiver=self.archiver, status="failed").observe(duration_seconds)
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Emit wide event on task completion."""
@@ -246,6 +266,7 @@ class SummarizationTaskContext:
     ):
         """Mark summarization as successful with metrics."""
         duration_ms = int((time.time() - self.start_time) * 1000)
+        duration_seconds = duration_ms / 1000.0
 
         self.event.outcome = Outcome.SUCCESS
         self.event.duration_ms = duration_ms
@@ -261,15 +282,23 @@ class SummarizationTaskContext:
             tags_generated=tags_generated,
         )
 
+        # Emit Prometheus metrics
+        summarization_tasks_total.labels(provider=provider, status="success").inc()
+        summarization_task_duration_seconds.labels(provider=provider).observe(duration_seconds)
+        if tokens_used:
+            summarization_tokens_used.labels(provider=provider, model=model).observe(tokens_used)
+
     def mark_error(
         self,
         error: Exception,
         error_code: str = "unknown_error",
         retriable: bool = True,
         provider_error_code: Optional[str] = None,
+        provider: str = "unknown",
     ):
         """Mark summarization as failed with error details."""
         duration_ms = int((time.time() - self.start_time) * 1000)
+        duration_seconds = duration_ms / 1000.0
 
         self.event.outcome = Outcome.ERROR
         self.event.duration_ms = duration_ms
@@ -280,6 +309,10 @@ class SummarizationTaskContext:
             retriable=retriable,
             provider_code=provider_error_code,
         )
+
+        # Emit Prometheus metrics
+        summarization_tasks_total.labels(provider=provider, status="failed").inc()
+        summarization_task_duration_seconds.labels(provider=provider).observe(duration_seconds)
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Emit wide event on task completion."""

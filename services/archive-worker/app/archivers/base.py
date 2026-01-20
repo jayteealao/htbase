@@ -207,7 +207,6 @@ class BaseArchiver(abc.ABC):
             try:
                 if temp_path.exists():
                     temp_path.unlink()
-                    logger.debug(f"Deleted temp file: {temp_path}")
             except Exception as e:
                 logger.warning(f"Failed to delete temp file {temp_path}: {e}")
 

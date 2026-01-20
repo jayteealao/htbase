@@ -194,18 +194,12 @@ async def create_archive(
         logger.error(f"Failed to enrich API event: {e}", exc_info=True)
         # Don't fail the request for logging issues
 
-    try:
-        total_tasks = len(request.items) * len(archivers)
-        response = TaskAccepted(
-            task_id=request_id or "unknown",
-            count=total_tasks,
-            message=f"Archive tasks created: {len(request.items)} items × {len(archivers)} archivers = {total_tasks} tasks"
-        )
-        logger.info(f"Returning success response: {response}")
-        return response
-    except Exception as e:
-        logger.error(f"Failed to create response: {e}", exc_info=True)
-        raise
+    total_tasks = len(request.items) * len(archivers)
+    return TaskAccepted(
+        task_id=request_id or "unknown",
+        count=total_tasks,
+        message=f"Archive tasks created: {len(request.items)} items × {len(archivers)} archivers = {total_tasks} tasks"
+    )
 
 
 @router.get("/archives/{item_id}")

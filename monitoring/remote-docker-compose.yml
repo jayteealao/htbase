@@ -1,0 +1,394 @@
+services:
+  reverse-proxy:
+    container_name: traefik
+    image: traefik:v3.6
+    command:
+      - "--log.level=ERROR"
+      - "--accesslog=true"
+      - "--accesslog.filepath=/var/log/traefik/access.log"
+      - "--api=true"
+      - "--api.dashboard=true"
+      # - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--entrypoints.websecure.address=:443" # Entry point for HTTPS
+      - "--entrypoints.traefik.address=:8080"
+      - "--certificatesresolvers.myresolver.acme.tlschallenge=true" # Use TLS challenge
+      - "--certificatesresolvers.myresolver.acme.email=your-jayteealao@gmail.com" # Your email for Let's Encrypt
+      - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json" # Storage for certs
+      - "--entrypoints.web.address=:80" # Entry point for HTTP
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--entryPoints.web.forwardedHeaders.insecure"
+      - "--entryPoints.websecure.forwardedHeaders.insecure"
+      - "--experimental.plugins.crowdsec-bouncer.modulename=github.com/maxlerebourg/crowdsec-bouncer-traefik-plugin"
+      - "--experimental.plugins.crowdsec-bouncer.version=v1.3.5"
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - crowdsec
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./letsencrypt:/letsencrypt
+      - ./logsTraefik:/var/log/traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik-rtr.rule=Host(`traefik.archivist.lol`) && (PathPrefix(`/api`) || PathPrefix(`/dashboard`))"
+      - "traefik.http.routers.traefik-rtr.entrypoints=web,websecure" # Use both HTTP and HTTPS
+      - "traefik.http.routers.traefik-rtr.tls.certresolver=myresolver"
+      - "traefik.http.routers.traefik-rtr.service=api@internal"
+      - "traefik.http.routers.traefik-rtr.middlewares=auth"
+      - "traefik.http.middlewares.auth.basicauth.users=jayteealao:$$apr1$$4erP8LGq$$FEryutK1u3qkE85wFj5xA1"
+      # Define Catchall
+      - "traefik.http.routers.catchall.rule=HostRegexp(`{host:.*\\.archivist\\.lol|archivist\\.lol}`) && PathPrefix(`/`)" # Matches any subdomain ending in archivist.lol
+      - "traefik.http.routers.catchall.priority=1" # Low priority to ensure specific routers take precedence
+      - "traefik.http.routers.catchall.middlewares=crowdsec-catchall@docker"
+      ## Middleware configuration
+      - "traefik.http.middlewares.crowdsec-catchall.plugin.crowdsec-bouncer.enabled=true"
+      - "traefik.http.middlewares.crowdsec-catchall.plugin.crowdsec-bouncer.crowdseclapikey=8LjUutzqVhBFmBJivDM0LzVdhphXPP6JoIDmFUB6ISU"
+
+  crowdsec:
+    image: crowdsecurity/crowdsec
+    container_name: crowdsec
+    environment:
+      - PGID=1000
+      - COLLECTIONS=crowdsecurity/traefik crowdsecurity/http-cve crowdsecurity/whitelist-good-actors crowdsecurity/iptables crowdsecurity/linux crowdsecurity/nginx crowdsecurity/sshd
+    expose:
+      - "8080"
+    volumes:
+      - ./crowdsec/log:/var/log/crowdsec:ro
+      - ./crowdsec-db:/var/lib/crowdsec/data
+      # - ./crowdsec/log/auth.log:/var/log/auth.log:ro
+      - ./crowdsec/config:/etc/crowdsec
+      - ./logsTraefik:/var/log/traefik:ro
+    restart: unless-stopped
+    labels:
+      - traefik.enable=false
+
+  postgres:
+    container_name: postgres
+    image: timescale/timescaledb-ha:pg16
+    restart: unless-stopped
+    user: root
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./postgres_data:/home/postgres/pgdata/data
+    environment:
+      - POSTGRES_PASSWORD=ed83e2f93719
+      - POSTGRES_USER=archivist
+      - POSTGRES_DB=postgres
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.postgres.rule=Host(`postgres.archivist.lol`)"
+      - "traefik.http.routers.postgres.entrypoints=websecure"
+      - "traefik.http.routers.postgres.tls.certresolver=myresolver"
+
+  redis:
+    container_name: redis
+    image: redis:7.4.1-bookworm
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./redis_data:/data
+
+  pgweb:
+    container_name: pgweb
+    restart: unless-stopped
+    image: sosedoff/pgweb
+    links:
+      - postgres:postgres
+    environment:
+      - PGWEB_DATABASE_URL=postgres://archivist:ed83e2f93719@postgres:5432/postgres?sslmode=disable
+      - PGWEB_AUTH_USER=archivist
+      - PGWEB_AUTH_PASS=ed83e2f93719
+    depends_on:
+      - postgres
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.pgweb.rule=Host(`pgweb.archivist.lol`)"
+      - "traefik.http.routers.pgweb.entrypoints=websecure"
+      - "traefik.http.routers.pgweb.tls.certresolver=myresolver"
+      - "traefik.http.services.pgweb.loadbalancer.server.port=8081"
+      - "traefik.http.routers.pgweb.middlewares=crowdsec-pgweb@docker"
+      - "traefik.http.middlewares.crowdsec-pgweb.plugin.crowdsec-bouncer.enabled=true"
+      - "traefik.http.middlewares.crowdsec-pgweb.plugin.crowdsec-bouncer.crowdseclapikey=8LjUutzqVhBFmBJivDM0LzVdhphXPP6JoIDmFUB6ISU"
+
+  swagger:
+    container_name: swagger
+    image: swaggerapi/swagger-ui
+    environment:
+      - API_URL=https://postgrest.archivist.lol
+      - PORT=3232
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.swagger.rule=Host(`swagger.archivist.lol`)"
+      - "traefik.http.routers.swagger.entrypoints=websecure"
+      - "traefik.http.routers.swagger.tls.certresolver=myresolver"
+      - "traefik.http.services.swagger.loadbalancer.server.port=3232"
+      - "traefik.http.routers.swagger.middlewares=crowdsec-swagger@docker"
+      - "traefik.http.middlewares.crowdsec-swagger.plugin.crowdsec-bouncer.enabled=true"
+      - "traefik.http.middlewares.crowdsec-swagger.plugin.crowdsec-bouncer.crowdseclapikey=8LjUutzqVhBFmBJivDM0LzVdhphXPP6JoIDmFUB6ISU"
+
+  postgrest:
+    container_name: postgrest
+    image: postgrest/postgrest
+    environment:
+      - PGRST_DB_URI=postgres://archivist:ed83e2f93719@postgres:5432/postgres
+      - PGRST_OPENAPI_SERVER_PROXY_URI=https://postgrest.archivist.lol
+      - PGRST_DB_ANON_ROLE=web_anon
+      - PGRST_DB_SCHEMAS=public, api
+      - PGRST_SERVER_CORS_ALLOWED_ORIGINS="https://swagger.archivist.lol, https://postgrest.archivist.lol"
+      - PGRST_OPENAPI_MODE=ignore-privileges
+    depends_on:
+      - postgres
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.postgrest.rule=Host(`postgrest.archivist.lol`)"
+      - "traefik.http.routers.postgrest.entrypoints=websecure"
+      - "traefik.http.routers.postgrest.tls.certresolver=myresolver"
+      - "traefik.http.services.postgrest.loadbalancer.server.port=3000"
+      - "traefik.http.middlewares.cors.headers.accessControlAllowOriginList=https://swagger.archivist.lol"
+      - "traefik.http.middlewares.cors.headers.accessControlAllowMethods=GET,OPTIONS"
+      - "traefik.http.routers.postgrest.middlewares=crowdsec-postgrest@docker,cors"
+      - "traefik.http.middlewares.crowdsec-postgrest.plugin.crowdsec-bouncer.enabled=true"
+      - "traefik.http.middlewares.crowdsec-postgrest.plugin.crowdsec-bouncer.crowdseclapikey=8LjUutzqVhBFmBJivDM0LzVdhphXPP6JoIDmFUB6ISU"
+
+  openWebUI:
+    image: ghcr.io/open-webui/open-webui:main
+    restart: always
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - OPENAI_API_BASE_URLS=https://api.deepinfra.com/v1/openai
+      - OPENAI_API_KEYS=fQ9jJfrUpaOUhGOBU4vEVglYOZqTZghi
+      - PORT=3010
+    expose:
+      - 3010
+    volumes:
+      - ./open-webui-local:/app/backend/data
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.openwebui.rule=Host(`openwebui.archivist.lol`)"
+      - "traefik.http.routers.openwebui.entrypoints=web,websecure"
+      - "traefik.http.routers.openwebui.tls.certresolver=myresolver"
+      - "traefik.http.services.openwebui.loadbalancer.server.port=3010"
+      - "traefik.http.routers.openwebui.middlewares=crowdsec-openwebui@docker"
+      - "traefik.http.middlewares.crowdsec-openwebui.plugin.crowdsec-bouncer.enabled=true"
+      - "traefik.http.middlewares.crowdsec-openwebui.plugin.crowdsec-bouncer.crowdseclapikey=8LjUutzqVhBFmBJivDM0LzVdhphXPP6JoIDmFUB6ISU"
+
+  # ============================================
+  # MONITORING STACK (Phase 0: Upgraded Versions)
+  # ============================================
+
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    container_name: prometheus
+    volumes:
+      - ./dockprom/prometheus:/etc/prometheus
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/etc/prometheus/console_libraries"
+      - "--web.console.templates=/etc/prometheus/consoles"
+      - "--storage.tsdb.retention.time=200h"
+      - "--web.enable-lifecycle"
+    expose:
+      - 9090
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.prometheus.rule=Host(`prometheus.archivist.lol`)"
+      - "traefik.http.routers.prometheus.entrypoints=websecure"
+      - "traefik.http.routers.prometheus.middlewares=auth"
+      - "traefik.http.routers.prometheus.tls.certresolver=myresolver"
+      - "traefik.http.services.prometheus.loadbalancer.server.port=9090"
+      - "org.label-schema.group=monitoring"
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    container_name: alertmanager
+    volumes:
+      - ./dockprom/alertmanager:/etc/alertmanager
+    command:
+      - "--config.file=/etc/alertmanager/config.yml"
+      - "--storage.path=/alertmanager"
+    expose:
+      - 9093
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.alertmanager.rule=Host(`alertmanager.archivist.lol`)"
+      - "traefik.http.routers.alertmanager.entrypoints=websecure"
+      - "traefik.http.routers.alertmanager.middlewares=auth"
+      - "traefik.http.routers.alertmanager.tls.certresolver=myresolver"
+      - "traefik.http.services.alertmanager.loadbalancer.server.port=9093"
+      - "org.label-schema.group=monitoring"
+
+  nodeexporter:
+    image: prom/node-exporter:v1.9.0
+    container_name: nodeexporter
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host:ro,rslave
+    expose:
+      - 9100
+    command:
+      - "--path.procfs=/host/proc"
+      - "--path.rootfs=/host"
+      - "--path.sysfs=/host/sys"
+      - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)"
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.nodeexporter.rule=Host(`nodeexporter.archivist.lol`)"
+      - "traefik.http.routers.nodeexporter.entrypoints=websecure"
+      - "traefik.http.routers.nodeexporter.middlewares=auth"
+      - "traefik.http.routers.nodeexporter.tls.certresolver=myresolver"
+      - "traefik.http.services.nodeexporter.loadbalancer.server.port=9100"
+      - "org.label-schema.group=monitoring"
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.52.1
+    container_name: cadvisor
+    privileged: true
+    devices:
+      - /dev/kmsg:/dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+      - /cgroup:/cgroup.ro
+    expose:
+      - 8080
+    command:
+      - "-housekeeping_interval=10s"
+      - "-docker_only=true"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.cadvisor.rule=Host(`cadvisor.archivist.lol`)"
+      - "traefik.http.routers.cadvisor.entrypoints=websecure"
+      - "traefik.http.routers.cadvisor.middlewares=auth"
+      - "traefik.http.routers.cadvisor.tls.certresolver=myresolver"
+      - "traefik.http.services.cadvisor.loadbalancer.server.port=8080"
+      - "org.label-schema.group=monitoring"
+
+  grafana:
+    image: grafana/grafana:11.5.2
+    container_name: grafana
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./dockprom/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
+      - ./dockprom/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    expose:
+      - 3000
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.grafana.rule=Host(`grafana.archivist.lol`)"
+      - "traefik.http.routers.grafana.entrypoints=websecure"
+      - "traefik.http.routers.grafana.tls.certresolver=myresolver"
+      - "traefik.http.services.grafana.loadbalancer.server.port=3000"
+      - "org.label-schema.group=monitoring"
+
+  pushgateway:
+    image: prom/pushgateway:v1.10.0
+    container_name: pushgateway
+    expose:
+      - 9091
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.pushgateway.rule=Host(`pushgateway.archivist.lol`)"
+      - "traefik.http.routers.pushgateway.entrypoints=websecure"
+      - "traefik.http.routers.pushgateway.tls.certresolver=myresolver"
+      - "traefik.http.services.pushgateway.loadbalancer.server.port=9091"
+      - "org.label-schema.group=monitoring"
+
+  # ============================================
+  # NEW SERVICES (Phase 1: Jaeger, Loki, Promtail)
+  # ============================================
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.54
+    container_name: jaeger
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    expose:
+      - 16686  # UI
+      - 4317   # OTLP gRPC
+      - 4318   # OTLP HTTP
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.jaeger.rule=Host(`jaeger.archivist.lol`)"
+      - "traefik.http.routers.jaeger.entrypoints=websecure"
+      - "traefik.http.routers.jaeger.middlewares=auth"
+      - "traefik.http.routers.jaeger.tls.certresolver=myresolver"
+      - "traefik.http.services.jaeger.loadbalancer.server.port=16686"
+      - "org.label-schema.group=monitoring"
+
+  loki:
+    image: grafana/loki:3.4.2
+    container_name: loki
+    volumes:
+      - ./dockprom/loki:/etc/loki
+      - loki_data:/loki
+    command: -config.file=/etc/loki/loki-config.yml
+    expose:
+      - 3100
+    restart: unless-stopped
+    labels:
+      - "org.label-schema.group=monitoring"
+
+  promtail:
+    image: grafana/promtail:3.4.2
+    container_name: promtail
+    volumes:
+      - ./dockprom/promtail:/etc/promtail
+      - /var/log:/var/log:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command: -config.file=/etc/promtail/promtail-config.yml
+    restart: unless-stopped
+    depends_on:
+      - loki
+    labels:
+      - "org.label-schema.group=monitoring"
+
+  # ============================================
+  # OTHER SERVICES
+  # ============================================
+
+  portainer:
+    image: portainer/portainer-ee:lts
+    container_name: portainer
+    command: -H unix:///var/run/docker.sock
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer_data:/data
+    restart: always
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.frontend.rule=Host(`portainer.archivist.lol`)"
+      - "traefik.http.routers.frontend.entrypoints=websecure"
+      - "traefik.http.routers.frontend.service=frontend"
+      - "traefik.http.routers.frontend.tls.certresolver=myresolver"
+      - "traefik.http.services.frontend.loadbalancer.server.port=9000"
+      - "traefik.http.routers.edge.rule=Host(`edge.archivist.lol`)"
+      - "traefik.http.routers.edge.entrypoints=websecure"
+      - "traefik.http.routers.edge.tls.certresolver=myresolver"
+      - "traefik.http.routers.edge.service=edge"
+      - "traefik.http.services.edge.loadbalancer.server.port=8000"
+      - "org.label-schema.group=monitoring"
+
+volumes:
+  letsencrypt:
+  prometheus_data:
+  grafana_data:
+  postgres_data:
+  portainer_data:
+  loki_data:
