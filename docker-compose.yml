@@ -281,6 +281,7 @@ services:
       REDIS_HOSTS: local:redis:6379
       HTTP_USER: ${REDIS_COMMANDER_USER:-admin}
       HTTP_PASSWORD: ${REDIS_COMMANDER_PASSWORD:-admin}
+      URL_PREFIX: /redis
     # No port binding - accessible via Traefik
     depends_on:
       redis:
@@ -293,7 +294,8 @@ services:
       - "traefik.http.routers.htbase-redis.entrypoints=web,websecure"
       - "traefik.http.routers.htbase-redis.tls=true"
       - "traefik.http.routers.htbase-redis.tls.certresolver=myresolver"
-      - "traefik.http.routers.htbase-redis.middlewares=crowdsec-htbase-redis@docker"
+      - "traefik.http.middlewares.redis-strip-prefix.stripprefix.prefixes=/redis"
+      - "traefik.http.routers.htbase-redis.middlewares=redis-strip-prefix,crowdsec-htbase-redis@docker"
       - "traefik.http.middlewares.crowdsec-htbase-redis.plugin.crowdsec-bouncer.enabled=true"
       - "traefik.http.middlewares.crowdsec-htbase-redis.plugin.crowdsec-bouncer.crowdseclapikey=${CROWDSEC_API_KEY}"
       - "traefik.http.services.htbase-redis.loadbalancer.server.port=8081"
