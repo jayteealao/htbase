@@ -1,7 +1,7 @@
 {
   "version": "1.0.0",
   "installedAt": "2026-01-19T01:32:17.834Z",
-  "updatedAt": "2026-01-19T01:32:23.909Z",
+  "updatedAt": "2026-01-20T14:39:37.019Z",
   "plugins": [
     {
       "name": "session-workflow",
@@ -111,6 +111,41 @@
             "git-release-workflow",
             "pre-release-validation",
             "version-bump"
+          ],
+          "isSymlinked": false
+        }
+      }
+    },
+    {
+      "name": "daily-carry",
+      "version": "1.2.0",
+      "sourcePath": "C:\\Users\\jayte\\Documents\\dev\\agent-skills",
+      "installedAt": "2026-01-20T14:39:37.019Z",
+      "components": {
+        "agents": 0,
+        "commands": 1,
+        "skills": 5,
+        "mcpServers": 0,
+        "variants": 0
+      },
+      "installedTo": [
+        "claude"
+      ],
+      "installedFiles": {
+        "claude": {
+          "agents": [
+            ".gitkeep"
+          ],
+          "commands": [
+            ".gitkeep",
+            "deploy-otterstack.md"
+          ],
+          "skills": [
+            "debug-vps-deployment",
+            "otterstack-usage",
+            "portainer",
+            "prepare-otterstack-deployment",
+            "tech-research-enforcer"
           ],
           "isSymlinked": false
         }

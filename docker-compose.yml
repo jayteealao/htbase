@@ -84,7 +84,7 @@ services:
       # CORS_ORIGINS: Use default from SharedSettings
       API_RATE_LIMIT: ${API_RATE_LIMIT:-100/minute}
       DEFAULT_ARCHIVERS: ${DEFAULT_ARCHIVERS:-singlefile,monolith,readability,pdf,screenshot}
-      ENABLE_SUMMARIZATION: ${ENABLE_SUMMARIZATION:-true}
+      ENABLE_SUMMARIZATION: ${ENABLE_SUMMARIZATION:-false}
     depends_on:
       redis:
         condition: service_healthy
