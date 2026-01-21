@@ -9,11 +9,13 @@
 # =============================================================================
 
 x-common-env: &common-env
+  REDIS_HOST: redis
+  REDIS_PORT: 6379
   REDIS_URL: redis://redis:6379/0
   CELERY_BROKER_URL: redis://redis:6379/0
   CELERY_RESULT_BACKEND: redis://redis:6379/1
   # Firestore and GCS
-  FIRESTORE_PROJECT_ID: ${GCS_PROJECT_ID}
+  FIRESTORE_PROJECT_ID: ${FIRESTORE_PROJECT_ID:-${GCS_PROJECT_ID}}
   GCS_BUCKET: ${GCS_BUCKET}
   GCS_PROJECT_ID: ${GCS_PROJECT_ID}
   GOOGLE_APPLICATION_CREDENTIALS: /secrets/gcs-credentials.json
@@ -89,6 +91,7 @@ services:
       API_RATE_LIMIT: ${API_RATE_LIMIT:-100/minute}
       DEFAULT_ARCHIVERS: ${DEFAULT_ARCHIVERS:-singlefile,monolith,readability,pdf,screenshot}
       ENABLE_SUMMARIZATION: ${ENABLE_SUMMARIZATION:-false}
+      API_KEYS: ${API_KEYS:-}
     depends_on:
       redis:
         condition: service_healthy

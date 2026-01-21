@@ -117,7 +117,9 @@ class WideEventMiddleware(BaseHTTPMiddleware):
             return response
 
         except Exception as exc:
-            # Log unhandled exceptions
+            # Log unhandled exceptions with full traceback
+            logger.exception(f"Unhandled exception in {request.method} {request.url.path}: {exc}")
+
             duration_ms = int((time.time() - start_time) * 1000)
 
             wide_event.status_code = 500

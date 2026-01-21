@@ -14,9 +14,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from google.cloud import storage
-
 from shared.config import SharedSettings
+from shared.storage.gcs_file_storage import GCSFileStorage
 from shared.utils import sanitize_filename
 from shared.models import ArchiveResult
 
@@ -37,9 +36,11 @@ class BaseArchiver(abc.ABC):
         self.settings = settings
         self.command_runner = command_runner
 
-        # Initialize GCS client
-        self.gcs_client = storage.Client(project=settings.gcs.project_id)
-        self.gcs_bucket = self.gcs_client.bucket(settings.gcs.bucket)
+        # Initialize GCS file storage with compression support
+        self.gcs_storage = GCSFileStorage(
+            bucket_name=settings.gcs.bucket,
+            project_id=settings.gcs.project_id,
+        )
 
     def get_gcs_path(self, item_id: str) -> str:
         """Get GCS object path for this archiver.
@@ -90,39 +91,51 @@ class BaseArchiver(abc.ABC):
         )
 
     def upload_to_gcs(self, local_path: Path, item_id: str) -> dict:
-        """Upload file directly to GCS and return metadata.
+        """Upload file to GCS with automatic compression for compressible formats.
+
+        Uses GCSFileStorage which handles gzip compression automatically.
+        Binary formats (PDF, PNG, JPEG) skip compression as they're already compressed.
 
         Args:
             local_path: Path to temporary file
             item_id: Article identifier
 
         Returns:
-            Upload metadata dict with gcs_path, sizes, etc.
+            Upload metadata dict with gcs_path, sizes, compression info, etc.
         """
         gcs_path = self.get_gcs_path(item_id)
-        blob = self.gcs_bucket.blob(gcs_path)
 
-        # Get original file size
-        original_size = local_path.stat().st_size
+        # Determine if we should compress (skip for already-compressed formats)
+        compress = self._should_compress()
 
-        # Upload file (GCS handles compression if configured)
-        blob.upload_from_filename(
-            str(local_path),
-            content_type=self._get_content_type(),
+        # Upload using GCSFileStorage (handles compression automatically)
+        result = self.gcs_storage.upload_file(
+            local_path=local_path,
+            destination_path=gcs_path,
+            compress=compress,
         )
 
-        # Get stored size
-        blob.reload()
-        stored_size = blob.size
+        if not result.success:
+            raise RuntimeError(f"GCS upload failed: {result.error}")
 
         return {
-            "gcs_path": f"gs://{self.settings.gcs.bucket}/{gcs_path}",
+            "gcs_path": result.uri,
             "gcs_bucket": self.settings.gcs.bucket,
-            "original_size": original_size,
-            "stored_size": stored_size,
-            "compression_ratio": stored_size / original_size if original_size > 0 else 1.0,
+            "original_size": result.original_size,
+            "stored_size": result.stored_size,
+            "compressed": compress,
+            "compression_ratio": result.compression_ratio,
             "uploaded_at": datetime.utcnow().isoformat(),
         }
+
+    def _should_compress(self) -> bool:
+        """Check if this archiver's output should be compressed.
+
+        Binary formats like PDF, PNG, JPEG are already compressed,
+        so we skip compression for those to avoid wasting CPU.
+        """
+        skip_compression = {'pdf', 'png', 'jpg', 'jpeg', 'webp', 'gif'}
+        return self.output_extension.lower() not in skip_compression
 
     def _get_content_type(self) -> str:
         """Get content type for GCS upload based on extension."""
