@@ -1,0 +1,219 @@
+# =============================================================================
+# HT Base - Local Development Override
+# =============================================================================
+# Usage:
+#   docker compose -f docker-compose.microservices.yml -f docker-compose.local.yml up
+#   docker compose -f docker-compose.microservices.yml -f docker-compose.local.yml up api-gateway
+#
+# Features:
+#   - Uses local file storage instead of GCS
+#   - Mocked LLM provider (optional)
+#   - Hot reload for development
+#   - Lower resource limits
+#   - Debug logging
+# =============================================================================
+
+x-local-env: &local-env
+  ENVIRONMENT: development
+  LOG_LEVEL: DEBUG
+  LOG_FORMAT: pretty
+  # Use local storage provider
+  STORAGE_PROVIDER: local
+  LOCAL_STORAGE_PATH: /app/artifacts
+  # Disable GCS
+  GCS_BUCKET: ""
+  GCS_PROJECT_ID: ""
+
+services:
+  # ===========================================================================
+  # Override Infrastructure for Development
+  # ===========================================================================
+
+  redis:
+    ports:
+      - "6379:6379"  # Always expose for debugging
+
+  postgres:
+    ports:
+      - "5432:5432"  # Always expose for local tools
+    environment:
+      POSTGRES_USER: htbase
+      POSTGRES_PASSWORD: htbase_dev
+      POSTGRES_DB: htbase_dev
+
+  # ===========================================================================
+  # API Gateway - Development Mode
+  # ===========================================================================
+
+  api-gateway:
+    environment:
+      <<: *local-env
+      DATABASE_URL: postgresql://htbase:htbase_dev@postgres:5432/htbase_dev
+      WORKERS: 1
+      RELOAD: "true"
+      CORS_ORIGINS: "*"
+      API_RATE_LIMIT: "1000/minute"
+    volumes:
+      # Mount source code for hot reload
+      - ./services/api-gateway/app:/app/app:ro
+      - ./shared:/app/shared:ro
+      - ./data/artifacts:/app/artifacts
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+
+  # ===========================================================================
+  # Single Combined Archive Worker (for simpler local dev)
+  # ===========================================================================
+
+  # Disable individual workers in local dev
+  archive-worker-singlefile:
+    profiles:
+      - individual-workers
+
+  archive-worker-monolith:
+    profiles:
+      - individual-workers
+
+  archive-worker-readability:
+    profiles:
+      - individual-workers
+
+  archive-worker-pdf:
+    profiles:
+      - individual-workers
+
+  archive-worker-screenshot:
+    profiles:
+      - individual-workers
+
+  # Combined worker handles all archive queues
+  archive-worker:
+    image: ${REGISTRY:-}htbase/archive-worker:${VERSION:-latest}
+    build:
+      context: .
+      dockerfile: services/archive-worker/Dockerfile
+    container_name: htbase-archive-worker-dev
+    restart: unless-stopped
+    environment:
+      <<: *local-env
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      DATABASE_URL: postgresql://htbase:htbase_dev@postgres:5432/htbase_dev
+      # Handle all archive queues
+      WORKER_QUEUES: archive.singlefile,archive.monolith,archive.readability,archive.pdf,archive.screenshot
+      WORKER_CONCURRENCY: 2
+      ARCHIVER_TIMEOUT: 120
+    volumes:
+      - ./services/archive-worker/app:/app/app:ro
+      - ./shared:/app/shared:ro
+      - ./data/artifacts:/app/artifacts
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - htbase-network
+    shm_size: 2gb
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 4G
+
+  # ===========================================================================
+  # Summarization Worker - Development Mode
+  # ===========================================================================
+
+  summarization-worker:
+    environment:
+      <<: *local-env
+      DATABASE_URL: postgresql://htbase:htbase_dev@postgres:5432/htbase_dev
+      WORKER_CONCURRENCY: 2
+      # Use mock provider for testing without API costs
+      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      MOCK_SUMMARY: "This is a mock summary for local development."
+    volumes:
+      - ./services/summarization-worker/app:/app/app:ro
+      - ./shared:/app/shared:ro
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+
+  # ===========================================================================
+  # Storage Worker - Development Mode
+  # ===========================================================================
+
+  storage-worker:
+    environment:
+      <<: *local-env
+      DATABASE_URL: postgresql://htbase:htbase_dev@postgres:5432/htbase_dev
+      WORKER_CONCURRENCY: 3
+      COMPRESSION_ENABLED: "false"
+      CLEANUP_AFTER_UPLOAD: "false"
+    volumes:
+      - ./services/storage-worker/app:/app/app:ro
+      - ./shared:/app/shared:ro
+      - ./data/artifacts:/app/artifacts
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+
+  # ===========================================================================
+  # Development Tools
+  # ===========================================================================
+
+  # pgAdmin for database management
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: htbase-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@htbase.local}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+    ports:
+      - "${PGADMIN_PORT:-5050}:80"
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - htbase-network
+
+  # Mailhog for email testing (if needed)
+  mailhog:
+    image: mailhog/mailhog
+    container_name: htbase-mailhog
+    ports:
+      - "1025:1025"   # SMTP
+      - "8025:8025"   # Web UI
+    networks:
+      - htbase-network
+    profiles:
+      - email
+
+  # Enable flower and redis-commander by default in local dev
+  flower:
+    profiles: []  # Remove profile restriction
+    environment:
+      FLOWER_BASIC_AUTH: ""  # Disable auth locally
+
+  redis-commander:
+    profiles: []  # Remove profile restriction
+    environment:
+      HTTP_USER: ""
+      HTTP_PASSWORD: ""
+
+volumes:
+  pgadmin-data:
+    driver: local

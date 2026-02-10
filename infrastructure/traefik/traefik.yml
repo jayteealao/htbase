@@ -1,0 +1,67 @@
+# =============================================================================
+# Traefik Static Configuration for HT Base
+# =============================================================================
+# This file configures Traefik's static settings (entrypoints, providers, etc.)
+# Dynamic routing is configured via labels in docker-compose
+# =============================================================================
+
+api:
+  dashboard: true
+  insecure: false  # Require authentication for dashboard
+
+entryPoints:
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+          permanent: true
+
+  websecure:
+    address: ":443"
+    http:
+      tls:
+        certResolver: letsencrypt
+
+  # Internal metrics endpoint
+  metrics:
+    address: ":8082"
+
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false
+    network: htbase-network
+    watch: true
+
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true
+
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      email: "${ACME_EMAIL:-admin@example.com}"
+      storage: /letsencrypt/acme.json
+      httpChallenge:
+        entryPoint: web
+
+# Logging
+log:
+  level: INFO
+  format: json
+
+accessLog:
+  format: json
+  filters:
+    statusCodes:
+      - "400-599"
+
+# Metrics for monitoring
+metrics:
+  prometheus:
+    entryPoint: metrics
+    addEntryPointsLabels: true
+    addServicesLabels: true

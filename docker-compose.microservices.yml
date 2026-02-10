@@ -1,0 +1,442 @@
+# =============================================================================
+# HT Base - Microservices Docker Compose (VPS Deployment)
+# =============================================================================
+# Usage:
+#   docker compose -f docker-compose.microservices.yml up -d
+#   docker compose -f docker-compose.microservices.yml --profile monitoring up -d
+#   docker compose -f docker-compose.microservices.yml up -d --scale archive-worker-singlefile=3
+#
+# Prerequisites:
+#   - Copy .env.microservices.example to .env.microservices
+#   - Set up GCS credentials (or use STORAGE_PROVIDER=local)
+#   - Create artifacts directory: mkdir -p ./data/artifacts
+# =============================================================================
+
+x-common-env: &common-env
+  REDIS_URL: redis://redis:6379/0
+  CELERY_BROKER_URL: redis://redis:6379/0
+  CELERY_RESULT_BACKEND: redis://redis:6379/1
+  DATABASE_URL: postgresql://${DB_USER:-htbase}:${DB_PASSWORD:-htbase}@postgres:5432/${DB_NAME:-htbase}
+  GCS_BUCKET: ${GCS_BUCKET:-}
+  GCS_PROJECT_ID: ${GCS_PROJECT_ID:-}
+  GOOGLE_APPLICATION_CREDENTIALS: /secrets/gcs-credentials.json
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  LOG_FORMAT: ${LOG_FORMAT:-json}
+  ENVIRONMENT: ${ENVIRONMENT:-production}
+
+x-worker-base: &worker-base
+  restart: unless-stopped
+  depends_on:
+    redis:
+      condition: service_healthy
+    postgres:
+      condition: service_healthy
+  networks:
+    - htbase-network
+  volumes:
+    - artifacts:/app/artifacts
+    - ${GCS_CREDENTIALS_PATH:-./secrets/gcs-credentials.json}:/secrets/gcs-credentials.json:ro
+
+x-archive-worker: &archive-worker
+  <<: *worker-base
+  image: ${REGISTRY:-}htbase/archive-worker:${VERSION:-latest}
+  build:
+    context: .
+    dockerfile: services/archive-worker/Dockerfile
+  # Chrome requires shared memory
+  shm_size: 2gb
+
+services:
+  # ===========================================================================
+  # Infrastructure Services
+  # ===========================================================================
+
+  redis:
+    image: redis:7-alpine
+    container_name: htbase-redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 512mb
+      --maxmemory-policy volatile-lru
+      --tcp-keepalive 60
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - htbase-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: htbase-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-htbase}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-htbase}
+      POSTGRES_DB: ${DB_NAME:-htbase}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infrastructure/postgres/init:/docker-entrypoint-initdb.d:ro
+    networks:
+      - htbase-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-htbase} -d ${DB_NAME:-htbase}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  # ===========================================================================
+  # API Gateway
+  # ===========================================================================
+
+  api-gateway:
+    image: ${REGISTRY:-}htbase/api-gateway:${VERSION:-latest}
+    build:
+      context: .
+      dockerfile: services/api-gateway/Dockerfile
+    container_name: htbase-api-gateway
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-8080}:8080"
+    environment:
+      <<: *common-env
+      PORT: 8080
+      WORKERS: ${API_WORKERS:-4}
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      API_RATE_LIMIT: ${API_RATE_LIMIT:-100/minute}
+      # Task configuration
+      DEFAULT_ARCHIVERS: ${DEFAULT_ARCHIVERS:-singlefile,monolith,readability,pdf,screenshot}
+      ENABLE_SUMMARIZATION: ${ENABLE_SUMMARIZATION:-true}
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - htbase-network
+    volumes:
+      - ${GCS_CREDENTIALS_PATH:-./secrets/gcs-credentials.json}:/secrets/gcs-credentials.json:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    labels:
+      # Traefik configuration (used when --profile proxy is enabled)
+      - "traefik.enable=true"
+      - "traefik.http.routers.htbase-api.rule=Host(`${DOMAIN:-localhost}`)"
+      - "traefik.http.routers.htbase-api.entrypoints=websecure"
+      - "traefik.http.routers.htbase-api.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.htbase-api.middlewares=security-headers@file,gzip-compress@file"
+      - "traefik.http.services.htbase-api.loadbalancer.server.port=8080"
+      - "traefik.http.services.htbase-api.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.htbase-api.loadbalancer.healthcheck.interval=30s"
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+
+  # ===========================================================================
+  # Archive Workers (Isolated per archiver type)
+  # ===========================================================================
+
+  archive-worker-singlefile:
+    <<: *archive-worker
+    container_name: htbase-archive-singlefile
+    environment:
+      <<: *common-env
+      WORKER_QUEUES: archive.singlefile
+      WORKER_CONCURRENCY: ${SINGLEFILE_CONCURRENCY:-2}
+      ARCHIVER_TYPE: singlefile
+      ARCHIVER_TIMEOUT: 300
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 4G
+        reservations:
+          cpus: "1"
+          memory: 2G
+
+  archive-worker-monolith:
+    <<: *archive-worker
+    container_name: htbase-archive-monolith
+    environment:
+      <<: *common-env
+      WORKER_QUEUES: archive.monolith
+      WORKER_CONCURRENCY: ${MONOLITH_CONCURRENCY:-3}
+      ARCHIVER_TYPE: monolith
+      ARCHIVER_TIMEOUT: 300
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 4G
+        reservations:
+          cpus: "1"
+          memory: 2G
+
+  archive-worker-readability:
+    <<: *archive-worker
+    container_name: htbase-archive-readability
+    environment:
+      <<: *common-env
+      WORKER_QUEUES: archive.readability
+      WORKER_CONCURRENCY: ${READABILITY_CONCURRENCY:-5}
+      ARCHIVER_TYPE: readability
+      ARCHIVER_TIMEOUT: 120
+    shm_size: 1gb
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 2G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+
+  archive-worker-pdf:
+    <<: *archive-worker
+    container_name: htbase-archive-pdf
+    environment:
+      <<: *common-env
+      WORKER_QUEUES: archive.pdf
+      WORKER_CONCURRENCY: ${PDF_CONCURRENCY:-3}
+      ARCHIVER_TYPE: pdf
+      ARCHIVER_TIMEOUT: 60
+    shm_size: 1gb
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 2G
+        reservations:
+          cpus: "0.5"
+          memory: 1G
+
+  archive-worker-screenshot:
+    <<: *archive-worker
+    container_name: htbase-archive-screenshot
+    environment:
+      <<: *common-env
+      WORKER_QUEUES: archive.screenshot
+      WORKER_CONCURRENCY: ${SCREENSHOT_CONCURRENCY:-3}
+      ARCHIVER_TYPE: screenshot
+      ARCHIVER_TIMEOUT: 60
+    shm_size: 1gb
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 2G
+        reservations:
+          cpus: "0.5"
+          memory: 1G
+
+  # ===========================================================================
+  # Summarization Worker
+  # ===========================================================================
+
+  summarization-worker:
+    <<: *worker-base
+    image: ${REGISTRY:-}htbase/summarization-worker:${VERSION:-latest}
+    build:
+      context: .
+      dockerfile: services/summarization-worker/Dockerfile
+    container_name: htbase-summarization
+    environment:
+      <<: *common-env
+      WORKER_QUEUES: summarization
+      WORKER_CONCURRENCY: ${SUMMARIZATION_CONCURRENCY:-5}
+      # LLM Provider Configuration
+      LLM_PROVIDER: ${LLM_PROVIDER:-huggingface}
+      HUGGINGFACE_API_URL: ${HUGGINGFACE_API_URL:-}
+      HUGGINGFACE_API_KEY: ${HUGGINGFACE_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      # Chunking configuration
+      CHUNK_SIZE: ${CHUNK_SIZE:-4000}
+      CHUNK_OVERLAP: ${CHUNK_OVERLAP:-200}
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+
+  # ===========================================================================
+  # Storage Worker
+  # ===========================================================================
+
+  storage-worker:
+    <<: *worker-base
+    image: ${REGISTRY:-}htbase/storage-worker:${VERSION:-latest}
+    build:
+      context: .
+      dockerfile: services/storage-worker/Dockerfile
+    container_name: htbase-storage
+    environment:
+      <<: *common-env
+      WORKER_QUEUES: storage
+      WORKER_CONCURRENCY: ${STORAGE_CONCURRENCY:-10}
+      STORAGE_PROVIDER: ${STORAGE_PROVIDER:-gcs}
+      LOCAL_STORAGE_PATH: /app/artifacts
+      COMPRESSION_ENABLED: ${COMPRESSION_ENABLED:-true}
+      CLEANUP_AFTER_UPLOAD: ${CLEANUP_AFTER_UPLOAD:-true}
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1G
+        reservations:
+          cpus: "0.5"
+          memory: 256M
+
+  # ===========================================================================
+  # Monitoring Services (Optional - use --profile monitoring)
+  # ===========================================================================
+
+  flower:
+    image: mher/flower:2.0
+    container_name: htbase-flower
+    restart: unless-stopped
+    command: >
+      celery
+      --broker=redis://redis:6379/0
+      flower
+      --port=5555
+      --basic_auth=${FLOWER_USER:-admin}:${FLOWER_PASSWORD:-admin}
+      --persistent=true
+      --db=/data/flower.db
+      --url_prefix=/flower
+    ports:
+      - "${FLOWER_PORT:-5555}:5555"
+    volumes:
+      - flower-data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - htbase-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.htbase-flower.rule=Host(`${DOMAIN:-localhost}`) && PathPrefix(`/flower`)"
+      - "traefik.http.routers.htbase-flower.entrypoints=websecure"
+      - "traefik.http.routers.htbase-flower.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.htbase-flower.middlewares=monitoring-auth@file"
+      - "traefik.http.services.htbase-flower.loadbalancer.server.port=5555"
+    profiles:
+      - monitoring
+
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: htbase-redis-commander
+    restart: unless-stopped
+    environment:
+      REDIS_HOSTS: local:redis:6379
+      HTTP_USER: ${REDIS_COMMANDER_USER:-admin}
+      HTTP_PASSWORD: ${REDIS_COMMANDER_PASSWORD:-admin}
+    ports:
+      - "${REDIS_COMMANDER_PORT:-8081}:8081"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - htbase-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.htbase-redis.rule=Host(`${DOMAIN:-localhost}`) && PathPrefix(`/redis`)"
+      - "traefik.http.routers.htbase-redis.entrypoints=websecure"
+      - "traefik.http.routers.htbase-redis.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.htbase-redis.middlewares=monitoring-auth@file,strip-redis@file"
+      - "traefik.http.services.htbase-redis.loadbalancer.server.port=8081"
+    profiles:
+      - monitoring
+
+  # ===========================================================================
+  # Reverse Proxy - Traefik (Optional - use --profile proxy)
+  # ===========================================================================
+  # If you already have Traefik running, skip this and add the labels to your
+  # existing Traefik configuration. See infrastructure/traefik/ for examples.
+  # ===========================================================================
+
+  traefik:
+    image: traefik:v3.2
+    container_name: htbase-traefik
+    restart: unless-stopped
+    command:
+      - "--configFile=/etc/traefik/traefik.yml"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8082:8082"  # Metrics
+    environment:
+      ACME_EMAIL: ${ACME_EMAIL:-admin@example.com}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./infrastructure/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./infrastructure/traefik/dynamic:/etc/traefik/dynamic:ro
+      - traefik-letsencrypt:/letsencrypt
+    networks:
+      - htbase-network
+    labels:
+      - "traefik.enable=true"
+      # Dashboard (optional - access via traefik.${DOMAIN})
+      - "traefik.http.routers.traefik-dashboard.rule=Host(`traefik.${DOMAIN:-localhost}`)"
+      - "traefik.http.routers.traefik-dashboard.service=api@internal"
+      - "traefik.http.routers.traefik-dashboard.entrypoints=websecure"
+      - "traefik.http.routers.traefik-dashboard.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.traefik-dashboard.middlewares=monitoring-auth@file"
+    profiles:
+      - proxy
+
+# =============================================================================
+# Networks
+# =============================================================================
+
+networks:
+  htbase-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+# =============================================================================
+# Volumes
+# =============================================================================
+
+volumes:
+  redis-data:
+    driver: local
+  postgres-data:
+    driver: local
+  artifacts:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${ARTIFACTS_PATH:-./data/artifacts}
+  flower-data:
+    driver: local
+  traefik-letsencrypt:
+    driver: local
