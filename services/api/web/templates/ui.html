@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Archiver Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .badge { @apply inline-block px-2 py-0.5 rounded text-xs font-medium; }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900">
+  <div class="max-w-7xl mx-auto p-6 space-y-6">
+    <header class="flex items-center justify-between">
+      <h1 class="text-2xl font-bold">Archiver Dashboard</h1>
+      <a href="/docs" class="text-sm text-blue-600 hover:underline">API Docs</a>
+    </header>
+
+    <section class="bg-white rounded-lg shadow p-4">
+      <h2 class="font-semibold mb-3">New Save</h2>
+      <form id="save-form" class="grid grid-cols-1 md:grid-cols-4 gap-3">
+        <input name="url" type="url" placeholder="https://example.com/article" required class="md:col-span-2 border rounded px-3 py-2 w-full" />
+        <input name="id" type="text" placeholder="item id" required class="border rounded px-3 py-2 w-full" />
+        <select name="archiver" id="archiver" class="border rounded px-3 py-2 w-full"></select>
+        <button class="bg-blue-600 text-white rounded px-4 py-2">Save</button>
+      </form>
+      <p id="save-msg" class="text-sm mt-2 text-slate-600"></p>
+      <p class="text-xs text-slate-500">Files are saved as output.&lt;type&gt; inside each item folder.</p>
+    </section>
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <section class="lg:col-span-2 bg-white rounded-lg shadow">
+        <div class="p-4 flex items-center justify-between">
+          <h2 class="font-semibold">Saved URLs</h2>
+          <button id="refresh" class="text-sm text-blue-600">Refresh</button>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="min-w-full text-sm">
+            <thead class="bg-slate-100 text-slate-600">
+              <tr>
+                <th class="px-3 py-2 text-left">ID</th>
+                <th class="px-3 py-2 text-left">URL</th>
+                <th class="px-3 py-2">Archiver</th>
+                <th class="px-3 py-2">Status</th>
+                <th class="px-3 py-2">File</th>
+                <th class="px-3 py-2">When</th>
+                <th class="px-3 py-2"></th>
+              </tr>
+            </thead>
+            <tbody id="saves"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="bg-white rounded-lg shadow overflow-hidden">
+        <div class="p-4 flex items-center justify-between">
+          <h2 class="font-semibold">ht Live Preview</h2>
+          <a href="HTPREVIEW_URL" target="_blank" class="text-sm text-blue-600">Open</a>
+        </div>
+        <iframe src="HTPREVIEW_URL" class="w-full h-80 border-t"></iframe>
+        <div class="p-4 space-y-2 border-t">
+          <textarea id="ht-cmd" rows="2" class="w-full border rounded px-3 py-2" placeholder="Enter ht command (e.g., echo hi; echo __DONE__:0)"></textarea>
+          <div class="flex items-center gap-3">
+            <input id="marker" type="text" class="border rounded px-2 py-1 text-sm" placeholder="__DONE__" />
+            <button id="send-ht" class="bg-slate-800 text-white rounded px-3 py-1 text-sm">Send</button>
+            <span id="ht-msg" class="text-sm text-slate-600"></span>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <script>
+    async function loadArchivers() {
+      try {
+        const res = await fetch('/archivers');
+        const arr = await res.json();
+        const sel = document.getElementById('archiver');
+        sel.innerHTML = '';
+        arr.forEach(n => {
+          const opt = document.createElement('option');
+          opt.value = n; opt.textContent = n; sel.appendChild(opt);
+        });
+      } catch (e) { console.error(e); }
+    }
+
+    function statusBadge(s) {
+      const c = s === 'success' ? 'bg-green-100 text-green-800' : (s === 'pending' ? 'bg-yellow-100 text-yellow-800' : 'bg-red-100 text-red-800');
+      return `<span class="badge ${c}">${s}</span>`;
+    }
+
+    function timeago(iso) {
+      if (!iso) return '';
+      const d = new Date(iso);
+      return d.toLocaleString();
+    }
+
+    async function loadSaves() {
+      const res = await fetch('/saves?limit=200');
+      const items = await res.json();
+      const tbody = document.getElementById('saves');
+      tbody.innerHTML = '';
+      for (const it of items) {
+        const tr = document.createElement('tr');
+        tr.className = 'border-t';
+        const fileCell = it.file_exists && it.relative_path ? `<a href="/files/${it.relative_path}" target="_blank" class="text-blue-600">open</a>` : '';
+        tr.innerHTML = `
+          <td class="px-3 py-2 align-top">${it.id}</td>
+          <td class="px-3 py-2 align-top"><a href="${it.url}" target="_blank" class="text-blue-600 break-all">${it.url}</a></td>
+          <td class="px-3 py-2 align-top text-center">${it.archiver || ''}</td>
+          <td class="px-3 py-2 align-top text-center">${statusBadge(it.status)}</td>
+          <td class="px-3 py-2 align-top text-center">${fileCell}</td>
+          <td class="px-3 py-2 align-top text-slate-600">${timeago(it.created_at)}</td>
+          <td class="px-3 py-2 align-top text-right">
+            <button data-rowid="${it.rowid}" class="del text-red-600 hover:underline">Delete</button>
+          </td>`;
+        tbody.appendChild(tr);
+      }
+      // attach delete handlers
+      tbody.querySelectorAll('button.del').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          const id = e.currentTarget.getAttribute('data-rowid');
+          if (!confirm('Delete save #' + id + ' and its file?')) return;
+          await fetch('/saves/' + id + '?remove_files=true', { method: 'DELETE' });
+          loadSaves();
+        });
+      });
+    }
+
+    document.getElementById('refresh').addEventListener('click', loadSaves);
+    document.getElementById('save-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.currentTarget);
+      const url = fd.get('url');
+      const id = fd.get('id');
+      const archiver = fd.get('archiver') || 'monolith';
+      const body = { url, id };
+      const r = await fetch('/archive/' + encodeURIComponent(archiver), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      const data = await r.json();
+      const msg = document.getElementById('save-msg');
+      msg.textContent = data.ok ? 'Saved!' : 'Failed (exit_code=' + data.exit_code + ')';
+      if (data.saved_path) msg.textContent += ' Ã¢â€ â€™ ' + data.saved_path;
+      loadSaves();
+    });
+
+    document.getElementById('send-ht').addEventListener('click', async () => {
+      const payload = document.getElementById('ht-cmd').value + '\r';
+      const wait_marker = document.getElementById('marker').value || null;
+      const res = await fetch('/ht/send' + (wait_marker ? ('?wait_marker=' + encodeURIComponent(wait_marker)) : ''), {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ payload })
+      });
+      const data = await res.json();
+      const msg = document.getElementById('ht-msg');
+      msg.textContent = 'Sent' + (data.exit_code !== null ? (' (rc=' + data.exit_code + ')') : '');
+      setTimeout(() => msg.textContent = '', 2000);
+    });
+
+    loadArchivers();
+    loadSaves();
+  </script>
+</body>
+</html>
